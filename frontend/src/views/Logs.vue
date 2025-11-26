@@ -85,30 +85,18 @@
               <el-empty description="暂无访问日志" />
             </div>
             <template v-else>
-              <pre 
-                v-for="(log, index) in accessLogs" 
-                :key="index"
-                v-html="accessFilters.keyword ? highlightKeyword(log, accessFilters.keyword) : escapeHtml(log)"
-              ></pre>
+              <div class="log-viewer">
+                <pre 
+                  v-for="(log, index) in accessLogs" 
+                  :key="index"
+                  class="log-line"
+                  v-html="accessFilters.keyword ? highlightKeyword(log, accessFilters.keyword) : escapeHtml(log)"
+                ></pre>
+              </div>
             </template>
-          </div>
-          <div v-if="accessPagination && (accessPagination.total_lines > 0 || accessPagination.filtered_lines > 0)" class="pagination-wrapper">
-            <div class="pagination-info">
-              <span v-if="accessPagination.filtered_lines !== undefined && accessPagination.filtered_lines !== accessPagination.total_lines" class="filter-info">
-                共 {{ accessPagination.total_lines }} 条，筛选出 {{ accessPagination.filtered_lines }} 条
-              </span>
-              <span v-else-if="accessPagination.total_lines > 0">
-                共 {{ accessPagination.total_lines }} 条
-              </span>
+            <div v-if="accessLogs && accessLogs.length > 0" class="log-stats">
+              <span class="log-count">共显示 {{ accessLogs.length }} 条日志</span>
             </div>
-            <el-pagination
-              v-model:current-page="accessPagination.page"
-              :page-size="accessPagination.page_size"
-              :total="accessPagination.filtered_lines || accessPagination.total_lines"
-              :total-pages="accessPagination.total_pages"
-              layout="total, prev, pager, next, jumper"
-              @current-change="handleAccessPageChange"
-            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -196,30 +184,18 @@
               <el-empty description="暂无错误日志" />
             </div>
             <template v-else>
-              <pre 
-                v-for="(log, index) in errorLogs" 
-                :key="index"
-                v-html="errorFilters.keyword ? highlightKeyword(log, errorFilters.keyword) : escapeHtml(log)"
-              ></pre>
+              <div class="log-viewer">
+                <pre 
+                  v-for="(log, index) in errorLogs" 
+                  :key="index"
+                  class="log-line"
+                  v-html="errorFilters.keyword ? highlightKeyword(log, errorFilters.keyword) : escapeHtml(log)"
+                ></pre>
+              </div>
             </template>
-          </div>
-          <div v-if="errorPagination && (errorPagination.total_lines > 0 || errorPagination.filtered_lines > 0)" class="pagination-wrapper">
-            <div class="pagination-info">
-              <span v-if="errorPagination.filtered_lines !== undefined && errorPagination.filtered_lines !== errorPagination.total_lines" class="filter-info">
-                共 {{ errorPagination.total_lines }} 条，筛选出 {{ errorPagination.filtered_lines }} 条
-              </span>
-              <span v-else-if="errorPagination.total_lines > 0">
-                共 {{ errorPagination.total_lines }} 条
-              </span>
+            <div v-if="errorLogs && errorLogs.length > 0" class="log-stats">
+              <span class="log-count">共显示 {{ errorLogs.length }} 条日志</span>
             </div>
-            <el-pagination
-              v-model:current-page="errorPagination.page"
-              :page-size="errorPagination.page_size"
-              :total="errorPagination.filtered_lines || errorPagination.total_lines"
-              :total-pages="errorPagination.total_pages"
-              layout="total, prev, pager, next, jumper"
-              @current-change="handleErrorPageChange"
-            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -237,8 +213,6 @@ const activeTab = ref('access')
 const loading = ref(false)
 const accessLogs = ref([])
 const errorLogs = ref([])
-const accessPagination = ref(null)
-const errorPagination = ref(null)
 const accessLogInfo = ref({
   nginx_version: null,
   nginx_version_detail: null,
@@ -517,8 +491,8 @@ onMounted(() => {
 }
 
 .log-content {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+  background: #1e1e1e;
+  color: #d4d4d4;
   padding: 20px;
   border-radius: 4px;
   min-height: 400px;
@@ -527,6 +501,7 @@ onMounted(() => {
   font-family: 'Courier New', monospace;
   font-size: 12px;
   border: 1px solid var(--border-color);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .log-content pre {

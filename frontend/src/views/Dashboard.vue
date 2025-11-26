@@ -13,20 +13,20 @@
               </el-button>
             </div>
           </template>
-          <el-descriptions :column="4" border>
+          <el-descriptions :column="4" class="nginx-status-descriptions">
             <el-descriptions-item label="运行状态">
               <el-tag :type="nginxStatus.running ? 'success' : 'danger'" size="large">
                 {{ nginxStatus.running ? '运行中' : '已停止' }}
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="版本">
-              {{ nginxStatus.version || '未知' }}
+              <span class="status-value">{{ nginxStatus.version || '未知' }}</span>
             </el-descriptions-item>
             <el-descriptions-item label="进程ID">
-              {{ nginxStatus.pid || '无' }}
+              <span class="status-value">{{ nginxStatus.pid || '无' }}</span>
             </el-descriptions-item>
             <el-descriptions-item label="运行时间">
-              {{ nginxStatus.uptime || '-' }}
+              <span class="status-value">{{ nginxStatus.uptime || '-' }}</span>
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -83,6 +83,93 @@
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.attack_count || 0) }}</div>
               <div class="stat-label">攻击检测</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <!-- 系统资源卡片 -->
+    <el-row :gutter="20" class="mb-20">
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon" style="background: #409EFF;">
+              <el-icon size="30"><Cpu /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ systemResources.cpu?.percent || 0 }}%</div>
+              <div class="stat-label">CPU使用率</div>
+              <div class="stat-extra" v-if="systemResources.cpu?.count">
+                {{ systemResources.cpu.count.logical }}核
+              </div>
+            </div>
+          </div>
+          <el-progress
+            :percentage="systemResources.cpu?.percent || 0"
+            :color="getProgressColor(systemResources.cpu?.percent || 0)"
+            :show-text="false"
+            style="margin-top: 10px;"
+          />
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon" style="background: #67C23A;">
+              <el-icon size="30"><Memory /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ formatBytes(systemResources.memory?.used || 0) }}</div>
+              <div class="stat-label">内存使用</div>
+              <div class="stat-extra" v-if="systemResources.memory">
+                {{ systemResources.memory.percent?.toFixed(1) }}% / {{ formatBytes(systemResources.memory.total || 0) }}
+              </div>
+            </div>
+          </div>
+          <el-progress
+            :percentage="systemResources.memory?.percent || 0"
+            :color="getProgressColor(systemResources.memory?.percent || 0)"
+            :show-text="false"
+            style="margin-top: 10px;"
+          />
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon" style="background: #E6A23C;">
+              <el-icon size="30"><Files /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ formatBytes(systemResources.disk?.root?.used || 0) }}</div>
+              <div class="stat-label">磁盘使用</div>
+              <div class="stat-extra" v-if="systemResources.disk?.root">
+                {{ systemResources.disk.root.percent?.toFixed(1) }}% / {{ formatBytes(systemResources.disk.root.total || 0) }}
+              </div>
+            </div>
+          </div>
+          <el-progress
+            :percentage="systemResources.disk?.root?.percent || 0"
+            :color="getProgressColor(systemResources.disk?.root?.percent || 0)"
+            :show-text="false"
+            style="margin-top: 10px;"
+          />
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card">
+          <div class="stat-content">
+            <div class="stat-icon" style="background: #909399;">
+              <el-icon size="30"><Connection /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ systemResources.network?.connections || 0 }}</div>
+              <div class="stat-label">网络连接</div>
+              <div class="stat-extra" v-if="systemResources.network">
+                ↑{{ formatBytes(systemResources.network.bytes_sent || 0) }}
+                ↓{{ formatBytes(systemResources.network.bytes_recv || 0) }}
+              </div>
             </div>
           </div>
         </el-card>
@@ -203,6 +290,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { configApi } from '../api/config'
 import { statisticsApi } from '../api/statistics'
+import { systemApi } from '../api/system'
 import { ElMessage } from 'element-plus'
 
 const nginxStatus = ref({
@@ -221,6 +309,14 @@ const stats = ref({
   attacks: []
 })
 
+const systemResources = ref({
+  cpu: {},
+  memory: {},
+  disk: {},
+  network: {},
+  system: {}
+})
+
 const timeRange = ref(24)
 const loading = ref(false)
 let refreshTimer = null
@@ -233,6 +329,22 @@ const formatNumber = (num) => {
     return (num / 1000).toFixed(2) + 'K'
   }
   return num.toString()
+}
+
+// 格式化字节
+const formatBytes = (bytes) => {
+  if (!bytes || bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 获取进度条颜色
+const getProgressColor = (percent) => {
+  if (percent < 50) return '#67C23A'
+  if (percent < 80) return '#E6A23C'
+  return '#F56C6C'
 }
 
 // 访问趋势图配置
@@ -370,8 +482,8 @@ const statusChartOption = computed(() => {
         avoidLabelOverlap: false,
         itemStyle: {
           borderRadius: 10,
-          borderColor: '#fff',
-          borderWidth: 2
+          borderColor: 'transparent',
+          borderWidth: 0
         },
         label: {
           show: true,
@@ -412,21 +524,39 @@ const loadStatistics = async () => {
   }
 }
 
+// 加载系统资源
+const loadSystemResources = async () => {
+  try {
+    const response = await systemApi.getResources()
+    if (response.success) {
+      systemResources.value = response
+    } else {
+      console.warn('获取系统资源失败:', response.error)
+    }
+  } catch (error) {
+    console.error('获取系统资源失败:', error)
+    // 不显示错误消息，因为系统资源可能不可用
+  }
+}
+
 // 刷新状态
 const refreshStatus = () => {
   loadNginxStatus()
   loadStatistics()
+  loadSystemResources()
 }
 
 // 组件挂载
 onMounted(() => {
   loadNginxStatus()
   loadStatistics()
+  loadSystemResources()
   
   // 每30秒自动刷新
   refreshTimer = setInterval(() => {
     loadNginxStatus()
     loadStatistics()
+    loadSystemResources()
   }, 30000)
 })
 
@@ -441,6 +571,8 @@ onUnmounted(() => {
 <style scoped>
 .dashboard {
   padding: 20px;
+  background-color: var(--bg-primary);
+  min-height: 100%;
 }
 
 .mb-20 {
@@ -459,6 +591,12 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  color: var(--text-primary);
+}
+
+.card-header span {
+  color: var(--text-primary);
+  font-weight: 500;
 }
 
 .stat-card {
@@ -478,7 +616,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--text-white);
   margin-right: 15px;
 }
 
@@ -506,9 +644,46 @@ onUnmounted(() => {
 
 :deep(.el-card__header) {
   font-weight: 500;
+  background-color: var(--bg-secondary);
+  border-bottom-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 :deep(.el-descriptions__label) {
   font-weight: 500;
+}
+
+/* Nginx 运行状态描述列表样式 - 无边框 */
+.nginx-status-descriptions {
+  background-color: transparent;
+}
+
+.nginx-status-descriptions :deep(.el-descriptions__table) {
+  border: none;
+  background-color: transparent;
+}
+
+.nginx-status-descriptions :deep(.el-descriptions__table td),
+.nginx-status-descriptions :deep(.el-descriptions__table th) {
+  border: none;
+  background-color: transparent;
+  padding: 12px 16px;
+}
+
+.nginx-status-descriptions :deep(.el-descriptions__label) {
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-weight: 500;
+  padding-right: 20px;
+}
+
+.nginx-status-descriptions :deep(.el-descriptions__content) {
+  background-color: transparent;
+  color: var(--text-primary);
+}
+
+.status-value {
+  color: var(--text-primary);
+  font-size: 14px;
 }
 </style>

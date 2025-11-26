@@ -66,8 +66,13 @@ body {
 }
 
 .el-table tr {
-  background-color: var(--bg-card);
-  color: var(--text-primary);
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-table tr td {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
 }
 
 .el-table tr:hover > td {
@@ -76,7 +81,8 @@ body {
 }
 
 .el-table--striped .el-table__body tr.el-table__row--striped td {
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
 }
 
 .el-table--striped .el-table__body tr.el-table__row--striped:hover > td {
@@ -84,8 +90,25 @@ body {
   color: var(--text-primary) !important;
 }
 
+.el-table__row {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+}
+
 .el-table__row:hover > td {
   background-color: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-table__row:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+/* 确保表格单元格内的所有元素在hover时也保持可见 */
+.el-table__row:hover td .el-button,
+.el-table__row:hover td .el-tag,
+.el-table__row:hover td .el-text,
+.el-table__row:hover td span {
   color: var(--text-primary) !important;
 }
 
@@ -153,7 +176,8 @@ body {
 }
 
 .el-menu-item {
-  color: var(--text-secondary);
+  color: var(--text-secondary) !important;
+  background-color: transparent !important;
 }
 
 .el-menu-item:hover {
@@ -165,9 +189,21 @@ body {
   color: var(--nginx-green) !important;
 }
 
+.el-menu-item:hover span {
+  color: var(--text-primary) !important;
+}
+
 .el-menu-item.is-active {
-  background-color: var(--bg-hover);
-  color: var(--nginx-green);
+  background-color: var(--bg-hover) !important;
+  color: var(--nginx-green) !important;
+}
+
+.el-menu-item.is-active .el-icon {
+  color: var(--nginx-green) !important;
+}
+
+.el-menu-item.is-active span {
+  color: var(--nginx-green) !important;
 }
 
 /* Descriptions 描述列表组件 */
@@ -231,6 +267,45 @@ body {
 .el-descriptions--border .el-descriptions__content {
   background-color: var(--bg-card) !important;
   color: var(--text-primary) !important;
+}
+
+/* 无边框的 descriptions 样式 */
+.el-descriptions:not(.el-descriptions--border) .el-descriptions__table {
+  border: none;
+  background-color: transparent;
+}
+
+.el-descriptions:not(.el-descriptions--border) .el-descriptions__table td,
+.el-descriptions:not(.el-descriptions--border) .el-descriptions__table th {
+  border: none;
+  background-color: transparent;
+  padding: 8px 12px;
+}
+
+.el-descriptions:not(.el-descriptions--border) .el-descriptions__label {
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.el-descriptions:not(.el-descriptions--border) .el-descriptions__content {
+  background-color: transparent;
+  color: var(--text-primary);
+}
+
+/* 优化描述列表的间距和样式 */
+.el-descriptions {
+  margin: 0;
+}
+
+.el-descriptions__table {
+  width: 100%;
+}
+
+/* 确保描述列表内的所有文字都是可见的 */
+.el-descriptions__label,
+.el-descriptions__content {
+  word-break: break-word;
 }
 
 /* 确保 descriptions 内的所有元素都是深色主题 */
@@ -349,14 +424,24 @@ body {
   color: var(--text-primary);
 }
 
+.el-select-dropdown__item {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+}
+
 .el-select-dropdown__item:hover {
   background-color: var(--bg-hover) !important;
   color: var(--text-primary) !important;
 }
 
 .el-select-dropdown__item.selected {
-  background-color: var(--bg-hover);
-  color: var(--nginx-green);
+  background-color: var(--bg-hover) !important;
+  color: var(--nginx-green) !important;
+}
+
+.el-select-dropdown__item.selected:hover {
+  background-color: var(--bg-hover) !important;
+  color: var(--nginx-green) !important;
 }
 
 .el-form-item__label {
@@ -390,15 +475,18 @@ body {
 }
 
 .el-tabs__item {
-  color: var(--text-secondary);
+  color: var(--text-secondary) !important;
+  background-color: transparent !important;
 }
 
 .el-tabs__item:hover {
   color: var(--nginx-green) !important;
+  background-color: transparent !important;
 }
 
 .el-tabs__item.is-active {
-  color: var(--nginx-green);
+  color: var(--nginx-green) !important;
+  background-color: transparent !important;
 }
 
 .el-tabs__active-bar {
@@ -473,18 +561,27 @@ body {
 }
 
 .el-pagination .el-pager li {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
+  background-color: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
 }
 
 .el-pagination .el-pager li:hover {
   color: var(--nginx-green) !important;
   background-color: var(--bg-hover) !important;
+  border-color: var(--nginx-green) !important;
 }
 
 .el-pagination .el-pager li.is-active {
-  background-color: var(--nginx-green);
-  color: var(--text-white);
+  background-color: var(--nginx-green) !important;
+  color: var(--text-white) !important;
+  border-color: var(--nginx-green) !important;
+}
+
+.el-pagination .el-pager li.is-active:hover {
+  background-color: var(--nginx-green-light) !important;
+  color: var(--text-white) !important;
+  border-color: var(--nginx-green-light) !important;
 }
 
 .el-pagination .el-pagination__total {
@@ -688,11 +785,53 @@ body {
   color: var(--text-primary);
 }
 
+/* 确保所有卡片内的内容都是深色 */
+.dashboard .el-card,
+.config-page .el-card,
+.logs-page .el-card,
+.files-page .el-card,
+.certificates-page .el-card,
+.audit-page .el-card,
+.users-page .el-card,
+.nginx-manager .el-card,
+.static-package-page .el-card {
+  background-color: var(--bg-card);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.dashboard .el-card__header,
+.config-page .el-card__header,
+.logs-page .el-card__header,
+.files-page .el-card__header,
+.certificates-page .el-card__header,
+.audit-page .el-card__header,
+.users-page .el-card__header,
+.nginx-manager .el-card__header,
+.static-package-page .el-card__header {
+  background-color: var(--bg-secondary);
+  border-bottom-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.dashboard .el-card__body,
+.config-page .el-card__body,
+.logs-page .el-card__body,
+.files-page .el-card__body,
+.certificates-page .el-card__body,
+.audit-page .el-card__body,
+.users-page .el-card__body,
+.nginx-manager .el-card__body,
+.static-package-page .el-card__body {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
 /* Button 按钮组件 - 确保所有按钮文字都是浅色 */
 .el-button {
-  color: var(--text-primary);
-  background-color: var(--bg-tertiary);
-  border-color: var(--border-color);
+  color: var(--text-primary) !important;
+  background-color: var(--bg-tertiary) !important;
+  border-color: var(--border-color) !important;
 }
 
 .el-button:hover {
@@ -701,9 +840,33 @@ body {
   background-color: var(--bg-hover) !important;
 }
 
+.el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--danger):not(.el-button--warning):not(.el-button--info) {
+  color: var(--text-primary) !important;
+  background-color: var(--bg-tertiary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--danger):not(.el-button--warning):not(.el-button--info):hover {
+  color: var(--text-primary) !important;
+  background-color: var(--bg-hover) !important;
+  border-color: var(--nginx-green) !important;
+}
+
+.el-button--primary {
+  background-color: var(--nginx-green) !important;
+  border-color: var(--nginx-green) !important;
+  color: var(--text-white) !important;
+}
+
 .el-button--primary:hover {
   background-color: var(--nginx-green-light) !important;
   border-color: var(--nginx-green-light) !important;
+  color: var(--text-white) !important;
+}
+
+.el-button--success {
+  background-color: var(--nginx-green) !important;
+  border-color: var(--nginx-green) !important;
   color: var(--text-white) !important;
 }
 
@@ -727,9 +890,16 @@ body {
   color: var(--text-primary);
 }
 
+.el-button--text {
+  color: var(--text-primary) !important;
+  background-color: transparent !important;
+  border-color: transparent !important;
+}
+
 .el-button--text:hover {
   color: var(--nginx-green) !important;
   background-color: transparent !important;
+  border-color: transparent !important;
 }
 
 .el-button--danger {
@@ -739,8 +909,9 @@ body {
 }
 
 .el-button--danger:hover {
-  background-color: #b91c1c;
-  border-color: #b91c1c;
+  background-color: #b91c1c !important;
+  border-color: #b91c1c !important;
+  color: var(--text-white) !important;
 }
 
 .el-button--warning {
@@ -750,20 +921,21 @@ body {
 }
 
 .el-button--warning:hover {
-  background-color: #ca8a04;
-  border-color: #ca8a04;
+  background-color: #ca8a04 !important;
+  border-color: #ca8a04 !important;
+  color: var(--text-white) !important;
 }
 
 .el-button--info {
-  background-color: var(--bg-tertiary);
-  border-color: var(--border-color);
-  color: var(--text-primary);
+  background-color: var(--bg-tertiary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
 }
 
 .el-button--info:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--nginx-green);
-  color: var(--nginx-green);
+  background-color: var(--bg-hover) !important;
+  border-color: var(--nginx-green) !important;
+  color: var(--nginx-green) !important;
 }
 
 /* Tag 标签组件 */
@@ -815,18 +987,72 @@ a:hover {
 }
 
 /* 确保所有可点击元素的hover状态都有合适的反馈 */
-.el-button.is-loading:hover {
+.el-button.is-loading {
   background-color: var(--bg-tertiary) !important;
   border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
 }
 
-/* 表格行hover时的文字颜色 */
+.el-button.is-loading:hover {
+  background-color: var(--bg-hover) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-button.is-disabled {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-muted) !important;
+  opacity: 0.6;
+}
+
+.el-button.is-disabled:hover {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-muted) !important;
+}
+
+/* 表格行hover时的文字颜色 - 确保所有内容都可见 */
 .el-table__row:hover td {
   color: var(--text-primary) !important;
+  background-color: var(--bg-hover) !important;
 }
 
 .el-table__row:hover td .el-button {
   color: var(--text-primary) !important;
+}
+
+.el-table__row:hover td .el-button--primary,
+.el-table__row:hover td .el-button--success {
+  color: var(--text-white) !important;
+}
+
+.el-table__row:hover td .el-tag {
+  background-color: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+.el-table__row:hover td .el-tag--success {
+  background-color: var(--nginx-green) !important;
+  color: var(--text-white) !important;
+  border-color: var(--nginx-green) !important;
+}
+
+.el-table__row:hover td .el-text {
+  color: var(--text-primary) !important;
+}
+
+/* 非hover状态的表格行也要确保文字可见 */
+.el-table__row td {
+  color: var(--text-primary) !important;
+  background-color: var(--bg-card) !important;
+}
+
+.el-table__row td .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--danger):not(.el-button--warning) {
+  color: var(--text-primary) !important;
+  background-color: var(--bg-tertiary) !important;
+  border-color: var(--border-color) !important;
 }
 
 /* 菜单项hover时的图标颜色 */
