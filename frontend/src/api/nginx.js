@@ -11,17 +11,22 @@ export const nginxApi = {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/status`)
   },
 
-  // 在线下载并编译
+  // 在线下载 Nginx 源码包（不编译）
   downloadAndBuild(payload) {
     return api.post('/nginx/versions/download', payload)
   },
 
-  // 上传源码包并编译
+  // 上传 Nginx 源码包（不编译）
   uploadAndBuild(formData, onUploadProgress) {
     return api.post('/nginx/versions/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress
     })
+  },
+
+  // 编译指定版本（基于已下载/上传的源码包）
+  compileVersion(version) {
+    return api.post(`/nginx/versions/${encodeURIComponent(version)}/compile`)
   },
 
   // 启动指定版本

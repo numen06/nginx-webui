@@ -15,6 +15,7 @@ from app.database import get_db
 from app.auth import get_current_user, User
 from app.config import get_config
 from app.utils.audit import create_audit_log, get_client_ip
+from app.utils.nginx_versions import _get_versions_root, _get_install_path
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -43,12 +44,69 @@ class MkdirRequest(BaseModel):
     name: str
 
 
-def validate_path(relative_path: str) -> Path:
+def get_version_root_dir(version: Optional[str] = None) -> Path:
+    """
+    获取指定 Nginx 版本的根目录（html 目录）
+    
+    Args:
+        version: Nginx 版本号，如果为 None 则使用当前活动版本
+    
+    Returns:
+        Path: Nginx 版本的 html 目录绝对路径
+    
+    Raises:
+        HTTPException: 如果版本不存在或未编译
+    """
+    if version:
+        install_path = _get_install_path(version)
+        if not install_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Nginx 版本 {version} 不存在"
+            )
+        html_dir = install_path / "html"
+        if not html_dir.exists():
+            html_dir.mkdir(parents=True, exist_ok=True)
+        return html_dir
+    else:
+        # 如果没有指定版本，尝试使用当前活动版本
+        from app.utils.nginx_versions import get_active_version
+        active = get_active_version()
+        if active:
+            html_dir = active["install_path"] / "html"
+            if not html_dir.exists():
+                html_dir.mkdir(parents=True, exist_ok=True)
+            return html_dir
+        else:
+            # 如果没有活动版本，使用第一个已编译的版本
+            versions_root = _get_versions_root()
+            if not versions_root.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="未找到任何 Nginx 版本"
+                )
+            # 查找第一个已编译的版本（有 sbin/nginx 文件）
+            for child in sorted(versions_root.iterdir()):
+                if child.is_dir():
+                    executable = child / "sbin" / "nginx"
+                    if executable.exists():
+                        html_dir = child / "html"
+                        if not html_dir.exists():
+                            html_dir.mkdir(parents=True, exist_ok=True)
+                        return html_dir
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="未找到任何已编译的 Nginx 版本"
+            )
+
+
+def validate_path(relative_path: Optional[str], version: Optional[str] = None) -> Path:
     """
     验证并规范化文件路径，防止目录遍历攻击
     
     Args:
         relative_path: 相对路径
+        version: Nginx 版本号
     
     Returns:
         Path: 规范化后的绝对路径
@@ -56,8 +114,7 @@ def validate_path(relative_path: str) -> Path:
     Raises:
         HTTPException: 如果路径无效或超出允许范围
     """
-    config = get_config()
-    static_dir = Path(config.nginx.static_dir)
+    root_dir = get_version_root_dir(version)
     
     # 规范化相对路径
     if relative_path:
@@ -70,13 +127,13 @@ def validate_path(relative_path: str) -> Path:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="无效的路径"
             )
-        target_path = static_dir / normalized
+        target_path = root_dir / normalized
     else:
-        target_path = static_dir
+        target_path = root_dir
     
-    # 确保路径在静态目录内
+    # 确保路径在根目录内
     try:
-        target_path.resolve().relative_to(static_dir.resolve())
+        target_path.resolve().relative_to(root_dir.resolve())
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -89,11 +146,13 @@ def validate_path(relative_path: str) -> Path:
 @router.get("", summary="列出静态文件")
 async def list_files(
     path: Optional[str] = Query(None, description="目录路径（相对路径）"),
+    version: Optional[str] = Query(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user)
 ):
     """列出指定目录下的文件"""
     try:
-        target_path = validate_path(path) if path else Path(get_config().nginx.static_dir)
+        root_dir = get_version_root_dir(version)
+        target_path = validate_path(path, version)
         
         if not target_path.exists():
             raise HTTPException(
@@ -112,7 +171,7 @@ async def list_files(
             stat = item.stat()
             files.append(FileInfo(
                 name=item.name,
-                path=str(item.relative_to(Path(get_config().nginx.static_dir))),
+                path=str(item.relative_to(root_dir)),
                 is_dir=item.is_dir(),
                 size=stat.st_size if item.is_file() else 0,
                 modified_time=datetime.fromtimestamp(stat.st_mtime).isoformat()
@@ -124,7 +183,8 @@ async def list_files(
         return {
             "success": True,
             "files": [f.dict() for f in files],
-            "path": path or ""
+            "path": path or "",
+            "version": version
         }
     except HTTPException:
         raise
@@ -139,13 +199,15 @@ async def list_files(
 async def upload_file(
     request: Request,
     path: Optional[str] = Form(None, description="上传到的目录路径（相对路径）"),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
     files: List[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """上传文件到指定目录"""
     try:
-        target_dir = validate_path(path) if path else Path(get_config().nginx.static_dir)
+        root_dir = get_version_root_dir(version)
+        target_dir = validate_path(path, version)
         
         if not target_dir.exists():
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -166,7 +228,7 @@ async def upload_file(
             
             uploaded_files.append({
                 "filename": filename,
-                "path": str(file_path.relative_to(Path(get_config().nginx.static_dir))),
+                "path": str(file_path.relative_to(root_dir)),
                 "size": len(content)
             })
             
@@ -176,8 +238,8 @@ async def upload_file(
                 user_id=current_user.id,
                 username=current_user.username,
                 action="file_upload",
-                target=str(file_path.relative_to(Path(get_config().nginx.static_dir))),
-                details={"filename": filename, "size": len(content)},
+                target=str(file_path.relative_to(root_dir)),
+                details={"filename": filename, "size": len(content), "version": version},
                 ip_address=get_client_ip(request)
             )
         
@@ -198,11 +260,12 @@ async def upload_file(
 @router.get("/{file_path:path}", summary="获取文件内容")
 async def get_file(
     file_path: str,
+    version: Optional[str] = Query(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user)
 ):
     """获取文件内容"""
     try:
-        target_path = validate_path(file_path)
+        target_path = validate_path(file_path, version)
         
         if not target_path.exists():
             raise HTTPException(
@@ -239,12 +302,13 @@ async def update_file(
     file_path: str,
     request: Request,
     content: str = Form(...),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """修改文件内容"""
     try:
-        target_path = validate_path(file_path)
+        target_path = validate_path(file_path, version)
         
         if not target_path.exists():
             raise HTTPException(
@@ -269,7 +333,7 @@ async def update_file(
             username=current_user.username,
             action="file_update",
             target=file_path,
-            details={"size": len(content)},
+            details={"size": len(content), "version": version},
             ip_address=get_client_ip(request)
         )
         
@@ -290,12 +354,13 @@ async def update_file(
 async def delete_file(
     file_path: str,
     request: Request,
+    version: Optional[str] = Query(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """删除文件或目录"""
     try:
-        target_path = validate_path(file_path)
+        target_path = validate_path(file_path, version)
         
         if not target_path.exists():
             raise HTTPException(
@@ -318,7 +383,7 @@ async def delete_file(
             username=current_user.username,
             action=action,
             target=file_path,
-            details={},
+            details={"version": version},
             ip_address=get_client_ip(request)
         )
         
@@ -340,16 +405,19 @@ async def create_directory(
     request: Request,
     path: Optional[str] = Form(None, description="父目录路径（相对路径）"),
     name: str = Form(..., description="目录名称"),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """创建目录"""
     try:
-        parent_dir = validate_path(path) if path else Path(get_config().nginx.static_dir)
+        root_dir = get_version_root_dir(version)
+        parent_dir = validate_path(path, version)
         new_dir = parent_dir / name
         
         # 验证新目录路径
-        validate_path(str(new_dir.relative_to(Path(get_config().nginx.static_dir))))
+        relative_path = str(new_dir.relative_to(root_dir))
+        validate_path(relative_path, version)
         
         if new_dir.exists():
             raise HTTPException(
@@ -365,8 +433,8 @@ async def create_directory(
             user_id=current_user.id,
             username=current_user.username,
             action="dir_create",
-            target=str(new_dir.relative_to(Path(get_config().nginx.static_dir))),
-            details={"name": name},
+            target=relative_path,
+            details={"name": name, "version": version},
             ip_address=get_client_ip(request)
         )
         
@@ -388,12 +456,14 @@ async def rename_file(
     file_path: str,
     request: Request,
     new_name: str = Form(...),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """重命名文件或目录"""
     try:
-        target_path = validate_path(file_path)
+        root_dir = get_version_root_dir(version)
+        target_path = validate_path(file_path, version)
         
         if not target_path.exists():
             raise HTTPException(
@@ -411,7 +481,8 @@ async def rename_file(
         new_path = target_path.parent / new_name
         
         # 验证新路径
-        validate_path(str(new_path.relative_to(Path(get_config().nginx.static_dir))))
+        relative_path = str(new_path.relative_to(root_dir))
+        validate_path(relative_path, version)
         
         if new_path.exists():
             raise HTTPException(
@@ -428,7 +499,7 @@ async def rename_file(
             username=current_user.username,
             action="file_rename",
             target=file_path,
-            details={"new_name": new_name},
+            details={"new_name": new_name, "version": version},
             ip_address=get_client_ip(request)
         )
         
@@ -448,11 +519,12 @@ async def rename_file(
 @router.get("/download/{file_path:path}", summary="下载文件")
 async def download_file(
     file_path: str,
+    version: Optional[str] = Query(None, description="Nginx 版本号"),
     current_user: User = Depends(get_current_user)
 ):
     """下载文件"""
     try:
-        target_path = validate_path(file_path)
+        target_path = validate_path(file_path, version)
         
         if not target_path.exists():
             raise HTTPException(

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_config
 from app.models import ConfigBackup
+from app.utils.nginx import get_config_path
 
 
 def create_backup(db: Session, created_by_id: Optional[int] = None) -> ConfigBackup:
@@ -22,8 +23,10 @@ def create_backup(db: Session, created_by_id: Optional[int] = None) -> ConfigBac
     Returns:
         ConfigBackup: 备份记录
     """
+    # 备份当前实际使用的 Nginx 配置文件，而不是固定的 config.yaml 路径
+    # 这样在多版本 Nginx 管理启用时，备份/恢复都严格基于“活动版本”的 nginx.conf。
     config = get_config()
-    config_path = Path(config.nginx.config_path)
+    config_path = get_config_path()
     backup_dir = Path(config.backup.backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
     
@@ -96,8 +99,8 @@ def restore_backup(db: Session, backup_id: int) -> bool:
     if not backup_path.exists():
         return False
     
-    config = get_config()
-    config_path = Path(config.nginx.config_path)
+    # 恢复到当前应使用的配置文件路径（与 create_backup 一致）
+    config_path = get_config_path()
     
     # 恢复备份前先创建当前配置的备份
     try:

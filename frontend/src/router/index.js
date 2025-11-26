@@ -55,6 +55,12 @@ const routes = [
         name: 'Nginx',
         component: () => import('../views/Nginx.vue'),
         meta: { title: 'Nginx 管理' }
+      },
+      {
+        path: 'users',
+        name: 'Users',
+        component: () => import('../views/Users.vue'),
+        meta: { title: '用户管理' }
       }
     ]
   }

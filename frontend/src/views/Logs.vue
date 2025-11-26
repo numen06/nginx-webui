@@ -3,15 +3,223 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane label="访问日志" name="access">
         <el-card>
-          <div class="log-content">
-            <pre v-for="(log, index) in accessLogs" :key="index">{{ log }}</pre>
+          <template #header>
+            <div class="card-header">
+              <span>访问日志</span>
+              <el-button 
+                :icon="Refresh" 
+                circle 
+                size="small" 
+                @click="loadLogs"
+                :loading="loading"
+              />
+            </div>
+          </template>
+          <div class="log-info">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="当前 Nginx 版本">
+                <el-tag v-if="accessLogInfo.nginx_version" type="info" size="small">
+                  {{ accessLogInfo.nginx_version }}
+                </el-tag>
+                <span v-else class="text-muted">未知</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="日志文件路径">
+                <el-text v-if="accessLogInfo.log_path" class="log-path" size="small">
+                  {{ accessLogInfo.log_path }}
+                </el-text>
+                <span v-else class="text-muted">未知</span>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="accessLogInfo.nginx_version_detail" label="版本详情" :span="2">
+                <el-text type="info" size="small">{{ accessLogInfo.nginx_version_detail }}</el-text>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+          <div class="log-filters">
+            <el-form :inline="true" class="filter-form">
+              <el-form-item label="关键词搜索">
+                <el-input
+                  v-model="accessFilters.keyword"
+                  placeholder="输入关键词搜索日志"
+                  clearable
+                  style="width: 250px"
+                  @clear="handleAccessSearch"
+                  @keyup.enter="handleAccessSearch"
+                >
+                  <template #prefix>
+                    <el-icon><Search /></el-icon>
+                  </template>
+                </el-input>
+              </el-form-item>
+              <el-form-item label="日期范围">
+                <el-date-picker
+                  v-model="accessFilters.dateRange"
+                  type="datetimerange"
+                  range-separator="至"
+                  start-placeholder="开始日期"
+                  end-placeholder="结束日期"
+                  format="YYYY-MM-DD HH:mm:ss"
+                  value-format="YYYY-MM-DD HH:mm:ss"
+                  @change="handleAccessSearch"
+                />
+              </el-form-item>
+              <el-form-item label="快捷选择">
+                <div class="quick-time-buttons">
+                  <el-button size="small" @click="setAccessQuickTime(15)">15分钟</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(30)">30分钟</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(60)">1小时</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(60 * 3)">3小时</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(60 * 6)">6小时</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(60 * 12)">12小时</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(60 * 24)">1天</el-button>
+                  <el-button size="small" @click="setAccessQuickTime(60 * 24 * 7)">7天</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="handleAccessSearch">搜索</el-button>
+                <el-button @click="handleAccessReset">重置</el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+          <div v-loading="loading" class="log-content">
+            <div v-if="!loading && (!accessLogs || accessLogs.length === 0)" class="empty-log">
+              <el-empty description="暂无访问日志" />
+            </div>
+            <template v-else>
+              <pre 
+                v-for="(log, index) in accessLogs" 
+                :key="index"
+                v-html="accessFilters.keyword ? highlightKeyword(log, accessFilters.keyword) : escapeHtml(log)"
+              ></pre>
+            </template>
+          </div>
+          <div v-if="accessPagination && (accessPagination.total_lines > 0 || accessPagination.filtered_lines > 0)" class="pagination-wrapper">
+            <div class="pagination-info">
+              <span v-if="accessPagination.filtered_lines !== undefined && accessPagination.filtered_lines !== accessPagination.total_lines" class="filter-info">
+                共 {{ accessPagination.total_lines }} 条，筛选出 {{ accessPagination.filtered_lines }} 条
+              </span>
+              <span v-else-if="accessPagination.total_lines > 0">
+                共 {{ accessPagination.total_lines }} 条
+              </span>
+            </div>
+            <el-pagination
+              v-model:current-page="accessPagination.page"
+              :page-size="accessPagination.page_size"
+              :total="accessPagination.filtered_lines || accessPagination.total_lines"
+              :total-pages="accessPagination.total_pages"
+              layout="total, prev, pager, next, jumper"
+              @current-change="handleAccessPageChange"
+            />
           </div>
         </el-card>
       </el-tab-pane>
       <el-tab-pane label="错误日志" name="error">
         <el-card>
-          <div class="log-content">
-            <pre v-for="(log, index) in errorLogs" :key="index">{{ log }}</pre>
+          <template #header>
+            <div class="card-header">
+              <span>错误日志</span>
+              <el-button 
+                :icon="Refresh" 
+                circle 
+                size="small" 
+                @click="loadLogs"
+                :loading="loading"
+              />
+            </div>
+          </template>
+          <div class="log-info">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="当前 Nginx 版本">
+                <el-tag v-if="errorLogInfo.nginx_version" type="info" size="small">
+                  {{ errorLogInfo.nginx_version }}
+                </el-tag>
+                <span v-else class="text-muted">未知</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="日志文件路径">
+                <el-text v-if="errorLogInfo.log_path" class="log-path" size="small">
+                  {{ errorLogInfo.log_path }}
+                </el-text>
+                <span v-else class="text-muted">未知</span>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="errorLogInfo.nginx_version_detail" label="版本详情" :span="2">
+                <el-text type="info" size="small">{{ errorLogInfo.nginx_version_detail }}</el-text>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+          <div class="log-filters">
+            <el-form :inline="true" class="filter-form">
+              <el-form-item label="关键词搜索">
+                <el-input
+                  v-model="errorFilters.keyword"
+                  placeholder="输入关键词搜索日志"
+                  clearable
+                  style="width: 250px"
+                  @clear="handleErrorSearch"
+                  @keyup.enter="handleErrorSearch"
+                >
+                  <template #prefix>
+                    <el-icon><Search /></el-icon>
+                  </template>
+                </el-input>
+              </el-form-item>
+              <el-form-item label="日期范围">
+                <el-date-picker
+                  v-model="errorFilters.dateRange"
+                  type="datetimerange"
+                  range-separator="至"
+                  start-placeholder="开始日期"
+                  end-placeholder="结束日期"
+                  format="YYYY-MM-DD HH:mm:ss"
+                  value-format="YYYY-MM-DD HH:mm:ss"
+                  @change="handleErrorSearch"
+                />
+              </el-form-item>
+              <el-form-item label="快捷选择">
+                <div class="quick-time-buttons">
+                  <el-button size="small" @click="setErrorQuickTime(15)">15分钟</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(30)">30分钟</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(60)">1小时</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(60 * 3)">3小时</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(60 * 6)">6小时</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(60 * 12)">12小时</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(60 * 24)">1天</el-button>
+                  <el-button size="small" @click="setErrorQuickTime(60 * 24 * 7)">7天</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="handleErrorSearch">搜索</el-button>
+                <el-button @click="handleErrorReset">重置</el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+          <div v-loading="loading" class="log-content">
+            <div v-if="!loading && (!errorLogs || errorLogs.length === 0)" class="empty-log">
+              <el-empty description="暂无错误日志" />
+            </div>
+            <template v-else>
+              <pre 
+                v-for="(log, index) in errorLogs" 
+                :key="index"
+                v-html="errorFilters.keyword ? highlightKeyword(log, errorFilters.keyword) : escapeHtml(log)"
+              ></pre>
+            </template>
+          </div>
+          <div v-if="errorPagination && (errorPagination.total_lines > 0 || errorPagination.filtered_lines > 0)" class="pagination-wrapper">
+            <div class="pagination-info">
+              <span v-if="errorPagination.filtered_lines !== undefined && errorPagination.filtered_lines !== errorPagination.total_lines" class="filter-info">
+                共 {{ errorPagination.total_lines }} 条，筛选出 {{ errorPagination.filtered_lines }} 条
+              </span>
+              <span v-else-if="errorPagination.total_lines > 0">
+                共 {{ errorPagination.total_lines }} 条
+              </span>
+            </div>
+            <el-pagination
+              v-model:current-page="errorPagination.page"
+              :page-size="errorPagination.page_size"
+              :total="errorPagination.filtered_lines || errorPagination.total_lines"
+              :total-pages="errorPagination.total_pages"
+              layout="total, prev, pager, next, jumper"
+              @current-change="handleErrorPageChange"
+            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -23,23 +231,228 @@
 import { ref, onMounted, watch } from 'vue'
 import { logsApi } from '../api/logs'
 import { ElMessage } from 'element-plus'
+import { Refresh, Search } from '@element-plus/icons-vue'
 
 const activeTab = ref('access')
+const loading = ref(false)
 const accessLogs = ref([])
 const errorLogs = ref([])
+const accessPagination = ref(null)
+const errorPagination = ref(null)
+const accessLogInfo = ref({
+  nginx_version: null,
+  nginx_version_detail: null,
+  log_path: null,
+  active_version: null,
+  install_path: null,
+  binary: null
+})
+const errorLogInfo = ref({
+  nginx_version: null,
+  nginx_version_detail: null,
+  log_path: null,
+  active_version: null,
+  install_path: null,
+  binary: null
+})
+const accessFilters = ref({
+  keyword: '',
+  dateRange: null
+})
+const errorFilters = ref({
+  keyword: '',
+  dateRange: null
+})
 
 const loadLogs = async () => {
+  loading.value = true
   try {
     if (activeTab.value === 'access') {
-      const response = await logsApi.getAccessLogs(1, 100)
-      accessLogs.value = response.logs || []
+      const page = accessPagination.value?.page || 1
+      const keyword = accessFilters.value.keyword || null
+      const startDate = accessFilters.value.dateRange?.[0] || null
+      const endDate = accessFilters.value.dateRange?.[1] || null
+      const response = await logsApi.getAccessLogs(page, 100, keyword, startDate, endDate)
+      console.log('访问日志响应:', response)
+      if (response && response.success !== false) {
+        accessLogs.value = Array.isArray(response.logs) ? response.logs : []
+        if (response.pagination) {
+          accessPagination.value = response.pagination
+        } else {
+          accessPagination.value = {
+            page: page,
+            page_size: 100,
+            total_lines: accessLogs.value.length,
+            total_pages: 1
+          }
+        }
+        // 更新日志信息
+        accessLogInfo.value = {
+          nginx_version: response.nginx_version || null,
+          nginx_version_detail: response.nginx_version_detail || null,
+          log_path: response.log_path || null,
+          active_version: response.active_version || null,
+          install_path: response.install_path || null,
+          binary: response.binary || null
+        }
+      } else {
+        accessLogs.value = []
+        accessPagination.value = {
+          page: 1,
+          page_size: 100,
+          total_lines: 0,
+          total_pages: 1
+        }
+        if (response && response.success === false) {
+          ElMessage.warning(response.detail || '未获取到访问日志数据')
+        }
+      }
     } else {
-      const response = await logsApi.getErrorLogs(1, 100)
-      errorLogs.value = response.logs || []
+      const page = errorPagination.value?.page || 1
+      const keyword = errorFilters.value.keyword || null
+      const startDate = errorFilters.value.dateRange?.[0] || null
+      const endDate = errorFilters.value.dateRange?.[1] || null
+      const response = await logsApi.getErrorLogs(page, 100, keyword, startDate, endDate)
+      console.log('错误日志响应:', response)
+      if (response && response.success !== false) {
+        errorLogs.value = Array.isArray(response.logs) ? response.logs : []
+        if (response.pagination) {
+          errorPagination.value = response.pagination
+        } else {
+          errorPagination.value = {
+            page: page,
+            page_size: 100,
+            total_lines: errorLogs.value.length,
+            total_pages: 1
+          }
+        }
+        // 更新日志信息
+        errorLogInfo.value = {
+          nginx_version: response.nginx_version || null,
+          nginx_version_detail: response.nginx_version_detail || null,
+          log_path: response.log_path || null,
+          active_version: response.active_version || null,
+          install_path: response.install_path || null,
+          binary: response.binary || null
+        }
+      } else {
+        errorLogs.value = []
+        errorPagination.value = {
+          page: 1,
+          page_size: 100,
+          total_lines: 0,
+          total_pages: 1
+        }
+        if (response && response.success === false) {
+          ElMessage.warning(response.detail || '未获取到错误日志数据')
+        }
+      }
     }
   } catch (error) {
-    ElMessage.error('加载日志失败')
+    console.error('加载日志失败:', error)
+    const errorMsg = error?.detail || error?.message || '加载日志失败'
+    ElMessage.error(errorMsg)
+    if (activeTab.value === 'access') {
+      accessLogs.value = []
+      accessPagination.value = {
+        page: 1,
+        page_size: 100,
+        total_lines: 0,
+        total_pages: 1
+      }
+    } else {
+      errorLogs.value = []
+      errorPagination.value = {
+        page: 1,
+        page_size: 100,
+        total_lines: 0,
+        total_pages: 1
+      }
+    }
+  } finally {
+    loading.value = false
   }
+}
+
+const handleAccessPageChange = (page) => {
+  accessPagination.value.page = page
+  loadLogs()
+}
+
+const handleErrorPageChange = (page) => {
+  errorPagination.value.page = page
+  loadLogs()
+}
+
+const handleAccessSearch = () => {
+  accessPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
+  loadLogs()
+}
+
+const handleAccessReset = () => {
+  accessFilters.value = { keyword: '', dateRange: null }
+  accessPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
+  loadLogs()
+}
+
+const handleErrorSearch = () => {
+  errorPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
+  loadLogs()
+}
+
+const handleErrorReset = () => {
+  errorFilters.value = { keyword: '', dateRange: null }
+  errorPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
+  loadLogs()
+}
+
+const setAccessQuickTime = (minutes) => {
+  const now = new Date()
+  const startTime = new Date(now.getTime() - minutes * 60 * 1000)
+  
+  accessFilters.value.dateRange = [
+    formatDateTime(startTime),
+    formatDateTime(now)
+  ]
+  handleAccessSearch()
+}
+
+const setErrorQuickTime = (minutes) => {
+  const now = new Date()
+  const startTime = new Date(now.getTime() - minutes * 60 * 1000)
+  
+  errorFilters.value.dateRange = [
+    formatDateTime(startTime),
+    formatDateTime(now)
+  ]
+  handleErrorSearch()
+}
+
+const formatDateTime = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+const highlightKeyword = (text, keyword) => {
+  if (!text || !keyword) {
+    return escapeHtml(text || '')
+  }
+  const escapedText = escapeHtml(text)
+  const escapedKeyword = escapeHtml(keyword)
+  const regex = new RegExp(`(${escapedKeyword})`, 'gi')
+  return escapedText.replace(regex, '<mark>$1</mark>')
+}
+
+const escapeHtml = (text) => {
+  if (!text) return ''
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
 }
 
 watch(activeTab, () => {
@@ -56,11 +469,58 @@ onMounted(() => {
   padding: 20px;
 }
 
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.log-info {
+  margin-bottom: 15px;
+}
+
+.log-filters {
+  margin-bottom: 15px;
+  padding: 15px;
+  background-color: #f5f7fa;
+  border-radius: 4px;
+}
+
+.filter-form {
+  margin: 0;
+}
+
+.filter-form .el-form-item {
+  margin-bottom: 10px;
+}
+
+.quick-time-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.quick-time-buttons .el-button {
+  margin: 0;
+}
+
+.log-path {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+}
+
+.text-muted {
+  color: #909399;
+  font-style: italic;
+  font-size: 12px;
+}
+
 .log-content {
   background: #1e1e1e;
   color: #d4d4d4;
   padding: 20px;
   border-radius: 4px;
+  min-height: 400px;
   max-height: 600px;
   overflow-y: auto;
   font-family: 'Courier New', monospace;
@@ -70,6 +530,39 @@ onMounted(() => {
 .log-content pre {
   margin: 2px 0;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.log-content pre mark {
+  background-color: #ffeb3b;
+  color: #000;
+  padding: 2px 4px;
+  border-radius: 2px;
+  font-weight: bold;
+}
+
+.empty-log {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 300px;
+}
+
+.pagination-wrapper {
+  margin-top: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pagination-info {
+  color: #606266;
+  font-size: 14px;
+}
+
+.filter-info {
+  color: #409eff;
 }
 </style>
 

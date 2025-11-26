@@ -15,7 +15,9 @@
     "element-plus": "^2.4.4",
     "@element-plus/icons-vue": "^2.3.1",
     "monaco-editor": "^0.45.0",
-    "@monaco-editor/loader": "^1.4.0"
+    "@monaco-editor/loader": "^1.4.0",
+    "echarts": "^5.4.3",
+    "vue-echarts": "^6.6.9"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.5.0",

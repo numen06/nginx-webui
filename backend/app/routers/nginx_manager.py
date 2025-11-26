@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import signal
 import time
+import ssl
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlparse
@@ -45,10 +46,14 @@ class NginxVersionInfo(BaseModel):
     pid: Optional[int] = None
     source: Optional[str] = None  # download / upload / prebuilt
     error: Optional[str] = None
+    # 是否已成功编译（即在 versions_root 下存在完整安装目录且包含 sbin/nginx）
+    compiled: bool = False
+    # 是否已准备好源码包（build_root 中存在对应 tar.gz / tgz）
+    has_source: bool = False
 
 
 class NginxDownloadRequest(BaseModel):
-    """在线下载并编译 Nginx 请求"""
+    """在线下载 Nginx 源码包请求（仅下载，不编译）"""
 
     version: str
     url: Optional[str] = None
@@ -65,6 +70,20 @@ class NginxBuildResult(BaseModel):
 
 def _get_versions_root() -> Path:
     """获取 Nginx 多版本安装根目录"""
+    config = get_config()
+    raw = Path(config.nginx.versions_root)
+    if raw.is_absolute():
+        return raw
+    # 当前文件在 backend/app/routers/nginx_manager.py
+    # parents[2] -> backend 目录
+    backend_dir = Path(__file__).resolve().parents[2]
+    return (backend_dir / raw).resolve()
+
+
+def _get_versions_root_raw() -> Path:
+    """
+    获取配置中原始的 versions_root 路径（不做绝对化），用于对外展示相对路径。
+    """
     config = get_config()
     return Path(config.nginx.versions_root)
 
@@ -95,13 +114,26 @@ def _get_pid_file(install_path: Path) -> Path:
 def _get_build_root() -> Path:
     """获取源码构建根目录"""
     config = get_config()
-    return Path(config.nginx.build_root)
+    raw = Path(config.nginx.build_root)
+    if raw.is_absolute():
+        return raw
+    backend_dir = Path(__file__).resolve().parents[2]
+    return (backend_dir / raw).resolve()
 
 
 def _get_build_logs_dir() -> Path:
     """获取编译日志目录"""
     config = get_config()
-    return Path(config.nginx.build_logs_dir)
+    raw = Path(config.nginx.build_logs_dir)
+    if raw.is_absolute():
+        return raw
+    backend_dir = Path(__file__).resolve().parents[2]
+    return (backend_dir / raw).resolve()
+
+
+def _get_source_tar_path(version: str) -> Path:
+    """根据版本号获取源码包 tar.gz 路径"""
+    return _get_build_root() / f"nginx-{version}.tar.gz"
 
 
 def _ensure_nginx_dirs() -> None:
@@ -206,10 +238,13 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
     """
     _ensure_nginx_dirs()
     build_root = _get_build_root()
-    install_path = _get_install_path(version)
-    build_dir = build_root / version
+    install_path = _get_install_path(
+        version
+    )  # 最终对外暴露的安装目录：<versions_root>/<version>
+    build_dir = build_root / version  # 源码解压与编译目录：<build_root>/<version>
+    tmp_install_path = build_root / f"{version}_install_tmp"  # 编译安装使用的临时目录
 
-    # 如果目标版本已经存在，避免覆盖
+    # 如果目标版本已经存在，避免静默覆盖
     if install_path.exists() and any(install_path.iterdir()):
         msg = f"Nginx 版本 {version} 已存在，请先删除或选择其他版本号"
         log_path = _write_build_log(version, msg)
@@ -224,6 +259,10 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
     if build_dir.exists():
         shutil.rmtree(build_dir, ignore_errors=True)
     build_dir.mkdir(parents=True, exist_ok=True)
+
+    # 确保临时安装目录干净
+    if tmp_install_path.exists():
+        shutil.rmtree(tmp_install_path, ignore_errors=True)
 
     logs: list[str] = []
 
@@ -241,13 +280,12 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
         source_dir = _detect_source_dir(build_dir)
         logs.append(f"检测到源码目录: {source_dir}")
 
-        install_path.mkdir(parents=True, exist_ok=True)
-        logs.append(f"目标安装路径: {install_path}")
+        logs.append(f"临时安装路径: {tmp_install_path}")
 
         # configure
         configure_cmd = [
             "./configure",
-            f"--prefix={install_path}",
+            f"--prefix={tmp_install_path}",
         ]
         logs.append(f"执行配置命令: {' '.join(configure_cmd)}")
         result = subprocess.run(
@@ -289,10 +327,20 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
         if result.returncode != 0:
             raise RuntimeError("make install 失败")
 
-        # 校验可执行文件
-        executable = _get_nginx_executable(install_path)
+        # 校验临时安装目录中的可执行文件
+        executable = _get_nginx_executable(tmp_install_path)
         if not executable.exists():
             raise RuntimeError(f"安装完成但未找到可执行文件: {executable}")
+
+        # 将临时安装目录整体移动到最终 versions_root 下
+        if install_path.exists():
+            shutil.rmtree(install_path, ignore_errors=True)
+        install_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(tmp_install_path), str(install_path))
+        logs.append(f"已将临时安装目录移动到正式路径: {install_path}")
+
+        # 使用最终路径重新计算可执行文件路径，便于日志与后续校验
+        executable = _get_nginx_executable(install_path)
 
         full_log = "\n".join(logs)
         log_path = _write_build_log(version, full_log)
@@ -316,25 +364,38 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
 
 def _get_version_status(version: str) -> NginxVersionInfo:
     """获取单个版本的状态信息"""
+    # 内部使用绝对路径进行检测和编译
     install_path = _get_install_path(version)
     executable = _get_nginx_executable(install_path)
+    source_tar = _get_source_tar_path(version)
+
+    # 对外返回时，安装路径使用相对于配置的 versions_root 的“原始路径”，避免在 API 中暴露绝对路径
+    raw_root = _get_versions_root_raw()
+    display_install_path = str(raw_root / version)
+    display_executable = str(raw_root / version / "sbin" / "nginx")
 
     if not install_path.exists():
         return NginxVersionInfo(
             version=version,
-            install_path=str(install_path),
-            executable=str(executable),
+            install_path=display_install_path,
+            executable=display_executable,
             running=False,
-            error="install_path_not_found",
+            error=(
+                "install_path_not_found" if not source_tar.exists() else "not_compiled"
+            ),
+            compiled=False,
+            has_source=source_tar.exists(),
         )
 
     if not executable.exists():
         return NginxVersionInfo(
             version=version,
-            install_path=str(install_path),
-            executable=str(executable),
+            install_path=display_install_path,
+            executable=display_executable,
             running=False,
             error="executable_not_found",
+            compiled=False,
+            has_source=source_tar.exists(),
         )
 
     pid_file = _get_pid_file(install_path)
@@ -353,30 +414,57 @@ def _get_version_status(version: str) -> NginxVersionInfo:
 
     return NginxVersionInfo(
         version=version,
-        install_path=str(install_path),
-        executable=str(executable),
+        install_path=display_install_path,
+        executable=display_executable,
         running=running,
         pid=pid,
+        compiled=executable.exists(),
+        has_source=source_tar.exists(),
     )
 
 
-def _list_installed_versions() -> List[NginxVersionInfo]:
-    """扫描安装目录，获取所有已安装版本信息"""
+def _list_all_versions() -> List[NginxVersionInfo]:
+    """
+    获取所有已知版本的信息：
+    - 安装目录中的版本（已编译）
+    - 仅存在源码包但尚未编译的版本（未编译）
+    """
+    versions: set[str] = set()
+
     versions_root = _get_versions_root()
-    if not versions_root.exists():
-        return []
+    if versions_root.exists():
+        for child in versions_root.iterdir():
+            if child.is_dir():
+                versions.add(child.name)
+
+    build_root = _get_build_root()
+    if build_root.exists():
+        for p in build_root.iterdir():
+            if p.is_file() and (p.name.endswith(".tar.gz") or p.name.endswith(".tgz")):
+                v = _infer_version_from_filename(p.name)
+                if v:
+                    versions.add(v)
 
     items: List[NginxVersionInfo] = []
-    for child in versions_root.iterdir():
-        if child.is_dir():
-            items.append(_get_version_status(child.name))
+    for v in sorted(versions):
+        items.append(_get_version_status(v))
     return items
 
 
 def _download_to_file(url: str, dest: Path) -> None:
     """将远程 URL 内容下载到本地文件（简单实现，避免额外依赖）"""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urlopen(url) as resp, open(dest, "wb") as f:
+    parsed = urlparse(url)
+
+    # 某些环境（尤其是本地 macOS）可能缺少系统 CA，导致 HTTPS 校验证书失败。
+    # 这里显式使用不校验证书的 SSL 上下文，保证下载功能可用。
+    if parsed.scheme == "https":
+        context = ssl._create_unverified_context()
+        resp = urlopen(url, context=context)
+    else:
+        resp = urlopen(url)
+
+    with resp, open(dest, "wb") as f:
         shutil.copyfileobj(resp, f)
 
 
@@ -398,23 +486,25 @@ def _infer_version_from_filename(filename: str) -> Optional[str]:
 @router.get(
     "/versions",
     response_model=List[NginxVersionInfo],
-    summary="获取已安装的 Nginx 版本列表",
+    summary="获取已安装/已下载的 Nginx 版本列表",
 )
 async def list_nginx_versions(
     current_user: User = Depends(get_current_user),
 ) -> List[NginxVersionInfo]:
     """
-    获取当前容器内已安装的 Nginx 版本列表及其运行状态。
+    获取当前容器内已知的 Nginx 版本列表及其状态。
 
-    仅扫描配置中约定的 versions_root 目录。
+    数据来源：
+    - versions_root 目录中的安装版本（已编译，可启动）
+    - build_root 目录中的源码包（仅下载未编译）
     """
-    return _list_installed_versions()
+    return _list_all_versions()
 
 
 @router.post(
     "/versions/download",
     response_model=NginxBuildResult,
-    summary="在线下载并编译指定版本 Nginx",
+    summary="在线下载指定版本 Nginx 源码包（不编译）",
 )
 async def download_and_build_nginx_version(
     payload: NginxDownloadRequest,
@@ -423,10 +513,13 @@ async def download_and_build_nginx_version(
     db: Session = Depends(get_db),
 ) -> NginxBuildResult:
     """
-    在线下载指定版本的 Nginx 源码包并在容器内编译安装。
+    在线下载指定版本的 Nginx 源码包。
 
     - 默认使用官方下载地址: https://nginx.org/download/nginx-<version>.tar.gz
     - 也可以通过 url 字段指定自定义下载地址
+
+    仅负责下载并保存源码包，不进行编译。
+    编译由 /versions/{version}/compile 接口触发。
     """
     version = payload.version.strip()
     if not version:
@@ -436,7 +529,6 @@ async def download_and_build_nginx_version(
         )
 
     _ensure_nginx_dirs()
-    build_root = _get_build_root()
 
     # 构造默认下载地址
     if payload.url:
@@ -454,7 +546,7 @@ async def download_and_build_nginx_version(
             detail=f"下载地址不合法: {e}",
         )
 
-    source_tar = build_root / f"nginx-{version}.tar.gz"
+    source_tar = _get_source_tar_path(version)
     try:
         _download_to_file(url, source_tar)
     except Exception as e:
@@ -463,36 +555,33 @@ async def download_and_build_nginx_version(
             detail=f"下载源码包失败: {e}",
         )
 
-    result = _compile_nginx_from_source(source_tar, version)
-
-    # 记录审计日志
+    # 记录审计日志（仅记录下载）
     create_audit_log(
         db=db,
         user_id=current_user.id,
         username=current_user.username,
-        action="nginx_version_build_download",
+        action="nginx_version_source_download",
         target=version,
         details={
             "url": url,
-            "success": result.success,
-            "build_log_path": result.build_log_path,
+            "success": True,
+            "build_log_path": None,
         },
         ip_address=get_client_ip(request),
     )
 
-    if not result.success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=result.message,
-        )
-
-    return result
+    return NginxBuildResult(
+        success=True,
+        message=f"源码包下载成功，请在列表中对版本 {version} 执行编译",
+        version=version,
+        build_log_path=None,
+    )
 
 
 @router.post(
     "/versions/upload",
     response_model=NginxBuildResult,
-    summary="上传源码包并编译 Nginx",
+    summary="上传 Nginx 源码包（不编译）",
 )
 async def upload_and_build_nginx_version(
     request: Request,
@@ -502,7 +591,7 @@ async def upload_and_build_nginx_version(
     db: Session = Depends(get_db),
 ) -> NginxBuildResult:
     """
-    上传本地 Nginx 源码包并在容器内编译安装。
+    上传本地 Nginx 源码包。
 
     - 支持无网络环境下的安装
     - version 为空时会尝试从文件名中推断（例如 nginx-1.28.0.tar.gz）
@@ -529,8 +618,7 @@ async def upload_and_build_nginx_version(
         )
 
     _ensure_nginx_dirs()
-    build_root = _get_build_root()
-    dest = build_root / filename
+    dest = _get_source_tar_path(version)
 
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -546,17 +634,66 @@ async def upload_and_build_nginx_version(
             detail=f"保存上传文件失败: {e}",
         )
 
-    result = _compile_nginx_from_source(dest, version)
+    # 记录审计日志（仅记录上传）
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_version_source_upload",
+        target=version,
+        details={
+            "filename": filename,
+            "success": True,
+            "build_log_path": None,
+        },
+        ip_address=get_client_ip(request),
+    )
+
+    return NginxBuildResult(
+        success=True,
+        message=f"源码包上传成功，请在列表中对版本 {version} 执行编译",
+        version=version,
+        build_log_path=None,
+    )
+
+
+@router.post(
+    "/versions/{version}/compile",
+    response_model=NginxBuildResult,
+    summary="编译已下载/上传的 Nginx 源码包",
+)
+async def compile_nginx_version(
+    version: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> NginxBuildResult:
+    """
+    使用已下载/上传的源码包编译安装指定版本 Nginx。
+
+    要求：
+    - build_root 中存在 nginx-<version>.tar.gz 或等价源码包
+    - 编译成功后会在 versions_root/<version> 下生成完整安装目录
+    """
+    _ensure_nginx_dirs()
+    source_tar = _get_source_tar_path(version)
+    if not source_tar.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="源码包不存在，请先通过在线下载或上传方式准备源码包",
+        )
+
+    result = _compile_nginx_from_source(source_tar, version)
 
     # 记录审计日志
     create_audit_log(
         db=db,
         user_id=current_user.id,
         username=current_user.username,
-        action="nginx_version_build_upload",
+        action="nginx_version_compile",
         target=version,
         details={
-            "filename": filename,
+            "source_tar": str(source_tar),
             "success": result.success,
             "build_log_path": result.build_log_path,
         },
@@ -1031,6 +1168,7 @@ async def delete_nginx_version(
     build_root = _get_build_root()
     build_dir = build_root / version
     log_path = _get_build_log_path(version)
+    source_tar = _get_source_tar_path(version)
 
     info = _get_version_status(version)
     if info.running:
@@ -1060,6 +1198,13 @@ async def delete_nginx_version(
         except Exception:
             pass
 
+    # 删除源码包（忽略错误），避免在列表中继续展示为“未编译”
+    if source_tar.exists():
+        try:
+            source_tar.unlink()
+        except Exception:
+            pass
+
     # 审计
     create_audit_log(
         db=db,
@@ -1071,6 +1216,7 @@ async def delete_nginx_version(
             "install_path": str(install_path),
             "build_dir": str(build_dir),
             "build_log_path": str(log_path),
+            "source_tar": str(source_tar),
         },
         ip_address=get_client_ip(request),
     )

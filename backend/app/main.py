@@ -15,6 +15,8 @@ from app.routers import (
     audit,
     certificates,
     nginx_manager,
+    users,
+    statistics,
 )
 
 # 初始化数据库
@@ -44,6 +46,8 @@ app.include_router(files.router)
 app.include_router(audit.router)
 app.include_router(certificates.router)
 app.include_router(nginx_manager.router)
+app.include_router(users.router)
+app.include_router(statistics.router)
 
 
 @app.get("/", summary="API 根路径")

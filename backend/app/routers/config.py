@@ -2,17 +2,19 @@
 Nginx 配置管理路由
 """
 from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from pathlib import Path
+import subprocess
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.auth import get_current_user, get_current_user_basic, User
-from app.utils.nginx import get_config_content, save_config_content, test_config, reload_nginx, get_nginx_status
+from app.utils.nginx import get_config_content, save_config_content, test_config, reload_nginx, get_nginx_status, get_config_path, _resolve_nginx_executable
+from app.utils.nginx_versions import get_active_version
 from app.utils.backup import create_backup, list_backups, restore_backup, get_backup
 from app.utils.audit import create_audit_log, get_client_ip
-from fastapi import Request
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -35,9 +37,45 @@ async def get_config(
     """读取当前 Nginx 配置文件内容"""
     try:
         content = get_config_content()
+        config_path = get_config_path()
+        
+        # 获取当前 Nginx 版本信息
+        active = get_active_version()
+        nginx_version = None
+        nginx_version_detail = None
+        
+        if active is not None:
+            # 使用多版本管理的 Nginx
+            nginx_version = active["version"]
+            nginx_executable = active["executable"]
+        else:
+            # 使用系统 Nginx
+            nginx_executable = _resolve_nginx_executable()
+            nginx_version = "系统安装版本"
+        
+        # 尝试获取详细的版本信息
+        try:
+            if nginx_executable and Path(nginx_executable).exists():
+                version_result = subprocess.run(
+                    [str(nginx_executable), "-v"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if version_result.stderr:
+                    nginx_version_detail = version_result.stderr.strip()
+        except Exception:
+            pass
+        
         return {
             "success": True,
-            "content": content
+            "content": content,
+            "config_path": str(config_path),
+            "nginx_version": nginx_version,
+            "nginx_version_detail": nginx_version_detail,
+            "active_version": active["version"] if active else None,
+            "install_path": str(active["install_path"]) if active else None,
+            "binary": str(nginx_executable) if nginx_executable else None
         }
     except FileNotFoundError as e:
         raise HTTPException(
@@ -146,7 +184,8 @@ async def get_config_backups(
     db: Session = Depends(get_db)
 ):
     """获取所有配置备份列表"""
-    backups = list_backups(db)
+    # 默认最多返回 10 个备份版本，保持与配置中的 max_backups 一致
+    backups = list_backups(db, limit=10)
     return {
         "success": True,
         "backups": [

@@ -6,80 +6,134 @@
           <span>Nginx 版本列表</span>
           <div>
             <el-button type="primary" @click="downloadDialogVisible = true">
-              在线下载并编译
+              在线下载源码包
             </el-button>
             <el-button type="primary" @click="uploadDialogVisible = true">
-              上传源码包并编译
+              上传源码包
             </el-button>
             <el-button type="primary" link @click="loadVersions">刷新</el-button>
-            <el-button type="danger" link @click="forceReleaseHttpPort">
-              强制释放 80 端口
-            </el-button>
+            <el-tooltip content="强制释放 80 端口" placement="bottom">
+              <el-button
+                circle
+                type="danger"
+                size="small"
+                class="force-release-btn"
+                @click="forceReleaseHttpPort"
+              >
+                <span class="force-release-icon">⚡</span>
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
       </template>
 
-      <el-table :data="versions" style="width: 100%">
-        <el-table-column prop="version" label="版本" width="120" />
-        <el-table-column prop="install_path" label="安装路径" min-width="220" />
-        <el-table-column label="状态" width="120">
-          <template #default="{ row }">
-            <el-tag :type="row.running ? 'success' : 'info'">
-              {{ row.running ? '运行中' : '已停止' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="pid" label="PID" width="100">
-          <template #default="{ row }">
-            {{ row.pid || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="360">
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              type="success"
-              :disabled="row.running"
-              @click="startVersion(row.version)"
-            >
-              启动
-            </el-button>
-            <el-button
-              size="small"
-              type="warning"
-              :disabled="!row.running"
-              @click="stopVersion(row.version)"
-            >
-              停止
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              :disabled="!row.running"
-              @click="forceStopVersion(row.version)"
-            >
-              强制停止
-            </el-button>
-            <el-button size="small" link @click="showBuildLog(row.version)">
-              编译日志
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              :disabled="row.running"
-              @click="deleteVersion(row.version)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <el-row :gutter="16">
+        <el-col
+          v-for="row in versions"
+          :key="row.version"
+          :span="12"
+        >
+          <el-card class="version-card" shadow="hover">
+            <template #header>
+              <div class="version-card-header">
+                <div class="version-title">
+                  <span class="version-name">{{ row.version }}</span>
+                  <div class="version-tags">
+                    <el-tag
+                      v-if="buildingVersions.includes(row.version)"
+                      type="warning"
+                      size="small"
+                    >
+                      处理中
+                    </el-tag>
+                    <template v-else>
+                      <el-tag
+                        v-if="row.compiled"
+                        :type="row.running ? 'success' : 'info'"
+                        size="small"
+                      >
+                        {{ row.running ? '运行中' : '已编译' }}
+                      </el-tag>
+                      <el-tag
+                        v-else-if="row.has_source"
+                        type="warning"
+                        size="small"
+                      >
+                        未编译
+                      </el-tag>
+                      <el-tag
+                        v-else
+                        type="danger"
+                        size="small"
+                      >
+                        未准备
+                      </el-tag>
+                    </template>
+                  </div>
+                </div>
+                <div class="version-sub">
+                  <span>PID：{{ row.pid || '-' }}</span>
+                </div>
+              </div>
+            </template>
+
+            <div class="version-body">
+              <div class="install-path" :title="row.install_path">
+                安装路径：{{ row.install_path }}
+              </div>
+            </div>
+
+            <div class="version-actions">
+              <el-button
+                size="small"
+                type="primary"
+                :disabled="buildingVersions.includes(row.version) || row.compiled || !row.has_source"
+                @click="compileVersion(row.version)"
+              >
+                编译
+              </el-button>
+              <el-button
+                size="small"
+                type="success"
+                :disabled="row.running || buildingVersions.includes(row.version) || !row.compiled"
+                @click="startVersion(row.version)"
+              >
+                启动
+              </el-button>
+              <el-button
+                size="small"
+                type="warning"
+                :disabled="!row.running || buildingVersions.includes(row.version)"
+                @click="stopVersion(row.version)"
+              >
+                停止
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :disabled="!row.running || buildingVersions.includes(row.version)"
+                @click="forceStopVersion(row.version)"
+              >
+                强制停止
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :disabled="row.running || buildingVersions.includes(row.version)"
+                @click="deleteVersion(row.version)"
+              >
+                删除
+              </el-button>
+            </div>
+          </el-card>
+        </el-col>
+      </el-row>
     </el-card>
 
     <!-- 在线下载并编译 弹窗 -->
     <el-dialog
       v-model="downloadDialogVisible"
-      title="在线下载并编译 Nginx"
+      title="在线下载 Nginx 源码包"
       width="600px"
     >
       <el-form :model="downloadForm" label-width="100px">
@@ -110,7 +164,7 @@
         <span class="dialog-footer">
           <el-button @click="downloadDialogVisible = false">取消</el-button>
           <el-button type="primary" :loading="downloadLoading" @click="handleDownload">
-            下载并编译
+            下载源码包
           </el-button>
         </span>
       </template>
@@ -119,7 +173,7 @@
     <!-- 上传源码包并编译 弹窗 -->
     <el-dialog
       v-model="uploadDialogVisible"
-      title="上传源码包并编译 Nginx"
+      title="上传 Nginx 源码包"
       width="600px"
     >
       <el-form label-width="100px">
@@ -161,20 +215,6 @@
       </template>
     </el-dialog>
 
-    <el-drawer
-      v-model="logDrawerVisible"
-      title="编译日志"
-      size="50%"
-      destroy-on-close
-    >
-      <div class="log-header">
-        <span>版本：{{ currentLogVersion }}</span>
-        <el-button type="primary" link @click="reloadBuildLog">刷新</el-button>
-      </div>
-      <el-scrollbar class="log-content">
-        <pre>{{ buildLogContent || '暂无日志' }}</pre>
-      </el-scrollbar>
-    </el-drawer>
   </div>
 </template>
 
@@ -198,15 +238,24 @@ const downloadForm = ref({
 const downloadLoading = ref(false)
 const downloadDialogVisible = ref(false)
 
+// 正在下载/编译的版本列表（前端感知的“进行中”状态）
+const buildingVersions = ref([])
+
+const setBuilding = (version, building) => {
+  if (!version) return
+  const idx = buildingVersions.value.indexOf(version)
+  if (building && idx === -1) {
+    buildingVersions.value.push(version)
+  } else if (!building && idx !== -1) {
+    buildingVersions.value.splice(idx, 1)
+  }
+}
+
 const uploadRef = ref(null)
 const selectedFile = ref(null)
 const uploadVersion = ref('')
 const uploading = ref(false)
 const uploadDialogVisible = ref(false)
-
-const logDrawerVisible = ref(false)
-const currentLogVersion = ref('')
-const buildLogContent = ref('')
 
 const loadVersions = async () => {
   try {
@@ -222,19 +271,31 @@ const handleDownload = async () => {
     ElMessage.warning('请先输入版本号')
     return
   }
+  const targetVersion = downloadForm.value.version
   downloadLoading.value = true
+  setBuilding(targetVersion, true)
   try {
     await nginxApi.downloadAndBuild({
-      version: downloadForm.value.version,
+      version: targetVersion,
       url: downloadForm.value.url || undefined
     })
     ElMessage.success('下载并编译任务完成')
     await loadVersions()
     downloadDialogVisible.value = false
   } catch (error) {
-    ElMessage.error(error.detail || '下载编译失败')
+    // 有些情况下后端实际上已经在后台继续下载/编译，但前端因为超时/代理中断收到了错误
+    // 这里在报错前先刷新一次列表，如果目标版本已经出现，则提示“可能已完成”
+    await loadVersions()
+    const exists = versions.value?.some((v) => v.version === targetVersion)
+    if (exists) {
+      ElMessage.success('下载/编译任务可能已在后台完成，请查看版本列表')
+      downloadDialogVisible.value = false
+    } else {
+      ElMessage.error(error.detail || '下载编译失败')
+    }
   } finally {
     downloadLoading.value = false
+    setBuilding(targetVersion, false)
   }
 }
 
@@ -302,19 +363,16 @@ const forceStopVersion = async (version) => {
   }
 }
 
-const showBuildLog = async (version) => {
-  currentLogVersion.value = version
-  logDrawerVisible.value = true
-  await reloadBuildLog()
-}
-
-const reloadBuildLog = async () => {
-  if (!currentLogVersion.value) return
+const compileVersion = async (version) => {
+  setBuilding(version, true)
   try {
-    const data = await nginxApi.getBuildLog(currentLogVersion.value)
-    buildLogContent.value = data?.content || ''
+    await nginxApi.compileVersion(version)
+    ElMessage.success(`已编译 Nginx ${version}`)
+    await loadVersions()
   } catch (error) {
-    ElMessage.error(error.detail || '获取编译日志失败')
+    ElMessage.error(error.detail || '编译失败')
+  } finally {
+    setBuilding(version, false)
   }
 }
 
@@ -369,27 +427,60 @@ onMounted(() => {
   justify-content: space-between;
 }
 
-.log-header {
+.version-card {
+  margin-bottom: 16px;
+}
+
+.version-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.version-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
 }
 
-.log-content {
-  height: 60vh;
-  background-color: #1e1e1e;
-  color: #f5f5f5;
-  padding: 10px;
-  border-radius: 4px;
+.version-name {
+  font-weight: 600;
+  font-size: 14px;
 }
 
-.log-content pre {
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+.version-tags {
+  display: flex;
+  gap: 4px;
+}
+
+.version-sub {
   font-size: 12px;
-  margin: 0;
+  color: #909399;
+}
+
+.version-body {
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.install-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.version-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.force-release-icon {
+  font-size: 14px;
+}
+
+.force-release-btn {
+  margin-left: 8px;
 }
 </style>
 

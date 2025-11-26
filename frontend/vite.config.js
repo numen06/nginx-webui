@@ -18,7 +18,8 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path,
-        timeout: 10000,
+        // 在线下载/编译可能耗时较长，这里把代理超时调大，避免前端过早断开连接
+        timeout: 600000,
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, _res) => {
             console.log('代理错误:', err)
