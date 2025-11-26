@@ -1,8 +1,36 @@
-# 使用阿里云的 Python 3.11 轻量级镜像作为基础
+# ==================== 第一阶段：构建前端 ====================
+FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1 AS frontend-builder
+
+# 安装 Node.js（用于构建前端）
+RUN dnf update -y && \
+    dnf install -y \
+    curl \
+    ca-certificates \
+    && (dnf module list nodejs 2>/dev/null | grep -q nodejs && \
+        dnf module enable -y nodejs:18 && \
+        dnf install -y nodejs) || \
+    (curl -fsSL https://rpm.nodesource.com/setup_18.x | bash - && \
+     dnf install -y nodejs) \
+    && dnf clean all
+
+# 设置工作目录
+WORKDIR /app/frontend
+
+# 复制前端代码
+COPY frontend/package*.json ./
+COPY frontend/ ./
+
+# 安装依赖并构建前端
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install && \
+    npm run build
+
+# ==================== 第二阶段：运行后端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
+ENV APP_PORT=8000
 
 # 安装系统依赖（包含编译 Nginx 所需工具链）
 RUN dnf update -y && \
@@ -34,8 +62,8 @@ COPY backend/ /app/backend/
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
  cd /app/backend && pip3 install --no-cache-dir -r requirements.txt
 
-# 复制前端打包文件到后端目录（通过 Python/FastAPI 提供静态文件服务）
-COPY frontend/dist/ /app/backend/static/
+# 从第一阶段复制前端构建产物
+COPY --from=frontend-builder /app/frontend/dist/ /app/backend/static/
 
 # 恢复工作目录
 WORKDIR /app
@@ -50,10 +78,12 @@ RUN mkdir -p /app/backend/data/backups \
 # 创建启动脚本（初始化数据库并启动 FastAPI）
 RUN echo '#!/bin/bash' > /app/start.sh && \
     echo 'set -e' >> /app/start.sh && \
+    echo '# 从环境变量读取端口，默认为 8000' >> /app/start.sh && \
+    echo 'PORT=${APP_PORT:-8000}' >> /app/start.sh && \
     echo 'echo "初始化数据库..."' >> /app/start.sh && \
     echo 'cd /app/backend && python3 -c "from app.database import init_db; init_db()"' >> /app/start.sh && \
-    echo 'echo "启动 FastAPI 服务..."' >> /app/start.sh && \
-    echo 'cd /app/backend && python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000' >> /app/start.sh && \
+    echo 'echo "启动 FastAPI 服务在端口 $PORT..."' >> /app/start.sh && \
+    echo 'cd /app/backend && python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT' >> /app/start.sh && \
     chmod +x /app/start.sh
 
 # 暴露端口
