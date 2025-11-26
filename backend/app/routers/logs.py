@@ -301,7 +301,7 @@ def _get_nginx_version_info() -> dict:
 @router.get("/access", summary="查看访问日志")
 async def get_access_log(
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(100, ge=1, le=1000, description="每页行数"),
+    page_size: int = Query(100, ge=1, le=50000, description="每页行数"),
     keyword: Optional[str] = Query(None, description="关键词搜索"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS)"),
@@ -316,6 +316,8 @@ async def get_access_log(
     
     if start_date:
         try:
+            # URL解码（处理空格被编码为+的情况）
+            start_date = start_date.replace('+', ' ')
             # 尝试多种日期格式
             for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
                 try:
@@ -333,6 +335,8 @@ async def get_access_log(
     
     if end_date:
         try:
+            # URL解码（处理空格被编码为+的情况）
+            end_date = end_date.replace('+', ' ')
             for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
                 try:
                     parsed_end_date = datetime.strptime(end_date, fmt)
@@ -395,7 +399,7 @@ async def get_access_log(
 @router.get("/error", summary="查看错误日志")
 async def get_error_log(
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(100, ge=1, le=1000, description="每页行数"),
+    page_size: int = Query(100, ge=1, le=50000, description="每页行数"),
     keyword: Optional[str] = Query(None, description="关键词搜索"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS)"),
@@ -410,6 +414,8 @@ async def get_error_log(
     
     if start_date:
         try:
+            # URL解码（处理空格被编码为+的情况）
+            start_date = start_date.replace('+', ' ')
             for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
                 try:
                     parsed_start_date = datetime.strptime(start_date, fmt)
@@ -426,6 +432,8 @@ async def get_error_log(
     
     if end_date:
         try:
+            # URL解码（处理空格被编码为+的情况）
+            end_date = end_date.replace('+', ' ')
             for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
                 try:
                     parsed_end_date = datetime.strptime(end_date, fmt)

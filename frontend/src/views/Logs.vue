@@ -76,7 +76,7 @@
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" @click="handleAccessSearch">搜索</el-button>
-                <el-button @click="handleAccessReset">重置</el-button>
+                <el-button type="info" @click="handleAccessReset">重置</el-button>
               </el-form-item>
             </el-form>
           </div>
@@ -84,19 +84,14 @@
             <div v-if="!loading && (!accessLogs || accessLogs.length === 0)" class="empty-log">
               <el-empty description="暂无访问日志" />
             </div>
-            <template v-else>
-              <div class="log-viewer">
-                <pre 
-                  v-for="(log, index) in accessLogs" 
-                  :key="index"
-                  class="log-line"
-                  v-html="accessFilters.keyword ? highlightKeyword(log, accessFilters.keyword) : escapeHtml(log)"
-                ></pre>
-              </div>
-            </template>
-            <div v-if="accessLogs && accessLogs.length > 0" class="log-stats">
-              <span class="log-count">共显示 {{ accessLogs.length }} 条日志</span>
-            </div>
+            <LogViewer
+              v-else
+              :logs="accessLogs"
+              :keyword="accessFilters.keyword"
+              :show-line-numbers="true"
+              filename="access-log"
+              ref="accessLogViewerRef"
+            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -175,7 +170,7 @@
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" @click="handleErrorSearch">搜索</el-button>
-                <el-button @click="handleErrorReset">重置</el-button>
+                <el-button type="info" @click="handleErrorReset">重置</el-button>
               </el-form-item>
             </el-form>
           </div>
@@ -183,19 +178,14 @@
             <div v-if="!loading && (!errorLogs || errorLogs.length === 0)" class="empty-log">
               <el-empty description="暂无错误日志" />
             </div>
-            <template v-else>
-              <div class="log-viewer">
-                <pre 
-                  v-for="(log, index) in errorLogs" 
-                  :key="index"
-                  class="log-line"
-                  v-html="errorFilters.keyword ? highlightKeyword(log, errorFilters.keyword) : escapeHtml(log)"
-                ></pre>
-              </div>
-            </template>
-            <div v-if="errorLogs && errorLogs.length > 0" class="log-stats">
-              <span class="log-count">共显示 {{ errorLogs.length }} 条日志</span>
-            </div>
+            <LogViewer
+              v-else
+              :logs="errorLogs"
+              :keyword="errorFilters.keyword"
+              :show-line-numbers="true"
+              filename="error-log"
+              ref="errorLogViewerRef"
+            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -208,6 +198,7 @@ import { ref, onMounted, watch } from 'vue'
 import { logsApi } from '../api/logs'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
+import LogViewer from '../components/LogViewer.vue'
 
 const activeTab = ref('access')
 const loading = ref(false)
@@ -237,29 +228,21 @@ const errorFilters = ref({
   keyword: '',
   dateRange: null
 })
+const accessLogViewerRef = ref(null)
+const errorLogViewerRef = ref(null)
 
 const loadLogs = async () => {
   loading.value = true
   try {
     if (activeTab.value === 'access') {
-      const page = accessPagination.value?.page || 1
       const keyword = accessFilters.value.keyword || null
       const startDate = accessFilters.value.dateRange?.[0] || null
       const endDate = accessFilters.value.dateRange?.[1] || null
-      const response = await logsApi.getAccessLogs(page, 100, keyword, startDate, endDate)
+      // 使用最大允许的page_size来获取日志（后端限制为1000）
+      const response = await logsApi.getAccessLogs(1, 1000, keyword, startDate, endDate)
       console.log('访问日志响应:', response)
       if (response && response.success !== false) {
         accessLogs.value = Array.isArray(response.logs) ? response.logs : []
-        if (response.pagination) {
-          accessPagination.value = response.pagination
-        } else {
-          accessPagination.value = {
-            page: page,
-            page_size: 100,
-            total_lines: accessLogs.value.length,
-            total_pages: 1
-          }
-        }
         // 更新日志信息
         accessLogInfo.value = {
           nginx_version: response.nginx_version || null,
@@ -271,35 +254,19 @@ const loadLogs = async () => {
         }
       } else {
         accessLogs.value = []
-        accessPagination.value = {
-          page: 1,
-          page_size: 100,
-          total_lines: 0,
-          total_pages: 1
-        }
         if (response && response.success === false) {
           ElMessage.warning(response.detail || '未获取到访问日志数据')
         }
       }
     } else {
-      const page = errorPagination.value?.page || 1
       const keyword = errorFilters.value.keyword || null
       const startDate = errorFilters.value.dateRange?.[0] || null
       const endDate = errorFilters.value.dateRange?.[1] || null
-      const response = await logsApi.getErrorLogs(page, 100, keyword, startDate, endDate)
+      // 使用较大的page_size来获取日志（后端限制为50000）
+      const response = await logsApi.getErrorLogs(1, 50000, keyword, startDate, endDate)
       console.log('错误日志响应:', response)
       if (response && response.success !== false) {
         errorLogs.value = Array.isArray(response.logs) ? response.logs : []
-        if (response.pagination) {
-          errorPagination.value = response.pagination
-        } else {
-          errorPagination.value = {
-            page: page,
-            page_size: 100,
-            total_lines: errorLogs.value.length,
-            total_pages: 1
-          }
-        }
         // 更新日志信息
         errorLogInfo.value = {
           nginx_version: response.nginx_version || null,
@@ -311,12 +278,6 @@ const loadLogs = async () => {
         }
       } else {
         errorLogs.value = []
-        errorPagination.value = {
-          page: 1,
-          page_size: 100,
-          total_lines: 0,
-          total_pages: 1
-        }
         if (response && response.success === false) {
           ElMessage.warning(response.detail || '未获取到错误日志数据')
         }
@@ -328,55 +289,29 @@ const loadLogs = async () => {
     ElMessage.error(errorMsg)
     if (activeTab.value === 'access') {
       accessLogs.value = []
-      accessPagination.value = {
-        page: 1,
-        page_size: 100,
-        total_lines: 0,
-        total_pages: 1
-      }
     } else {
       errorLogs.value = []
-      errorPagination.value = {
-        page: 1,
-        page_size: 100,
-        total_lines: 0,
-        total_pages: 1
-      }
     }
   } finally {
     loading.value = false
   }
 }
 
-const handleAccessPageChange = (page) => {
-  accessPagination.value.page = page
-  loadLogs()
-}
-
-const handleErrorPageChange = (page) => {
-  errorPagination.value.page = page
-  loadLogs()
-}
-
 const handleAccessSearch = () => {
-  accessPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
   loadLogs()
 }
 
 const handleAccessReset = () => {
   accessFilters.value = { keyword: '', dateRange: null }
-  accessPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
   loadLogs()
 }
 
 const handleErrorSearch = () => {
-  errorPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
   loadLogs()
 }
 
 const handleErrorReset = () => {
   errorFilters.value = { keyword: '', dateRange: null }
-  errorPagination.value = { page: 1, page_size: 100, total_lines: 0, total_pages: 1 }
   loadLogs()
 }
 
@@ -412,22 +347,6 @@ const formatDateTime = (date) => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
-const highlightKeyword = (text, keyword) => {
-  if (!text || !keyword) {
-    return escapeHtml(text || '')
-  }
-  const escapedText = escapeHtml(text)
-  const escapedKeyword = escapeHtml(keyword)
-  const regex = new RegExp(`(${escapedKeyword})`, 'gi')
-  return escapedText.replace(regex, '<mark>$1</mark>')
-}
-
-const escapeHtml = (text) => {
-  if (!text) return ''
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
-}
 
 watch(activeTab, () => {
   loadLogs()
@@ -491,55 +410,22 @@ onMounted(() => {
 }
 
 .log-content {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 20px;
-  border-radius: 4px;
-  min-height: 400px;
-  max-height: 600px;
-  overflow-y: auto;
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-  border: 1px solid var(--border-color);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
-.log-content pre {
-  margin: 2px 0;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.log-content pre mark {
-  background-color: var(--nginx-green);
-  color: var(--text-white);
-  padding: 2px 4px;
-  border-radius: 2px;
-  font-weight: bold;
+  min-height: 500px;
+  max-height: calc(100vh - 400px);
+  display: flex;
+  flex-direction: column;
 }
 
 .empty-log {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 300px;
+  min-height: 500px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
 }
 
-.pagination-wrapper {
-  margin-top: 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.pagination-info {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.filter-info {
-  color: var(--nginx-green);
-}
 </style>
+
 

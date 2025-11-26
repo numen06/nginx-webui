@@ -10,10 +10,36 @@ export const filesApi = {
     return api.get('/files', { params })
   },
 
-  // 部署静态资源包
-  deployPackage(file, version, extractToSubdir) {
+  // 上传静态资源包（仅保存，不解压）
+  uploadPackage(file) {
     const formData = new FormData()
     formData.append('file', file)
+    return api.post('/files/upload-package', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
+  // 列出已上传的静态资源包
+  listPackages() {
+    return api.get('/files/packages')
+  },
+
+  // 删除已上传的静态资源包
+  deletePackage(filename) {
+    return api.delete(`/files/packages/${encodeURIComponent(filename)}`)
+  },
+
+  // 部署静态资源包（使用已上传的文件或新上传的文件）
+  deployPackage(filename, file, version, extractToSubdir) {
+    const formData = new FormData()
+    if (filename) {
+      formData.append('filename', filename)
+    }
+    if (file) {
+      formData.append('file', file)
+    }
     if (version) {
       formData.append('version', version)
     }

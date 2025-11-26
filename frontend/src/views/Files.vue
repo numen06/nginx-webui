@@ -26,11 +26,11 @@
               @change="handleRootOnlyChange"
             />
             <span class="current-path">当前路径：/{{ currentPath || '' }}</span>
-            <el-button size="small" @click="handleGoRoot">根目录</el-button>
-            <el-button size="small" @click="handleGoParent" :disabled="!currentPath">上一级</el-button>
-            <el-button size="small" @click="handleUpload">上传文件</el-button>
-            <el-button size="small" @click="handleCreateDir">新建文件夹</el-button>
-            <el-button size="small" @click="handleRefresh">刷新</el-button>
+            <el-button size="small" type="info" @click="handleGoRoot">根目录</el-button>
+            <el-button size="small" type="info" @click="handleGoParent" :disabled="!currentPath">上一级</el-button>
+            <el-button size="small" type="primary" @click="handleUpload">上传文件</el-button>
+            <el-button size="small" type="cyan" @click="handleCreateDir">新建文件夹</el-button>
+            <el-button size="small" type="info" text @click="handleRefresh">刷新</el-button>
           </div>
         </div>
       </template>
@@ -65,22 +65,27 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="size" label="大小" width="120">
+        <el-table-column label="大小" width="120">
           <template #default="scope">
             <span v-if="!scope.row.is_dir">{{ formatSize(scope.row.size) }}</span>
+            <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="modified_time" label="修改时间" width="180" />
+        <el-table-column label="修改时间" width="180">
+          <template #default="scope">
+            {{ scope.row.modified_time || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="scope">
             <template v-if="scope.row.is_dir">
-              <el-button size="small" @click="enterDirectory(scope.row)">进入</el-button>
+              <el-button size="small" type="success" @click="enterDirectory(scope.row)">进入</el-button>
             </template>
             <template v-else>
-              <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
-              <el-button size="small" @click="handleDownload(scope.row)">下载</el-button>
+              <el-button size="small" type="info" @click="handleEdit(scope.row)">编辑</el-button>
+              <el-button size="small" type="cyan" @click="handleDownload(scope.row)">下载</el-button>
             </template>
-            <el-button size="small" @click="handleRename(scope.row)">重命名</el-button>
+            <el-button size="small" type="warning" @click="handleRename(scope.row)">重命名</el-button>
             <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
           </template>
         </el-table-column>
@@ -96,7 +101,12 @@
       />
 
       <!-- 文件编辑对话框（MonacoEditor） -->
-      <el-dialog v-model="editDialogVisible" title="编辑文件" width="80%">
+      <el-dialog 
+        v-model="editDialogVisible" 
+        title="编辑文件" 
+        width="80%"
+        :close-on-click-modal="false"
+      >
         <div class="edit-file-path">路径：/{{ editForm.path }}</div>
         <MonacoEditor
           v-model="editForm.content"
@@ -451,6 +461,13 @@ onMounted(async () => {
   margin-left: 8px;
   font-size: 12px;
   color: var(--nginx-green);
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
 }
 </style>
 

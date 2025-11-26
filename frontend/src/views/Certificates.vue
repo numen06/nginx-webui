@@ -6,7 +6,7 @@
           <span>证书管理</span>
           <div>
             <el-button type="primary" @click="handleRequest">申请证书</el-button>
-            <el-button @click="handleUpload">上传证书</el-button>
+            <el-button type="cyan" @click="handleUpload">上传证书</el-button>
           </div>
         </div>
       </template>
@@ -16,7 +16,7 @@
         <el-table-column prop="valid_to" label="过期时间" width="180" />
         <el-table-column label="操作" width="200">
           <template #default="scope">
-            <el-button size="small" @click="handleRenew(scope.row)">续期</el-button>
+            <el-button size="small" type="warning" @click="handleRenew(scope.row)">续期</el-button>
             <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
           </template>
         </el-table-column>

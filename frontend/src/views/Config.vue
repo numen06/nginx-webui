@@ -5,7 +5,9 @@
         <div class="card-header">
           <span>Nginx 配置</span>
           <div>
-            <el-button @click="handleTest">测试配置</el-button>
+            <el-button type="info" @click="handleFormat">格式化</el-button>
+            <el-button type="cyan" @click="handleValidate">校验配置</el-button>
+            <el-button type="purple" @click="handleTest">测试配置</el-button>
             <el-button type="success" @click="handleSave">保存</el-button>
             <el-button type="warning" @click="handleReload">重载配置</el-button>
           </div>
@@ -133,6 +135,75 @@ const handleContentChange = () => {
   isModified.value = true
 }
 
+const handleFormat = async () => {
+  // 保存原始内容作为备份
+  const originalContent = configContent.value
+  
+  try {
+    const response = await configApi.formatConfig(configContent.value)
+    if (response.success && response.formatted) {
+      // 确保格式化后的内容不为空
+      if (response.formatted.trim()) {
+        configContent.value = response.formatted
+        isModified.value = true
+        ElMessage.success('配置已格式化')
+      } else {
+        // 如果格式化后为空，保留原内容
+        configContent.value = originalContent
+        ElMessage.warning('格式化后内容为空，已保留原配置')
+      }
+    } else {
+      // 格式化失败时，确保保留原内容
+      if (response.formatted) {
+        configContent.value = response.formatted
+      } else {
+        configContent.value = originalContent
+      }
+      ElMessage.warning(response.message || '格式化失败，已保留原配置')
+    }
+  } catch (error) {
+    // 出错时恢复原内容
+    configContent.value = originalContent
+    ElMessage.error('格式化配置失败，已保留原配置')
+  }
+}
+
+const handleValidate = async () => {
+  try {
+    const response = await configApi.validateConfig(configContent.value)
+    if (response.success) {
+      let message = '配置校验成功'
+      if (response.warnings && response.warnings.length > 0) {
+        message += `，但有 ${response.warnings.length} 个警告`
+      }
+      ElMessage.success(message)
+      
+      // 如果有警告或错误，显示详细信息
+      if (response.errors && response.errors.length > 0) {
+        ElMessageBox.alert(
+          `发现 ${response.errors.length} 个错误：\n\n${response.errors.join('\n')}`,
+          '配置校验错误',
+          { type: 'error' }
+        )
+      } else if (response.warnings && response.warnings.length > 0) {
+        ElMessageBox.alert(
+          `发现 ${response.warnings.length} 个警告：\n\n${response.warnings.join('\n')}`,
+          '配置校验警告',
+          { type: 'warning' }
+        )
+      }
+    } else {
+      let errorMsg = response.message || '配置校验失败'
+      if (response.errors && response.errors.length > 0) {
+        errorMsg += '\n\n错误详情：\n' + response.errors.join('\n')
+      }
+      ElMessageBox.alert(errorMsg, '配置校验失败', { type: 'error' })
+    }
+  } catch (error) {
+    ElMessage.error('校验配置失败')
+  }
+}
+
 const handleTest = async () => {
   try {
     const response = await configApi.testConfig()
@@ -140,6 +211,9 @@ const handleTest = async () => {
       ElMessage.success('配置测试成功')
     } else {
       ElMessage.error('配置测试失败: ' + response.message)
+      if (response.output) {
+        ElMessageBox.alert(response.output, '测试输出', { type: 'error' })
+      }
     }
   } catch (error) {
     ElMessage.error('测试配置失败')

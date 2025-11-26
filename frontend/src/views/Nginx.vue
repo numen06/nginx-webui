@@ -8,10 +8,10 @@
             <el-button type="primary" @click="downloadDialogVisible = true">
               在线下载源码包
             </el-button>
-            <el-button type="primary" @click="uploadDialogVisible = true">
+            <el-button type="cyan" @click="uploadDialogVisible = true">
               上传源码包
             </el-button>
-            <el-button type="primary" link @click="loadVersions">刷新</el-button>
+            <el-button type="info" text @click="loadVersions">刷新</el-button>
             <el-tooltip content="强制释放 80 端口" placement="bottom">
               <el-button
                 circle
@@ -86,7 +86,7 @@
             <div class="version-actions">
               <el-button
                 size="small"
-                type="primary"
+                type="purple"
                 :disabled="buildingVersions.includes(row.version) || row.compiled || !row.has_source"
                 @click="compileVersion(row.version)"
               >
@@ -110,7 +110,7 @@
               </el-button>
               <el-button
                 size="small"
-                type="danger"
+                type="orange"
                 :disabled="!row.running || buildingVersions.includes(row.version)"
                 @click="forceStopVersion(row.version)"
               >
@@ -135,6 +135,7 @@
       v-model="downloadDialogVisible"
       title="在线下载 Nginx 源码包"
       width="600px"
+      :close-on-click-modal="false"
     >
       <el-form :model="downloadForm" label-width="100px">
         <el-form-item label="版本号">
@@ -144,6 +145,7 @@
             allow-create
             default-first-option
             placeholder="选择或输入版本号，例如：1.28.0"
+            style="width: 100%"
           >
             <el-option
               v-for="item in builtinVersions"
@@ -162,7 +164,7 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="downloadDialogVisible = false">取消</el-button>
+          <el-button type="info" @click="downloadDialogVisible = false">取消</el-button>
           <el-button type="primary" :loading="downloadLoading" @click="handleDownload">
             下载源码包
           </el-button>
@@ -175,6 +177,7 @@
       v-model="uploadDialogVisible"
       title="上传 Nginx 源码包"
       width="600px"
+      :close-on-click-modal="false"
     >
       <el-form label-width="100px">
         <el-form-item label="源码包">
@@ -202,7 +205,7 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="uploadDialogVisible = false">取消</el-button>
+          <el-button type="info" @click="uploadDialogVisible = false">取消</el-button>
           <el-button
             type="primary"
             :loading="uploading"
@@ -481,6 +484,13 @@ onMounted(() => {
 
 .force-release-btn {
   margin-left: 8px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
 }
 </style>
 

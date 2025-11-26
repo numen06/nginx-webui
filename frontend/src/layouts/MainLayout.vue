@@ -2,7 +2,7 @@
   <el-container class="layout-container">
     <el-aside width="200px" class="sidebar">
       <div class="logo">
-        <h2>Nginx WebUI</h2>
+        <NginxLogo :small="true" />
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -72,6 +72,7 @@ import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { ElMessage } from 'element-plus'
+import NginxLogo from '../components/NginxLogo.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -105,14 +106,7 @@ const handleLogout = () => {
   justify-content: center;
   border-bottom: 1px solid var(--border-color);
   background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
-}
-
-.logo h2 {
-  color: var(--nginx-green);
-  font-size: 18px;
-  margin: 0;
-  font-weight: 600;
-  text-shadow: 0 0 10px var(--nginx-green-glow);
+  padding: 10px;
 }
 
 .sidebar-menu {

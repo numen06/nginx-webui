@@ -7,7 +7,7 @@
           <template #header>
             <div class="card-header">
               <span>Nginx 运行状态</span>
-              <el-button text @click="refreshStatus">
+              <el-button type="info" text @click="refreshStatus">
                 <el-icon><Refresh /></el-icon>
                 刷新
               </el-button>
@@ -36,10 +36,10 @@
     <!-- 统计指标卡片 -->
     <el-row :gutter="20" class="mb-20">
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: var(--nginx-green);">
-              <el-icon size="30"><DataLine /></el-icon>
+              <el-icon size="24"><DataLine /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.total_requests || 0) }}</div>
@@ -49,10 +49,10 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: var(--nginx-green-light);">
-              <el-icon size="30"><SuccessFilled /></el-icon>
+              <el-icon size="24"><SuccessFilled /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.success_requests || 0) }}</div>
@@ -62,10 +62,10 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #E6A23C;">
-              <el-icon size="30"><WarningFilled /></el-icon>
+              <el-icon size="24"><WarningFilled /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.error_requests || 0) }}</div>
@@ -75,10 +75,10 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #dc2626;">
-              <el-icon size="30"><Lock /></el-icon>
+              <el-icon size="24"><Lock /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.attack_count || 0) }}</div>
@@ -92,10 +92,10 @@
     <!-- 系统资源卡片 -->
     <el-row :gutter="20" class="mb-20">
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #409EFF;">
-              <el-icon size="30"><Cpu /></el-icon>
+              <el-icon size="24"><Odometer /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ systemResources.cpu?.percent || 0 }}%</div>
@@ -109,21 +109,21 @@
             :percentage="systemResources.cpu?.percent || 0"
             :color="getProgressColor(systemResources.cpu?.percent || 0)"
             :show-text="false"
-            style="margin-top: 10px;"
+            class="stat-progress"
           />
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #67C23A;">
-              <el-icon size="30"><Memory /></el-icon>
+              <el-icon size="24"><DataBoard /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatBytes(systemResources.memory?.used || 0) }}</div>
               <div class="stat-label">内存使用</div>
               <div class="stat-extra" v-if="systemResources.memory">
-                {{ systemResources.memory.percent?.toFixed(1) }}% / {{ formatBytes(systemResources.memory.total || 0) }}
+                {{ systemResources.memory.percent?.toFixed(1) }}%
               </div>
             </div>
           </div>
@@ -131,21 +131,21 @@
             :percentage="systemResources.memory?.percent || 0"
             :color="getProgressColor(systemResources.memory?.percent || 0)"
             :show-text="false"
-            style="margin-top: 10px;"
+            class="stat-progress"
           />
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #E6A23C;">
-              <el-icon size="30"><Files /></el-icon>
+              <el-icon size="24"><Folder /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ formatBytes(systemResources.disk?.root?.used || 0) }}</div>
+              <div class="stat-value">{{ systemResources.disk?.root?.percent?.toFixed(1) || 0 }}%</div>
               <div class="stat-label">磁盘使用</div>
               <div class="stat-extra" v-if="systemResources.disk?.root">
-                {{ systemResources.disk.root.percent?.toFixed(1) }}% / {{ formatBytes(systemResources.disk.root.total || 0) }}
+                {{ formatBytesShort(systemResources.disk.root.used || 0) }} / {{ formatBytesShort(systemResources.disk.root.total || 0) }}
               </div>
             </div>
           </div>
@@ -153,22 +153,22 @@
             :percentage="systemResources.disk?.root?.percent || 0"
             :color="getProgressColor(systemResources.disk?.root?.percent || 0)"
             :show-text="false"
-            style="margin-top: 10px;"
+            class="stat-progress"
           />
         </el-card>
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card">
+        <el-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #909399;">
-              <el-icon size="30"><Connection /></el-icon>
+              <el-icon size="24"><Share /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ systemResources.network?.connections || 0 }}</div>
               <div class="stat-label">网络连接</div>
               <div class="stat-extra" v-if="systemResources.network">
-                ↑{{ formatBytes(systemResources.network.bytes_sent || 0) }}
-                ↓{{ formatBytes(systemResources.network.bytes_recv || 0) }}
+                ↑{{ formatBytesShort(systemResources.network.bytes_sent || 0) }}
+                ↓{{ formatBytesShort(systemResources.network.bytes_recv || 0) }}
               </div>
             </div>
           </div>
@@ -338,6 +338,15 @@ const formatBytes = (bytes) => {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 格式化字节（简短版，用于小空间显示）
+const formatBytesShort = (bytes) => {
+  if (!bytes || bytes === 0) return '0B'
+  const k = 1024
+  const sizes = ['B', 'K', 'M', 'G', 'T']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i]
 }
 
 // 获取进度条颜色
@@ -601,40 +610,78 @@ onUnmounted(() => {
 
 .stat-card {
   margin-bottom: 20px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-card :deep(.el-card__body) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.resource-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
 }
 
 .stat-content {
   display: flex;
-  align-items: center;
-  padding: 10px 0;
+  align-items: flex-start;
+  padding: 8px 0;
+  flex: 1;
 }
 
 .stat-icon {
-  width: 60px;
-  height: 60px;
+  width: 56px;
+  height: 56px;
   border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-white);
   margin-right: 15px;
+  flex-shrink: 0;
 }
 
 .stat-info {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: bold;
   color: var(--text-primary);
-  line-height: 1;
-  margin-bottom: 8px;
+  line-height: 1.2;
+  margin-bottom: 6px;
+  word-break: break-all;
 }
 
 .stat-label {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.stat-extra {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.stat-progress {
+  margin-top: 12px;
+}
+
+/* 统一资源卡片样式 */
+.resource-card .stat-content {
+  min-height: 80px;
 }
 
 .chart {

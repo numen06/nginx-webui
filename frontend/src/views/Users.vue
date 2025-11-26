@@ -5,7 +5,7 @@
         <div class="card-header">
           <span>用户管理</span>
           <div>
-            <el-button @click="handleChangePassword">修改我的密码</el-button>
+            <el-button type="info" @click="handleChangePassword">修改我的密码</el-button>
             <el-button type="primary" @click="handleCreate">新增用户</el-button>
           </div>
         </div>
@@ -23,8 +23,8 @@
         <el-table-column prop="created_at" label="创建时间" width="180" />
         <el-table-column label="操作" width="300">
           <template #default="scope">
-            <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
-            <el-button size="small" @click="handleResetPassword(scope.row)">重置密码</el-button>
+            <el-button size="small" type="info" @click="handleEdit(scope.row)">编辑</el-button>
+            <el-button size="small" type="warning" @click="handleResetPassword(scope.row)">重置密码</el-button>
             <el-button 
               size="small" 
               type="danger" 
@@ -43,6 +43,7 @@
       v-model="dialogVisible"
       :title="dialogTitle"
       width="500px"
+      :close-on-click-modal="false"
     >
       <el-form :model="formData" :rules="formRules" ref="formRef" label-width="100px">
         <el-form-item label="用户名" prop="username">
@@ -56,8 +57,10 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit">确定</el-button>
+        <span class="dialog-footer">
+          <el-button type="info" @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleSubmit">确定</el-button>
+        </span>
       </template>
     </el-dialog>
 
@@ -66,6 +69,7 @@
       v-model="passwordDialogVisible"
       title="重置密码"
       width="500px"
+      :close-on-click-modal="false"
     >
       <el-form :model="passwordForm" :rules="passwordRules" ref="passwordFormRef" label-width="100px">
         <el-form-item label="新密码" prop="new_password">
@@ -76,8 +80,10 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="passwordDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handlePasswordSubmit">确定</el-button>
+        <span class="dialog-footer">
+          <el-button type="info" @click="passwordDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handlePasswordSubmit">确定</el-button>
+        </span>
       </template>
     </el-dialog>
 
@@ -86,6 +92,7 @@
       v-model="changePasswordDialogVisible"
       title="修改密码"
       width="500px"
+      :close-on-click-modal="false"
     >
       <el-form :model="changePasswordForm" :rules="changePasswordRules" ref="changePasswordFormRef" label-width="100px">
         <el-form-item label="旧密码" prop="old_password">
@@ -99,8 +106,10 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="changePasswordDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleChangePasswordSubmit">确定</el-button>
+        <span class="dialog-footer">
+          <el-button type="info" @click="changePasswordDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleChangePasswordSubmit">确定</el-button>
+        </span>
       </template>
     </el-dialog>
   </div>
@@ -353,6 +362,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 </style>
 

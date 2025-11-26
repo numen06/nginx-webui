@@ -278,6 +278,517 @@ async def upload_file(
         )
 
 
+def get_packages_dir() -> Path:
+    """
+    获取静态资源包存储目录
+    
+    Returns:
+        Path: 资源包存储目录的绝对路径
+    """
+    config = get_config()
+    # 使用备份目录的父目录下的 packages 目录
+    backup_dir = Path(config.backup.backup_dir)
+    packages_dir = backup_dir.parent / "packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    return packages_dir
+
+
+@router.post("/upload-package", summary="上传静态资源包（仅保存，不解压）")
+async def upload_package(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    上传静态资源包到服务器（仅保存，不解压）
+    
+    支持的格式：
+    - .zip
+    - .tar.gz / .tgz
+    - .tar
+    """
+    try:
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="未选择文件"
+            )
+        
+        # 验证文件格式
+        filename_lower = file.filename.lower()
+        if not any(filename_lower.endswith(ext) for ext in ['.zip', '.tar.gz', '.tgz', '.tar']):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar"
+            )
+        
+        # 获取资源包存储目录
+        packages_dir = get_packages_dir()
+        
+        # 保存文件（如果同名文件已存在，添加时间戳）
+        file_path = packages_dir / file.filename
+        if file_path.exists():
+            # 添加时间戳避免覆盖
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stem = file_path.stem
+            suffix = file_path.suffix
+            if stem.endswith('.tar') and suffix == '.gz':
+                # 处理 .tar.gz 的情况
+                stem = stem[:-4]
+                suffix = '.tar.gz'
+            file_path = packages_dir / f"{stem}_{timestamp}{suffix}"
+        
+        # 保存文件
+        content = await file.read()
+        with open(file_path, 'wb') as f:
+            f.write(content)
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="package_upload",
+            target=file_path.name,
+            details={
+                "filename": file.filename,
+                "saved_as": file_path.name,
+                "size": len(content)
+            },
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": "资源包上传成功",
+            "filename": file_path.name,
+            "size": len(content)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"上传资源包失败: {str(e)}"
+        )
+
+
+@router.get("/packages", summary="列出已上传的静态资源包")
+async def list_packages(
+    current_user: User = Depends(get_current_user)
+):
+    """列出已上传的静态资源包"""
+    try:
+        packages_dir = get_packages_dir()
+        
+        if not packages_dir.exists():
+            return {
+                "success": True,
+                "packages": []
+            }
+        
+        packages = []
+        for file_path in sorted(packages_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if file_path.is_file():
+                stat = file_path.stat()
+                filename_lower = file_path.name.lower()
+                is_valid = any(filename_lower.endswith(ext) for ext in ['.zip', '.tar.gz', '.tgz', '.tar'])
+                if is_valid:
+                    packages.append({
+                        "filename": file_path.name,
+                        "size": stat.st_size,
+                        "uploaded_time": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+        
+        return {
+            "success": True,
+            "packages": packages
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"列出资源包失败: {str(e)}"
+        )
+
+
+@router.delete("/packages/{filename}", summary="删除已上传的静态资源包")
+async def delete_package(
+    filename: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """删除已上传的静态资源包"""
+    try:
+        # 验证文件名，防止目录遍历
+        if '/' in filename or '..' in filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的文件名"
+            )
+        
+        packages_dir = get_packages_dir()
+        file_path = packages_dir / filename
+        
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="资源包不存在"
+            )
+        
+        # 删除文件
+        file_path.unlink()
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="package_delete",
+            target=filename,
+            details={},
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": "资源包已删除"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除资源包失败: {str(e)}"
+        )
+
+
+
+
+class PackageInfo(BaseModel):
+    """资源包信息"""
+    filename: str
+    size: int
+    uploaded_time: str
+
+
+@router.post("/upload-package", summary="上传静态资源包（仅保存，不解压）")
+async def upload_package(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    上传静态资源包到服务器（仅保存，不解压）
+    
+    支持的格式：
+    - .zip
+    - .tar.gz / .tgz
+    - .tar
+    """
+    try:
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="未选择文件"
+            )
+        
+        filename_lower = file.filename.lower()
+        if not (filename_lower.endswith('.zip') or 
+                filename_lower.endswith('.tar.gz') or 
+                filename_lower.endswith('.tgz') or 
+                filename_lower.endswith('.tar')):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar"
+            )
+        
+        packages_dir = get_packages_dir()
+        file_path = packages_dir / file.filename
+        
+        # 如果文件已存在，添加时间戳后缀
+        if file_path.exists():
+            import time
+            name_parts = file.filename.rsplit('.', 1)
+            if len(name_parts) == 2:
+                file.filename = f"{name_parts[0]}_{int(time.time())}.{name_parts[1]}"
+            else:
+                file.filename = f"{file.filename}_{int(time.time())}"
+            file_path = packages_dir / file.filename
+        
+        # 保存文件
+        content = await file.read()
+        with open(file_path, 'wb') as f:
+            f.write(content)
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="package_upload",
+            target=file.filename,
+            details={"size": len(content)},
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": f"资源包上传成功: {file.filename}",
+            "filename": file.filename
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"上传资源包失败: {str(e)}"
+        )
+
+
+@router.get("/packages", summary="列出已上传的静态资源包")
+async def list_packages(
+    current_user: User = Depends(get_current_user)
+):
+    """列出所有已上传的静态资源包"""
+    try:
+        packages_dir = get_packages_dir()
+        
+        if not packages_dir.exists():
+            return {
+                "success": True,
+                "packages": []
+            }
+        
+        packages = []
+        for file_path in packages_dir.iterdir():
+            if file_path.is_file():
+                filename_lower = file_path.name.lower()
+                if (filename_lower.endswith('.zip') or 
+                    filename_lower.endswith('.tar.gz') or 
+                    filename_lower.endswith('.tgz') or 
+                    filename_lower.endswith('.tar')):
+                    stat = file_path.stat()
+                    packages.append(PackageInfo(
+                        filename=file_path.name,
+                        size=stat.st_size,
+                        uploaded_time=datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    ))
+        
+        # 按上传时间倒序排序
+        packages.sort(key=lambda x: x.uploaded_time, reverse=True)
+        
+        return {
+            "success": True,
+            "packages": [p.dict() for p in packages]
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"列出资源包失败: {str(e)}"
+        )
+
+
+@router.delete("/packages/{filename}", summary="删除已上传的静态资源包")
+async def delete_package(
+    filename: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """删除已上传的静态资源包"""
+    try:
+        # 验证文件名，防止目录遍历攻击
+        if '/' in filename or '..' in filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的文件名"
+            )
+        
+        packages_dir = get_packages_dir()
+        file_path = packages_dir / filename
+        
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="资源包不存在"
+            )
+        
+        # 确保文件在 packages 目录内
+        try:
+            file_path.resolve().relative_to(packages_dir.resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的文件路径"
+            )
+        
+        # 删除文件
+        file_path.unlink()
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="package_delete",
+            target=filename,
+            details={},
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": "资源包已删除"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除资源包失败: {str(e)}"
+        )
+
+
+@router.post("/deploy-package", summary="部署静态资源包到 html 目录")
+async def deploy_package(
+    request: Request,
+    filename: Optional[str] = Form(None, description="已上传的资源包文件名（如果提供则使用已上传的文件）"),
+    file: Optional[UploadFile] = File(None, description="新上传的文件（如果提供则使用新文件）"),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
+    extract_to_subdir: bool = Form(False, description="是否解压到子目录（使用包名）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    部署静态资源包（zip/tar.gz）到指定 Nginx 版本的 html 目录
+    
+    支持的格式：
+    - .zip
+    - .tar.gz / .tgz
+    - .tar
+    
+    可以使用已上传的文件（通过 filename 参数）或新上传的文件（通过 file 参数）
+    """
+    try:
+        # 确定使用哪个文件
+        if filename:
+            # 使用已上传的文件
+            if '/' in filename or '..' in filename:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="无效的文件名"
+                )
+            packages_dir = get_packages_dir()
+            package_path = packages_dir / filename
+            if not package_path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"资源包 {filename} 不存在"
+                )
+            tmp_path = package_path
+            original_filename = filename
+            # 读取文件内容用于日志记录
+            with open(package_path, 'rb') as f:
+                content = f.read()
+        elif file and file.filename:
+            # 使用新上传的文件
+            original_filename = file.filename
+            # 保存上传的文件到临时目录
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
+                content = await file.read()
+                tmp_file.write(content)
+                tmp_path = Path(tmp_file.name)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请提供已上传的文件名或上传新文件"
+            )
+        
+        try:
+            # 获取 html 目录
+            html_dir = get_version_root_dir(version, root_only=False)
+            
+            # 确定解压目标目录
+            if extract_to_subdir:
+                # 使用包名（不含扩展名）作为子目录名
+                package_name = Path(original_filename).stem
+                if package_name.endswith('.tar'):
+                    package_name = package_name[:-4]
+                target_dir = html_dir / package_name
+            else:
+                target_dir = html_dir
+            
+            # 确保目标目录存在
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 根据文件类型解压
+            filename_lower = original_filename.lower()
+            if filename_lower.endswith('.zip'):
+                with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                    zip_ref.extractall(target_dir)
+            elif filename_lower.endswith(('.tar.gz', '.tgz')):
+                with tarfile.open(tmp_path, 'r:gz') as tar_ref:
+                    tar_ref.extractall(target_dir)
+            elif filename_lower.endswith('.tar'):
+                with tarfile.open(tmp_path, 'r') as tar_ref:
+                    tar_ref.extractall(target_dir)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar"
+                )
+            
+            # 记录操作日志
+            create_audit_log(
+                db=db,
+                user_id=current_user.id,
+                username=current_user.username,
+                action="package_deploy",
+                target=str(target_dir.relative_to(html_dir)),
+                details={
+                    "filename": original_filename,
+                    "size": len(content),
+                    "version": version,
+                    "extract_to_subdir": extract_to_subdir,
+                    "from_uploaded": bool(filename)
+                },
+                ip_address=get_client_ip(request)
+            )
+            
+            return {
+                "success": True,
+                "message": f"静态资源包已成功部署到 {target_dir.relative_to(html_dir)}",
+                "target_dir": str(target_dir.relative_to(html_dir))
+            }
+        finally:
+            # 清理临时文件（仅当是新上传的文件时）
+            if not filename and tmp_path.exists():
+                tmp_path.unlink()
+                
+    except HTTPException:
+        raise
+    except zipfile.BadZipFile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP 文件格式错误或已损坏"
+        )
+    except tarfile.TarError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"TAR 文件格式错误: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"部署静态资源包失败: {str(e)}"
+        )
+
+
 @router.get("/{file_path:path}", summary="获取文件内容")
 async def get_file(
     file_path: str,
@@ -570,114 +1081,5 @@ async def download_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"下载文件失败: {str(e)}"
-        )
-
-
-@router.post("/deploy-package", summary="部署静态资源包到 html 目录")
-async def deploy_package(
-    request: Request,
-    file: UploadFile = File(...),
-    version: Optional[str] = Form(None, description="Nginx 版本号"),
-    extract_to_subdir: bool = Form(False, description="是否解压到子目录（使用包名）"),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    上传并解压静态资源包（zip/tar.gz）到指定 Nginx 版本的 html 目录
-    
-    支持的格式：
-    - .zip
-    - .tar.gz / .tgz
-    """
-    try:
-        if not file.filename:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="未选择文件"
-            )
-        
-        # 获取 html 目录
-        html_dir = get_version_root_dir(version, root_only=False)
-        
-        # 保存上传的文件到临时目录
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
-            content = await file.read()
-            tmp_file.write(content)
-            tmp_path = Path(tmp_file.name)
-        
-        try:
-            # 确定解压目标目录
-            if extract_to_subdir:
-                # 使用包名（不含扩展名）作为子目录名
-                package_name = Path(file.filename).stem
-                if package_name.endswith('.tar'):
-                    package_name = package_name[:-4]
-                target_dir = html_dir / package_name
-            else:
-                target_dir = html_dir
-            
-            # 确保目标目录存在
-            target_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 根据文件类型解压
-            filename_lower = file.filename.lower()
-            if filename_lower.endswith('.zip'):
-                with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
-                    zip_ref.extractall(target_dir)
-            elif filename_lower.endswith(('.tar.gz', '.tgz')):
-                with tarfile.open(tmp_path, 'r:gz') as tar_ref:
-                    tar_ref.extractall(target_dir)
-            elif filename_lower.endswith('.tar'):
-                with tarfile.open(tmp_path, 'r') as tar_ref:
-                    tar_ref.extractall(target_dir)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar"
-                )
-            
-            # 记录操作日志
-            create_audit_log(
-                db=db,
-                user_id=current_user.id,
-                username=current_user.username,
-                action="package_deploy",
-                target=str(target_dir.relative_to(html_dir)),
-                details={
-                    "filename": file.filename,
-                    "size": len(content),
-                    "version": version,
-                    "extract_to_subdir": extract_to_subdir
-                },
-                ip_address=get_client_ip(request)
-            )
-            
-            return {
-                "success": True,
-                "message": f"静态资源包已成功部署到 {target_dir.relative_to(html_dir)}",
-                "target_dir": str(target_dir.relative_to(html_dir))
-            }
-        finally:
-            # 清理临时文件
-            if tmp_path.exists():
-                tmp_path.unlink()
-                
-    except HTTPException:
-        raise
-    except zipfile.BadZipFile:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ZIP 文件格式错误或已损坏"
-        )
-    except tarfile.TarError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"TAR 文件格式错误: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"部署静态资源包失败: {str(e)}"
         )
 

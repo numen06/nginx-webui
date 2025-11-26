@@ -1,7 +1,9 @@
 <template>
   <div class="login-container">
     <div class="login-box">
-      <h2 class="title">Nginx WebUI</h2>
+      <div class="login-logo">
+        <NginxLogo :large="true" />
+      </div>
       <el-form
         ref="loginFormRef"
         :model="loginForm"
@@ -47,6 +49,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { ElMessage } from 'element-plus'
+import NginxLogo from '../components/NginxLogo.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -130,14 +133,12 @@ const handleLogin = async () => {
   z-index: 1;
 }
 
-.title {
+.login-logo {
   text-align: center;
   margin-bottom: 30px;
-  color: var(--nginx-green);
-  font-size: 28px;
-  font-weight: 600;
-  text-shadow: 0 0 15px var(--nginx-green-glow);
-  letter-spacing: 1px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .login-form {

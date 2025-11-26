@@ -11,7 +11,17 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.auth import get_current_user, get_current_user_basic, User
-from app.utils.nginx import get_config_content, save_config_content, test_config, reload_nginx, get_nginx_status, get_config_path, _resolve_nginx_executable
+from app.utils.nginx import (
+    get_config_content,
+    save_config_content,
+    test_config,
+    reload_nginx,
+    get_nginx_status,
+    get_config_path,
+    _resolve_nginx_executable,
+    format_config,
+    validate_config,
+)
 from app.utils.nginx_versions import get_active_version
 from app.utils.backup import create_backup, list_backups, restore_backup, get_backup
 from app.utils.audit import create_audit_log, get_client_ip
@@ -27,6 +37,16 @@ class ConfigUpdateRequest(BaseModel):
 class ConfigRestoreRequest(BaseModel):
     """配置恢复请求"""
     backup_id: int
+
+
+class ConfigFormatRequest(BaseModel):
+    """配置格式化请求"""
+    content: str
+
+
+class ConfigValidateRequest(BaseModel):
+    """配置校验请求"""
+    content: str
 
 
 @router.get("", summary="读取当前 Nginx 配置")
@@ -131,8 +151,28 @@ async def update_config(
 async def test_nginx_config(
     current_user: User = Depends(get_current_user)
 ):
-    """测试 Nginx 配置是否有效"""
+    """测试 Nginx 配置是否有效（测试已保存的配置文件）"""
     result = test_config()
+    return result
+
+
+@router.post("/format", summary="格式化配置内容")
+async def format_nginx_config(
+    request_data: ConfigFormatRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """格式化 Nginx 配置内容（不保存）"""
+    result = format_config(request_data.content)
+    return result
+
+
+@router.post("/validate", summary="校验配置内容")
+async def validate_nginx_config(
+    request_data: ConfigValidateRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """校验 Nginx 配置内容（不保存，使用临时文件测试）"""
+    result = validate_config(request_data.content)
     return result
 
 
