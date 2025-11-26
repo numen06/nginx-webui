@@ -49,8 +49,9 @@ WORKDIR /app
 COPY backend/ /app/backend/
 
 # 安装 Python 依赖
-RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
- cd /app/backend && pip install --no-cache-dir -r requirements.txt
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+RUN pip install --upgrade pip
+RUN cd /app/backend && pip install --no-cache-dir -r requirements.txt
 
 # 从第一阶段复制前端构建产物
 COPY --from=frontend-builder /app/frontend/dist/ /app/backend/static/
