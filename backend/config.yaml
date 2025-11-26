@@ -1,13 +1,16 @@
 nginx:
-  config_path: /etc/nginx/nginx.conf
+  config_path: ../nginx/nginx.conf
   executable: /usr/sbin/nginx
-  static_dir: /usr/share/nginx/html
-  log_dir: /var/log/nginx
-  conf_dir: /etc/nginx/conf.d
-  access_log: /var/log/nginx/access.log
-  error_log: /var/log/nginx/error.log
-  ssl_dir: /etc/nginx/ssl
+  static_dir: ../data/html
+  log_dir: ../data/logs
+  conf_dir: ../nginx/conf.d
+  access_log: ../data/logs/access.log
+  error_log: ../data/logs/error.log
+  ssl_dir: ../data/ssl
   certbot_path: /usr/bin/certbot
+  versions_root: ../nginx/versions
+  build_root: ../nginx/build
+  build_logs_dir: ../nginx/build_logs
 
 app:
   host: 127.0.0.1

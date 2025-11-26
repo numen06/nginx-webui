@@ -1,158 +1,208 @@
 <template>
   <div class="nginx-manager">
-    <el-row :gutter="20">
-      <el-col :span="10">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>在线下载并编译 Nginx</span>
-            </div>
-          </template>
-          <el-form :model="downloadForm" label-width="100px">
-            <el-form-item label="版本号">
-              <el-input v-model="downloadForm.version" placeholder="例如：1.28.0" />
-            </el-form-item>
-            <el-form-item label="下载地址">
-              <el-input
-                v-model="downloadForm.url"
-                placeholder="留空使用官方地址：https://nginx.org/download/nginx-&lt;version&gt;.tar.gz"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="downloadLoading" @click="handleDownload">
-                下载并编译
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-
-        <el-card style="margin-top: 20px">
-          <template #header>
-            <div class="card-header">
-              <span>上传源码包并编译</span>
-            </div>
-          </template>
-          <el-form label-width="100px">
-            <el-form-item label="源码包">
-              <el-upload
-                ref="uploadRef"
-                :auto-upload="false"
-                :limit="1"
-                :on-change="handleFileChange"
-                :before-remove="() => !uploading"
-              >
-                <el-button type="primary">选择文件</el-button>
-                <template #tip>
-                  <div class="el-upload__tip">
-                    仅支持 .tar.gz / .tgz 的 nginx 源码包，示例：nginx-1.28.0.tar.gz
-                  </div>
-                </template>
-              </el-upload>
-            </el-form-item>
-            <el-form-item label="版本号">
-              <el-input
-                v-model="uploadVersion"
-                placeholder="可留空，将从文件名 nginx-&lt;version&gt;.tar.gz 中推断"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :loading="uploading"
-                :disabled="!selectedFile"
-                @click="handleUpload"
-              >
-                上传并编译
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-col>
-
-      <el-col :span="14">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>Nginx 版本列表</span>
-              <el-button type="primary" link @click="loadVersions">刷新</el-button>
-            </div>
-          </template>
-          <el-table :data="versions" style="width: 100%">
-            <el-table-column prop="version" label="版本" width="120" />
-            <el-table-column prop="install_path" label="安装路径" min-width="220" />
-            <el-table-column label="状态" width="120">
-              <template #default="{ row }">
-                <el-tag :type="row.running ? 'success' : 'info'">
-                  {{ row.running ? '运行中' : '已停止' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="pid" label="PID" width="100">
-              <template #default="{ row }">
-                {{ row.pid || '-' }}
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="220">
-              <template #default="{ row }">
-                <el-button
-                  size="small"
-                  type="success"
-                  :disabled="row.running"
-                  @click="startVersion(row.version)"
-                >
-                  启动
-                </el-button>
-                <el-button
-                  size="small"
-                  type="warning"
-                  :disabled="!row.running"
-                  @click="stopVersion(row.version)"
-                >
-                  停止
-                </el-button>
-                <el-button size="small" link @click="showBuildLog(row.version)">
-                  编译日志
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-
-        <el-drawer
-          v-model="logDrawerVisible"
-          title="编译日志"
-          size="50%"
-          destroy-on-close
-        >
-          <div class="log-header">
-            <span>版本：{{ currentLogVersion }}</span>
-            <el-button type="primary" link @click="reloadBuildLog">刷新</el-button>
+    <el-card>
+      <template #header>
+        <div class="card-header">
+          <span>Nginx 版本列表</span>
+          <div>
+            <el-button type="primary" @click="downloadDialogVisible = true">
+              在线下载并编译
+            </el-button>
+            <el-button type="primary" @click="uploadDialogVisible = true">
+              上传源码包并编译
+            </el-button>
+            <el-button type="primary" link @click="loadVersions">刷新</el-button>
+            <el-button type="danger" link @click="forceReleaseHttpPort">
+              强制释放 80 端口
+            </el-button>
           </div>
-          <el-scrollbar class="log-content">
-            <pre>{{ buildLogContent || '暂无日志' }}</pre>
-          </el-scrollbar>
-        </el-drawer>
-      </el-col>
-    </el-row>
+        </div>
+      </template>
+
+      <el-table :data="versions" style="width: 100%">
+        <el-table-column prop="version" label="版本" width="120" />
+        <el-table-column prop="install_path" label="安装路径" min-width="220" />
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="row.running ? 'success' : 'info'">
+              {{ row.running ? '运行中' : '已停止' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="pid" label="PID" width="100">
+          <template #default="{ row }">
+            {{ row.pid || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="360">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              type="success"
+              :disabled="row.running"
+              @click="startVersion(row.version)"
+            >
+              启动
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              :disabled="!row.running"
+              @click="stopVersion(row.version)"
+            >
+              停止
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :disabled="!row.running"
+              @click="forceStopVersion(row.version)"
+            >
+              强制停止
+            </el-button>
+            <el-button size="small" link @click="showBuildLog(row.version)">
+              编译日志
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :disabled="row.running"
+              @click="deleteVersion(row.version)"
+            >
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- 在线下载并编译 弹窗 -->
+    <el-dialog
+      v-model="downloadDialogVisible"
+      title="在线下载并编译 Nginx"
+      width="600px"
+    >
+      <el-form :model="downloadForm" label-width="100px">
+        <el-form-item label="版本号">
+          <el-select
+            v-model="downloadForm.version"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择或输入版本号，例如：1.28.0"
+          >
+            <el-option
+              v-for="item in builtinVersions"
+              :key="item"
+              :label="item"
+              :value="item"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="下载地址">
+          <el-input
+            v-model="downloadForm.url"
+            placeholder="留空使用官方地址：https://nginx.org/download/nginx-&lt;version&gt;.tar.gz"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="downloadDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="downloadLoading" @click="handleDownload">
+            下载并编译
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 上传源码包并编译 弹窗 -->
+    <el-dialog
+      v-model="uploadDialogVisible"
+      title="上传源码包并编译 Nginx"
+      width="600px"
+    >
+      <el-form label-width="100px">
+        <el-form-item label="源码包">
+          <el-upload
+            ref="uploadRef"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleFileChange"
+            :before-remove="() => !uploading"
+          >
+            <el-button type="primary">选择文件</el-button>
+            <template #tip>
+              <div class="el-upload__tip">
+                仅支持 .tar.gz / .tgz 的 nginx 源码包，示例：nginx-1.28.0.tar.gz
+              </div>
+            </template>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="版本号">
+          <el-input
+            v-model="uploadVersion"
+            placeholder="可留空，将从文件名 nginx-&lt;version&gt;.tar.gz 中推断"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="uploadDialogVisible = false">取消</el-button>
+          <el-button
+            type="primary"
+            :loading="uploading"
+            :disabled="!selectedFile"
+            @click="handleUpload"
+          >
+            上传并编译
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <el-drawer
+      v-model="logDrawerVisible"
+      title="编译日志"
+      size="50%"
+      destroy-on-close
+    >
+      <div class="log-header">
+        <span>版本：{{ currentLogVersion }}</span>
+        <el-button type="primary" link @click="reloadBuildLog">刷新</el-button>
+      </div>
+      <el-scrollbar class="log-content">
+        <pre>{{ buildLogContent || '暂无日志' }}</pre>
+      </el-scrollbar>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { nginxApi } from '../api/nginx'
 
 const versions = ref([])
+// 常用 Nginx 版本列表，用于下拉选择；也可以手动输入任意版本号
+const builtinVersions = [
+  '1.28.0', // mainline
+  '1.26.2',
+  '1.24.0',
+  '1.22.1'
+]
 const downloadForm = ref({
   version: '',
   url: ''
 })
 const downloadLoading = ref(false)
+const downloadDialogVisible = ref(false)
 
 const uploadRef = ref(null)
 const selectedFile = ref(null)
 const uploadVersion = ref('')
 const uploading = ref(false)
+const uploadDialogVisible = ref(false)
 
 const logDrawerVisible = ref(false)
 const currentLogVersion = ref('')
@@ -180,6 +230,7 @@ const handleDownload = async () => {
     })
     ElMessage.success('下载并编译任务完成')
     await loadVersions()
+    downloadDialogVisible.value = false
   } catch (error) {
     ElMessage.error(error.detail || '下载编译失败')
   } finally {
@@ -213,6 +264,7 @@ const handleUpload = async () => {
       uploadRef.value.clearFiles()
     }
     selectedFile.value = null
+    uploadDialogVisible.value = false
   } catch (error) {
     ElMessage.error(error.detail || '上传编译失败')
   } finally {
@@ -240,6 +292,16 @@ const stopVersion = async (version) => {
   }
 }
 
+const forceStopVersion = async (version) => {
+  try {
+    await nginxApi.forceStopVersion(version)
+    ElMessage.success(`已强制停止 Nginx ${version}`)
+    await loadVersions()
+  } catch (error) {
+    ElMessage.error(error.detail || '强制停止失败')
+  }
+}
+
 const showBuildLog = async (version) => {
   currentLogVersion.value = version
   logDrawerVisible.value = true
@@ -253,6 +315,41 @@ const reloadBuildLog = async () => {
     buildLogContent.value = data?.content || ''
   } catch (error) {
     ElMessage.error(error.detail || '获取编译日志失败')
+  }
+}
+
+const forceReleaseHttpPort = async () => {
+  try {
+    await nginxApi.forceReleaseHttpPort(80)
+    ElMessage.success('已尝试强制释放 80 端口')
+    await loadVersions()
+  } catch (error) {
+    ElMessage.error(error.detail || '强制释放 80 端口失败')
+  }
+}
+
+const deleteVersion = async (version) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除 Nginx 版本 ${version} 吗？此操作不可恢复，仅在该版本已停止时允许删除。`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  try {
+    await nginxApi.deleteVersion(version)
+    ElMessage.success(`已删除 Nginx ${version}`)
+    await loadVersions()
+  } catch (error) {
+    ElMessage.error(error.detail || '删除失败')
   }
 }
 

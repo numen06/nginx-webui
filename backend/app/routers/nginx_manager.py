@@ -1,10 +1,13 @@
 """
 Nginx 多版本管理路由
 """
+
 import os
 import tarfile
 import shutil
 import subprocess
+import signal
+import time
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlparse
@@ -108,6 +111,24 @@ def _ensure_nginx_dirs() -> None:
     _get_build_logs_dir().mkdir(parents=True, exist_ok=True)
 
 
+def _get_nginx_config_path() -> Path:
+    """
+    获取 Nginx 配置文件的绝对路径
+
+    - 如果配置中是绝对路径，则直接返回
+    - 如果是相对路径，则相对于 backend 目录解析
+    """
+    config = get_config()
+    raw = Path(config.nginx.config_path)
+    if raw.is_absolute():
+        return raw
+
+    # 当前文件在 backend/app/routers/nginx_manager.py
+    # parents[2] -> backend 目录
+    backend_dir = Path(__file__).resolve().parents[2]
+    return (backend_dir / raw).resolve()
+
+
 def _check_process_running(pid: int) -> bool:
     """检查指定 PID 的进程是否仍在运行"""
     try:
@@ -120,6 +141,42 @@ def _check_process_running(pid: int) -> bool:
 def _get_build_log_path(version: str) -> Path:
     """获取编译日志文件路径"""
     return _get_build_logs_dir() / f"{version}.log"
+
+
+def _kill_pids(pids: List[int]) -> dict:
+    """
+    尝试终止一批 PID：
+    - 先发送 SIGTERM，短暂等待
+    - 仍存活则发送 SIGKILL
+    返回每个 PID 的处理结果
+    """
+    results: dict[int, dict] = {}
+
+    for pid in pids:
+        info = {"pid": pid, "term_sent": False, "kill_sent": False, "errors": []}
+        try:
+            os.kill(pid, signal.SIGTERM)
+            info["term_sent"] = True
+        except ProcessLookupError:
+            # 进程已不存在
+            results[pid] = info
+            continue
+        except Exception as e:
+            info["errors"].append(f"SIGTERM 失败: {e}")
+
+        time.sleep(0.2)
+        if _check_process_running(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+                info["kill_sent"] = True
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                info["errors"].append(f"SIGKILL 失败: {e}")
+
+        results[pid] = info
+
+    return results
 
 
 def _write_build_log(version: str, content: str) -> Path:
@@ -338,7 +395,11 @@ def _infer_version_from_filename(filename: str) -> Optional[str]:
     return None
 
 
-@router.get("/versions", response_model=List[NginxVersionInfo], summary="获取已安装的 Nginx 版本列表")
+@router.get(
+    "/versions",
+    response_model=List[NginxVersionInfo],
+    summary="获取已安装的 Nginx 版本列表",
+)
 async def list_nginx_versions(
     current_user: User = Depends(get_current_user),
 ) -> List[NginxVersionInfo]:
@@ -519,25 +580,26 @@ async def get_nginx_build_log(
     version: str,
     current_user: User = Depends(get_current_user),
 ):
-    """返回指定版本的编译日志内容"""
+    """返回指定版本的编译日志内容。
+
+    - 如果编译日志文件存在：返回最后一段内容
+    - 如果不存在：返回空内容，而不是报错，方便前端展示“暂无日志”
+    """
     log_path = _get_build_log_path(version)
-    if not log_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="编译日志不存在",
-        )
-    try:
-        content = log_path.read_text(encoding="utf-8", errors="ignore")
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"读取编译日志失败: {e}",
-        )
+    content = ""
+    if log_path.exists():
+        try:
+            content = log_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"读取编译日志失败: {e}",
+            )
 
     return {
         "version": version,
         "build_log_path": str(log_path),
-        "content": content[-20000:],  # 截取最后 2 万字符，避免过大
+        "content": content[-20000:] if content else "",
     }
 
 
@@ -603,11 +665,12 @@ async def start_nginx_version(
     try:
         import subprocess
 
+        config_path = _get_nginx_config_path()
         test_cmd = [
             str(executable),
             "-t",
             "-c",
-            config.nginx.config_path,
+            str(config_path),
             "-p",
             str(install_path),
         ]
@@ -635,10 +698,11 @@ async def start_nginx_version(
     try:
         import subprocess
 
+        config_path = _get_nginx_config_path()
         cmd = [
             str(executable),
             "-c",
-            config.nginx.config_path,
+            str(config_path),
             "-p",
             str(install_path),
         ]
@@ -719,10 +783,11 @@ async def stop_nginx_version(
     try:
         import subprocess
 
+        config_path = _get_nginx_config_path()
         cmd = [
             str(executable),
             "-c",
-            config.nginx.config_path,
+            str(config_path),
             "-p",
             str(install_path),
             "-s",
@@ -767,3 +832,251 @@ async def stop_nginx_version(
     }
 
 
+@router.post(
+    "/versions/{version}/force_stop",
+    summary="强制停止指定版本的 Nginx（发送信号终止进程）",
+)
+async def force_stop_nginx_version(
+    version: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    强制停止指定版本的 Nginx。
+
+    优先使用 PID 文件精确终止：
+    - 若存在 PID 文件且进程仍在运行，则先发送 SIGTERM，再尝试 SIGKILL。
+    - 如 PID 文件不存在或进程已退出，则视为已停止。
+    """
+    install_path = _get_install_path(version)
+
+    if not install_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nginx 版本未正确安装: {version}",
+        )
+
+    pid_file = _get_pid_file(install_path)
+    pid: Optional[int] = None
+
+    if pid_file.exists():
+        try:
+            content = pid_file.read_text(encoding="utf-8").strip()
+            if content:
+                pid = int(content)
+        except Exception:
+            pid = None
+
+    # 如果没拿到 PID，视为已经停止
+    if pid is None:
+        info = _get_version_status(version)
+        return {
+            "success": True,
+            "message": f"Nginx 版本 {version} 已停止（无有效 PID）",
+            "version": info,
+        }
+
+    # 先尝试优雅退出
+    errors: list[str] = []
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        # 进程已不存在，视为成功
+        pass
+    except Exception as e:
+        errors.append(f"SIGTERM 发送失败: {e}")
+
+    # 简单等待一下查看是否退出
+    time.sleep(0.5)
+    if _check_process_running(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            errors.append(f"SIGKILL 发送失败: {e}")
+
+    # 写入审计日志
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_version_force_stop",
+        target=version,
+        details={
+            "install_path": str(install_path),
+            "pid": pid,
+            "errors": errors,
+        },
+        ip_address=get_client_ip(request),
+    )
+
+    info = _get_version_status(version)
+    if _check_process_running(pid):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="尝试发送终止信号后进程仍在运行，请手动检查系统进程",
+        )
+
+    return {
+        "success": True,
+        "message": f"Nginx 版本 {version} 已强制停止",
+        "version": info,
+    }
+
+
+@router.post(
+    "/force_release_http_port",
+    summary="强制释放 HTTP 端口（默认 80），终止占用该端口的进程",
+)
+async def force_release_http_port(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    port: int = 80,
+):
+    """
+    强制释放指定 HTTP 端口（默认 80）。
+
+    实现方式：
+    - 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
+    注意：该能力较强，仅应授予有权限的用户使用。
+    """
+    try:
+        cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"执行 lsof 失败: {e}",
+        )
+
+    if result.returncode not in (0, 1):
+        # 1 表示没有匹配记录，也视为正常
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
+        )
+
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    pids: List[int] = []
+    for line in lines:
+        try:
+            pids.append(int(line))
+        except ValueError:
+            continue
+
+    if not pids:
+        return {
+            "success": True,
+            "message": f"端口 {port} 当前没有进程在监听",
+            "port": port,
+            "pids": [],
+        }
+
+    results = _kill_pids(pids)
+
+    # 审计
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_force_release_http_port",
+        target=str(port),
+        details={
+            "port": port,
+            "pids": pids,
+            "results": results,
+        },
+        ip_address=get_client_ip(request),
+    )
+
+    return {
+        "success": True,
+        "message": f"已尝试终止占用端口 {port} 的进程",
+        "port": port,
+        "pids": pids,
+        "results": results,
+    }
+
+
+@router.delete(
+    "/versions/{version}",
+    summary="删除指定版本的 Nginx（仅在未运行状态下允许）",
+)
+async def delete_nginx_version(
+    version: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    删除指定版本的 Nginx。
+
+    约束：
+    - 若该版本仍在运行，则拒绝删除，提示先停止；
+    - 删除内容包括：
+      - 安装目录：<versions_root>/<version>
+      - 对应构建目录：<build_root>/<version>
+      - 对应编译日志文件（如存在）
+    """
+    install_path = _get_install_path(version)
+    build_root = _get_build_root()
+    build_dir = build_root / version
+    log_path = _get_build_log_path(version)
+
+    info = _get_version_status(version)
+    if info.running:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Nginx 版本 {version} 正在运行，请先停止后再删除",
+        )
+
+    # 删除安装目录
+    if install_path.exists():
+        try:
+            shutil.rmtree(install_path, ignore_errors=False)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"删除安装目录失败: {e}",
+            )
+
+    # 删除构建目录（忽略错误）
+    if build_dir.exists():
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+    # 删除编译日志文件（忽略错误）
+    if log_path.exists():
+        try:
+            log_path.unlink()
+        except Exception:
+            pass
+
+    # 审计
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_version_delete",
+        target=version,
+        details={
+            "install_path": str(install_path),
+            "build_dir": str(build_dir),
+            "build_log_path": str(log_path),
+        },
+        ip_address=get_client_ip(request),
+    )
+
+    return {
+        "success": True,
+        "message": f"Nginx 版本 {version} 已删除",
+        "version": version,
+    }

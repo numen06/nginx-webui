@@ -34,6 +34,23 @@ export const nginxApi = {
     return api.post(`/nginx/versions/${encodeURIComponent(version)}/stop`)
   },
 
+  // 强制停止指定版本
+  forceStopVersion(version) {
+    return api.post(`/nginx/versions/${encodeURIComponent(version)}/force_stop`)
+  },
+
+  // 强制释放 HTTP 端口（默认 80）
+  forceReleaseHttpPort(port = 80) {
+    return api.post('/nginx/force_release_http_port', null, {
+      params: { port }
+    })
+  },
+
+  // 删除指定版本（仅在未运行状态下允许）
+  deleteVersion(version) {
+    return api.delete(`/nginx/versions/${encodeURIComponent(version)}`)
+  },
+
   // 获取编译日志
   getBuildLog(version) {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/build_log`)
