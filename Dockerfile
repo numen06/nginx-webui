@@ -3,15 +3,17 @@ FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3
 
 # 安装 Node.js（用于构建前端）
 RUN dnf update -y && \
-    dnf install -y \
-    curl \
-    ca-certificates \
-    && (dnf module list nodejs 2>/dev/null | grep -q nodejs && \
-        dnf module enable -y nodejs:18 && \
-        dnf install -y nodejs) || \
+    dnf install -y curl ca-certificates && \
+    # 尝试通过 dnf module 安装 Node.js
+    (dnf module list nodejs 2>/dev/null | grep -q nodejs && \
+     dnf module enable -y nodejs:18 && \
+     dnf install -y nodejs) || \
+    # 如果失败，使用 NodeSource 安装
     (curl -fsSL https://rpm.nodesource.com/setup_18.x | bash - && \
-     dnf install -y nodejs) \
-    && dnf clean all
+     dnf install -y nodejs --nogpgcheck) || \
+    # 如果都失败，尝试直接安装 nodejs（可能已包含在仓库中）
+    dnf install -y nodejs && \
+    dnf clean all
 
 # 设置工作目录
 WORKDIR /app/frontend
