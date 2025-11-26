@@ -3,6 +3,8 @@
 """
 import os
 import shutil
+import tarfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -44,15 +46,15 @@ class MkdirRequest(BaseModel):
     name: str
 
 
-def get_version_root_dir(version: Optional[str] = None) -> Path:
+def get_version_install_dir(version: Optional[str] = None) -> Path:
     """
-    获取指定 Nginx 版本的根目录（html 目录）
+    获取指定 Nginx 版本的安装目录
     
     Args:
         version: Nginx 版本号，如果为 None 则使用当前活动版本
     
     Returns:
-        Path: Nginx 版本的 html 目录绝对路径
+        Path: Nginx 版本的安装目录绝对路径
     
     Raises:
         HTTPException: 如果版本不存在或未编译
@@ -64,19 +66,13 @@ def get_version_root_dir(version: Optional[str] = None) -> Path:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Nginx 版本 {version} 不存在"
             )
-        html_dir = install_path / "html"
-        if not html_dir.exists():
-            html_dir.mkdir(parents=True, exist_ok=True)
-        return html_dir
+        return install_path
     else:
         # 如果没有指定版本，尝试使用当前活动版本
         from app.utils.nginx_versions import get_active_version
         active = get_active_version()
         if active:
-            html_dir = active["install_path"] / "html"
-            if not html_dir.exists():
-                html_dir.mkdir(parents=True, exist_ok=True)
-            return html_dir
+            return active["install_path"]
         else:
             # 如果没有活动版本，使用第一个已编译的版本
             versions_root = _get_versions_root()
@@ -90,23 +86,46 @@ def get_version_root_dir(version: Optional[str] = None) -> Path:
                 if child.is_dir():
                     executable = child / "sbin" / "nginx"
                     if executable.exists():
-                        html_dir = child / "html"
-                        if not html_dir.exists():
-                            html_dir.mkdir(parents=True, exist_ok=True)
-                        return html_dir
+                        return child
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="未找到任何已编译的 Nginx 版本"
             )
 
 
-def validate_path(relative_path: Optional[str], version: Optional[str] = None) -> Path:
+def get_version_root_dir(version: Optional[str] = None, root_only: bool = False) -> Path:
+    """
+    获取指定 Nginx 版本的文件管理根目录
+    
+    Args:
+        version: Nginx 版本号，如果为 None 则使用当前活动版本
+        root_only: 如果为 True，返回整个安装目录；如果为 False，返回 html 目录
+    
+    Returns:
+        Path: Nginx 版本的文件管理根目录绝对路径
+    
+    Raises:
+        HTTPException: 如果版本不存在或未编译
+    """
+    install_path = get_version_install_dir(version)
+    
+    if root_only:
+        return install_path
+    else:
+        html_dir = install_path / "html"
+        if not html_dir.exists():
+            html_dir.mkdir(parents=True, exist_ok=True)
+        return html_dir
+
+
+def validate_path(relative_path: Optional[str], version: Optional[str] = None, root_only: bool = False) -> Path:
     """
     验证并规范化文件路径，防止目录遍历攻击
     
     Args:
         relative_path: 相对路径
         version: Nginx 版本号
+        root_only: 如果为 True，使用整个安装目录；如果为 False，使用 html 目录
     
     Returns:
         Path: 规范化后的绝对路径
@@ -114,7 +133,7 @@ def validate_path(relative_path: Optional[str], version: Optional[str] = None) -
     Raises:
         HTTPException: 如果路径无效或超出允许范围
     """
-    root_dir = get_version_root_dir(version)
+    root_dir = get_version_root_dir(version, root_only)
     
     # 规范化相对路径
     if relative_path:
@@ -147,12 +166,13 @@ def validate_path(relative_path: Optional[str], version: Optional[str] = None) -
 async def list_files(
     path: Optional[str] = Query(None, description="目录路径（相对路径）"),
     version: Optional[str] = Query(None, description="Nginx 版本号"),
+    root_only: bool = Query(False, description="是否管理整个安装目录（而非仅 html）"),
     current_user: User = Depends(get_current_user)
 ):
     """列出指定目录下的文件"""
     try:
-        root_dir = get_version_root_dir(version)
-        target_path = validate_path(path, version)
+        root_dir = get_version_root_dir(version, root_only)
+        target_path = validate_path(path, version, root_only)
         
         if not target_path.exists():
             raise HTTPException(
@@ -184,7 +204,8 @@ async def list_files(
             "success": True,
             "files": [f.dict() for f in files],
             "path": path or "",
-            "version": version
+            "version": version,
+            "root_only": root_only
         }
     except HTTPException:
         raise
@@ -549,5 +570,114 @@ async def download_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"下载文件失败: {str(e)}"
+        )
+
+
+@router.post("/deploy-package", summary="部署静态资源包到 html 目录")
+async def deploy_package(
+    request: Request,
+    file: UploadFile = File(...),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
+    extract_to_subdir: bool = Form(False, description="是否解压到子目录（使用包名）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    上传并解压静态资源包（zip/tar.gz）到指定 Nginx 版本的 html 目录
+    
+    支持的格式：
+    - .zip
+    - .tar.gz / .tgz
+    """
+    try:
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="未选择文件"
+            )
+        
+        # 获取 html 目录
+        html_dir = get_version_root_dir(version, root_only=False)
+        
+        # 保存上传的文件到临时目录
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_path = Path(tmp_file.name)
+        
+        try:
+            # 确定解压目标目录
+            if extract_to_subdir:
+                # 使用包名（不含扩展名）作为子目录名
+                package_name = Path(file.filename).stem
+                if package_name.endswith('.tar'):
+                    package_name = package_name[:-4]
+                target_dir = html_dir / package_name
+            else:
+                target_dir = html_dir
+            
+            # 确保目标目录存在
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 根据文件类型解压
+            filename_lower = file.filename.lower()
+            if filename_lower.endswith('.zip'):
+                with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                    zip_ref.extractall(target_dir)
+            elif filename_lower.endswith(('.tar.gz', '.tgz')):
+                with tarfile.open(tmp_path, 'r:gz') as tar_ref:
+                    tar_ref.extractall(target_dir)
+            elif filename_lower.endswith('.tar'):
+                with tarfile.open(tmp_path, 'r') as tar_ref:
+                    tar_ref.extractall(target_dir)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar"
+                )
+            
+            # 记录操作日志
+            create_audit_log(
+                db=db,
+                user_id=current_user.id,
+                username=current_user.username,
+                action="package_deploy",
+                target=str(target_dir.relative_to(html_dir)),
+                details={
+                    "filename": file.filename,
+                    "size": len(content),
+                    "version": version,
+                    "extract_to_subdir": extract_to_subdir
+                },
+                ip_address=get_client_ip(request)
+            )
+            
+            return {
+                "success": True,
+                "message": f"静态资源包已成功部署到 {target_dir.relative_to(html_dir)}",
+                "target_dir": str(target_dir.relative_to(html_dir))
+            }
+        finally:
+            # 清理临时文件
+            if tmp_path.exists():
+                tmp_path.unlink()
+                
+    except HTTPException:
+        raise
+    except zipfile.BadZipFile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP 文件格式错误或已损坏"
+        )
+    except tarfile.TarError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"TAR 文件格式错误: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"部署静态资源包失败: {str(e)}"
         )
 

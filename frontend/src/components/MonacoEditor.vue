@@ -78,8 +78,9 @@ defineExpose({
 .monaco-editor-container {
   width: 100%;
   height: v-bind(height);
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
+  background-color: var(--bg-tertiary);
 }
 </style>
 

@@ -18,6 +18,13 @@
                 :value="version.version"
               />
             </el-select>
+            <el-switch
+              v-model="rootOnly"
+              active-text="整个目录"
+              inactive-text="仅 HTML"
+              style="margin-right: 8px"
+              @change="handleRootOnlyChange"
+            />
             <span class="current-path">当前路径：/{{ currentPath || '' }}</span>
             <el-button size="small" @click="handleGoRoot">根目录</el-button>
             <el-button size="small" @click="handleGoParent" :disabled="!currentPath">上一级</el-button>
@@ -121,6 +128,7 @@ const loading = ref(false)
 const uploadInput = ref(null)
 const versions = ref([])
 const selectedVersion = ref(null)
+const rootOnly = ref(false)
 
 const editDialogVisible = ref(false)
 const editForm = ref({
@@ -161,13 +169,18 @@ const handleVersionChange = () => {
   loadFiles()
 }
 
+const handleRootOnlyChange = () => {
+  currentPath.value = ''
+  loadFiles()
+}
+
 const loadFiles = async () => {
   if (!selectedVersion.value) {
     return
   }
   try {
     loading.value = true
-    const response = await filesApi.listFiles(currentPath.value || undefined, selectedVersion.value)
+    const response = await filesApi.listFiles(currentPath.value || undefined, selectedVersion.value, rootOnly.value)
     fileList.value = response.files || []
   } catch (error) {
     ElMessage.error(error.detail || '加载文件列表失败')
@@ -405,7 +418,7 @@ onMounted(async () => {
 
 .current-path {
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
   margin-right: 8px;
 }
 
@@ -417,7 +430,7 @@ onMounted(async () => {
 
 .file-name.is-dir {
   cursor: pointer;
-  color: #409eff;
+  color: var(--nginx-green);
 }
 
 .file-icon {
@@ -427,7 +440,7 @@ onMounted(async () => {
 .edit-file-path {
   margin-bottom: 8px;
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .version-info {
@@ -437,7 +450,7 @@ onMounted(async () => {
 .running-badge {
   margin-left: 8px;
   font-size: 12px;
-  color: #67c23a;
+  color: var(--nginx-green);
 }
 </style>
 

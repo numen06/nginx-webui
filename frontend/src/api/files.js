@@ -2,11 +2,27 @@ import api from './index'
 
 export const filesApi = {
   // 列出文件
-  listFiles(path, version) {
+  listFiles(path, version, rootOnly) {
     const params = {}
     if (path) params.path = path
     if (version) params.version = version
+    if (rootOnly) params.root_only = rootOnly
     return api.get('/files', { params })
+  },
+
+  // 部署静态资源包
+  deployPackage(file, version, extractToSubdir) {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (version) {
+      formData.append('version', version)
+    }
+    formData.append('extract_to_subdir', extractToSubdir)
+    return api.post('/files/deploy-package', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
   },
 
   // 获取文件内容

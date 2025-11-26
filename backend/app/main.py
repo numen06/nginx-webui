@@ -16,8 +16,8 @@ from app.routers import (
     certificates,
     nginx_manager,
     users,
-    statistics,
 )
+from app.routers import statistics
 
 # 初始化数据库
 init_db()

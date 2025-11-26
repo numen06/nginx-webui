@@ -292,7 +292,7 @@ const handleRollback = async () => {
 }
 
 .text-muted {
-  color: #909399;
+  color: var(--text-muted);
   font-style: italic;
 }
 </style>

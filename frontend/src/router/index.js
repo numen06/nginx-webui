@@ -39,6 +39,12 @@ const routes = [
         meta: { title: '文件管理' }
       },
       {
+        path: 'static-package',
+        name: 'StaticPackage',
+        component: () => import('../views/StaticPackage.vue'),
+        meta: { title: '静态资源包管理' }
+      },
+      {
         path: 'certificates',
         name: 'Certificates',
         component: () => import('../views/Certificates.vue'),

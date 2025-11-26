@@ -8,9 +8,9 @@
         :default-active="activeMenu"
         router
         class="sidebar-menu"
-        background-color="#304156"
-        text-color="#bfcbd9"
-        active-text-color="#409EFF"
+        background-color="var(--bg-secondary)"
+        text-color="var(--text-secondary)"
+        active-text-color="var(--nginx-green)"
       >
         <el-menu-item index="/dashboard">
           <el-icon><Odometer /></el-icon>
@@ -27,6 +27,10 @@
         <el-menu-item index="/files">
           <el-icon><Folder /></el-icon>
           <span>文件管理</span>
+        </el-menu-item>
+        <el-menu-item index="/static-package">
+          <el-icon><Box /></el-icon>
+          <span>静态资源包</span>
         </el-menu-item>
         <el-menu-item index="/certificates">
           <el-icon><Lock /></el-icon>
@@ -85,11 +89,13 @@ const handleLogout = () => {
 <style scoped>
 .layout-container {
   height: 100vh;
+  background-color: var(--bg-primary);
 }
 
 .sidebar {
-  background-color: #304156;
-  color: #fff;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border-right: 1px solid var(--border-color);
 }
 
 .logo {
@@ -97,33 +103,39 @@ const handleLogout = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-bottom: 1px solid #434a55;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
 }
 
 .logo h2 {
-  color: #fff;
+  color: var(--nginx-green);
   font-size: 18px;
   margin: 0;
+  font-weight: 600;
+  text-shadow: 0 0 10px var(--nginx-green-glow);
 }
 
 .sidebar-menu {
   border-right: none;
   height: calc(100vh - 60px);
   overflow-y: auto;
+  background-color: var(--bg-secondary);
 }
 
 .header {
-  background-color: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
+  box-shadow: var(--shadow-sm);
 }
 
 .header-left {
   font-size: 16px;
   font-weight: bold;
+  color: var(--text-primary);
 }
 
 .header-right {
@@ -133,11 +145,11 @@ const handleLogout = () => {
 }
 
 .username {
-  color: #606266;
+  color: var(--text-secondary);
 }
 
 .main-content {
-  background-color: #f5f7fa;
+  background-color: var(--bg-primary);
   padding: 20px;
   overflow-y: auto;
 }

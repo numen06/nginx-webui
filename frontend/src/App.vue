@@ -28,11 +28,14 @@ onMounted(() => {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 #app {
   width: 100%;
   height: 100vh;
+  background-color: var(--bg-primary);
 }
 </style>
 

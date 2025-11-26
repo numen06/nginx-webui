@@ -482,8 +482,9 @@ onMounted(() => {
 .log-filters {
   margin-bottom: 15px;
   padding: 15px;
-  background-color: #f5f7fa;
+  background-color: var(--bg-tertiary);
   border-radius: 4px;
+  border: 1px solid var(--border-color);
 }
 
 .filter-form {
@@ -510,14 +511,14 @@ onMounted(() => {
 }
 
 .text-muted {
-  color: #909399;
+  color: var(--text-muted);
   font-style: italic;
   font-size: 12px;
 }
 
 .log-content {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
   padding: 20px;
   border-radius: 4px;
   min-height: 400px;
@@ -525,6 +526,7 @@ onMounted(() => {
   overflow-y: auto;
   font-family: 'Courier New', monospace;
   font-size: 12px;
+  border: 1px solid var(--border-color);
 }
 
 .log-content pre {
@@ -535,8 +537,8 @@ onMounted(() => {
 }
 
 .log-content pre mark {
-  background-color: #ffeb3b;
-  color: #000;
+  background-color: var(--nginx-green);
+  color: var(--text-white);
   padding: 2px 4px;
   border-radius: 2px;
   font-weight: bold;
@@ -557,12 +559,12 @@ onMounted(() => {
 }
 
 .pagination-info {
-  color: #606266;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
 .filter-info {
-  color: #409eff;
+  color: var(--nginx-green);
 }
 </style>
 

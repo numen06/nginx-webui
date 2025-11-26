@@ -101,22 +101,43 @@ const handleLogin = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient-dark);
+  position: relative;
+  overflow: hidden;
+}
+
+.login-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(circle at 20% 50%, rgba(0, 150, 57, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(0, 168, 107, 0.1) 0%, transparent 50%);
+  pointer-events: none;
 }
 
 .login-box {
   width: 400px;
   padding: 40px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: var(--bg-card);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+  border: 1px solid var(--border-color);
+  position: relative;
+  z-index: 1;
 }
 
 .title {
   text-align: center;
   margin-bottom: 30px;
-  color: #303133;
-  font-size: 24px;
+  color: var(--nginx-green);
+  font-size: 28px;
+  font-weight: 600;
+  text-shadow: 0 0 15px var(--nginx-green-glow);
+  letter-spacing: 1px;
 }
 
 .login-form {
@@ -125,6 +146,14 @@ const handleLogin = async () => {
 
 .login-button {
   width: 100%;
+  background: var(--gradient-nginx);
+  border: none;
+  font-weight: 500;
+  letter-spacing: 1px;
+}
+
+.login-button:hover {
+  box-shadow: 0 0 20px var(--nginx-green-glow);
 }
 </style>
 
