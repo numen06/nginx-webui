@@ -1,5 +1,5 @@
-# Nginx WebUI Dockerfile
-FROM ubuntu:22.04
+# 使用阿里云的 Python 3.11 轻量级镜像作为基础
+FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive
@@ -35,7 +35,8 @@ WORKDIR /app
 COPY backend/ /app/backend/
 
 # 安装 Python 依赖
-RUN cd /app/backend && pip3 install --no-cache-dir -r requirements.txt
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+ cd /app/backend && pip3 install --no-cache-dir -r requirements.txt
 
 # 复制前端构建产物
 COPY frontend/dist/ /usr/share/nginx/html/

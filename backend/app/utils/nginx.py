@@ -410,29 +410,40 @@ def validate_config(content: str) -> Dict[str, Any]:
         active = get_active_version()
         cmd = [str(nginx_executable), "-t", "-c", temp_file]
         
-        # 如果存在活动版本，需要指定 prefix 参数
-        # 这样 nginx 才能正确找到 mime.types 等文件
+        # 必须指定 prefix 参数，这样 nginx 才能正确找到 mime.types 等文件
         if active is not None:
+            # 使用活动版本的安装路径作为 prefix
             cmd.extend(["-p", str(active["install_path"])])
         else:
-            # 如果没有活动版本，尝试使用配置文件中的路径
-            config = get_config()
-            config_path = Path(config.nginx.config_path)
-            if not config_path.is_absolute():
-                backend_dir = Path(__file__).resolve().parents[2]
-                config_path = (backend_dir / config_path).resolve()
+            # 如果没有活动版本，需要从当前配置文件路径推断 prefix
+            config_path = get_config_path()
             
-            # 尝试从主配置文件所在目录推断 prefix
-            # 如果主配置文件在 nginx/ 目录下，prefix 可能是项目根目录
-            if "nginx" in str(config_path):
-                # 尝试使用 nginx/versions/1.28.0 作为 prefix（如果存在）
-                versions_root = config_path.parent.parent / "versions"
+            # 如果配置文件在 versions/<version>/conf/ 目录下
+            # prefix 应该是 versions/<version> 目录
+            if "versions" in str(config_path) and "conf" in str(config_path):
+                # 从 conf/nginx.conf 向上找到 versions/<version> 目录
+                current = config_path.parent  # conf 目录
+                if current.name == "conf":
+                    install_path = current.parent  # versions/<version> 目录
+                    if install_path.exists() and install_path.is_dir():
+                        cmd.extend(["-p", str(install_path)])
+            else:
+                # 尝试从配置文件路径推断
+                # 如果配置文件在 nginx/versions/ 下，使用该版本目录作为 prefix
+                config = get_config()
+                versions_root = Path(config.nginx.versions_root)
+                if not versions_root.is_absolute():
+                    backend_dir = Path(__file__).resolve().parents[2]
+                    versions_root = (backend_dir / versions_root).resolve()
+                
                 if versions_root.exists():
-                    # 查找第一个版本目录
-                    for version_dir in sorted(versions_root.iterdir()):
+                    # 查找所有版本目录，尝试找到匹配的
+                    for version_dir in sorted(versions_root.iterdir(), reverse=True):
                         if version_dir.is_dir():
-                            cmd.extend(["-p", str(version_dir)])
-                            break
+                            conf_file = version_dir / "conf" / "nginx.conf"
+                            if conf_file.exists():
+                                cmd.extend(["-p", str(version_dir)])
+                                break
 
         # 使用 nginx -t -c 测试临时配置文件
         result = subprocess.run(
