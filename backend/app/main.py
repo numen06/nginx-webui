@@ -1,9 +1,11 @@
 """
 FastAPI 应用主入口
 """
-from fastapi import FastAPI
+from pathlib import Path
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
 from app.config import get_config
@@ -38,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由
+# 注册 API 路由（必须在静态文件之前注册）
 app.include_router(auth.router)
 app.include_router(config.router)
 app.include_router(logs.router)
@@ -50,15 +52,50 @@ app.include_router(users.router)
 app.include_router(statistics.router)
 app.include_router(system.router)
 
-
-@app.get("/", summary="API 根路径")
-async def root():
-    """API 根路径"""
-    return {
-        "message": "Nginx WebUI API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+# 挂载静态文件目录（前端打包文件）
+static_dir = Path(__file__).parent.parent / "static"
+if static_dir.exists():
+    # 挂载静态资源目录（CSS、JS、图片等）
+    assets_dir = static_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+    
+    # 提供前端静态文件服务（SPA 应用）
+    # 注意：这个路由必须在最后注册，因为它会匹配所有路径
+    @app.get("/{path:path}", include_in_schema=False)
+    async def serve_frontend(path: str, request: Request):
+        """提供前端静态文件服务，支持 SPA 路由"""
+        # 安全检查：确保路径在 static_dir 内
+        try:
+            file_path = (static_dir / path).resolve()
+            static_path = static_dir.resolve()
+            if not str(file_path).startswith(str(static_path)):
+                # 路径越界，返回 index.html
+                path = "index.html"
+        except Exception:
+            path = "index.html"
+        
+        # 尝试返回请求的文件
+        file_path = static_dir / path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        
+        # 如果是目录或文件不存在，返回 index.html（SPA 路由支持）
+        index_file = static_dir / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+else:
+    # 如果没有静态文件目录，提供 API 根路径
+    @app.get("/", summary="API 根路径")
+    async def root():
+        """API 根路径"""
+        return {
+            "message": "Nginx WebUI API",
+            "version": "1.0.0",
+            "docs": "/docs"
+        }
 
 
 @app.get("/api/health", summary="健康检查")

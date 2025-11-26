@@ -2,33 +2,30 @@
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1
 
 # 设置环境变量
-ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# 安装系统依赖（包含编译 Nginx 所需工具链和 Node.js）
-RUN apt-get update && apt-get install -y \
+# 安装系统依赖（包含编译 Nginx 所需工具链）
+RUN dnf update -y && \
+    dnf install -y \
     nginx \
     python3 \
     python3-pip \
-    python3-venv \
     certbot \
     openssl \
     supervisor \
     curl \
-    build-essential \
     gcc \
+    gcc-c++ \
     make \
-    libpcre3 \
-    libpcre3-dev \
-    zlib1g \
-    zlib1g-dev \
-    libssl-dev \
+    pcre \
+    pcre-devel \
+    zlib \
+    zlib-devel \
+    openssl-devel \
     ca-certificates \
     wget \
     tar \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && dnf clean all
 
 # 设置工作目录
 WORKDIR /app
@@ -40,16 +37,8 @@ COPY backend/ /app/backend/
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
  cd /app/backend && pip3 install --no-cache-dir -r requirements.txt
 
-# 复制前端代码并构建
-COPY frontend/ /app/frontend/
-WORKDIR /app/frontend
-RUN npm config set registry https://registry.npmmirror.com && \
-    npm install && \
-    npm run build
-
-# 复制前端构建产物到 nginx 目录
-RUN mkdir -p /usr/share/nginx/html && \
-    cp -r /app/frontend/dist/* /usr/share/nginx/html/
+# 复制前端打包文件到后端目录（通过 Python/FastAPI 提供静态文件服务）
+COPY frontend/dist/ /app/backend/static/
 
 # 恢复工作目录
 WORKDIR /app
@@ -60,10 +49,10 @@ COPY nginx/conf.d/ /etc/nginx/conf.d/
 
 # 创建必要的目录（包括多版本 Nginx 相关目录）
 RUN mkdir -p /app/backend/data/backups \
+    && mkdir -p /app/backend/static \
     && mkdir -p /etc/nginx/ssl \
     && mkdir -p /var/log/nginx \
     && mkdir -p /var/run \
-    && mkdir -p /usr/share/nginx/html \
     && mkdir -p /app/nginx/versions \
     && mkdir -p /app/nginx/build \
     && mkdir -p /app/nginx/build_logs
@@ -109,7 +98,7 @@ RUN mkdir -p /etc/supervisor/conf.d && \
     echo 'stderr_logfile=/var/log/nginx/nginx_stderr.log' >> /etc/supervisor/conf.d/nginx.conf && \
     echo '' > /etc/supervisor/conf.d/fastapi.conf && \
     echo '[program:fastapi]' >> /etc/supervisor/conf.d/fastapi.conf && \
-    echo 'command=cd /app/backend && python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000' >> /etc/supervisor/conf.d/fastapi.conf && \
+    echo 'command=cd /app/backend && python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000' >> /etc/supervisor/conf.d/fastapi.conf && \
     echo 'autostart=true' >> /etc/supervisor/conf.d/fastapi.conf && \
     echo 'autorestart=true' >> /etc/supervisor/conf.d/fastapi.conf && \
     echo 'priority=20' >> /etc/supervisor/conf.d/fastapi.conf && \
