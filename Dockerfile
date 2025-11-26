@@ -34,8 +34,8 @@ ENV APP_PORT=8000
 
 # 安装系统依赖（包含编译 Nginx 所需工具链）
 RUN dnf update -y && \
-    # 安装基础工具
-    dnf install -y ca-certificates curl wget tar gcc gcc-c++ make pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
+    # 安装基础工具（基础镜像已包含 Python 和 pip）
+    dnf install -y ca-certificates curl wget tar && \
     # 安装编译工具
     dnf install -y gcc gcc-c++ make && \
     # 安装开发库（编译 nginx 所需）
@@ -50,7 +50,7 @@ COPY backend/ /app/backend/
 
 # 安装 Python 依赖
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
- cd /app/backend && pip3 install --no-cache-dir -r requirements.txt
+ cd /app/backend && pip install --no-cache-dir -r requirements.txt
 
 # 从第一阶段复制前端构建产物
 COPY --from=frontend-builder /app/frontend/dist/ /app/backend/static/
