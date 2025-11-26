@@ -35,7 +35,7 @@ ENV APP_PORT=8000
 # 安装系统依赖（包含编译 Nginx 所需工具链）
 RUN dnf update -y && \
     # 安装基础工具
-    dnf install -y python3 python3-pip ca-certificates curl wget tar && \
+    dnf install -y ca-certificates curl wget tar gcc gcc-c++ make pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
     # 安装编译工具
     dnf install -y gcc gcc-c++ make && \
     # 安装开发库（编译 nginx 所需）
