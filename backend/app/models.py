@@ -1,0 +1,76 @@
+"""
+数据库模型定义
+"""
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy.orm import relationship
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
+
+Base = declarative_base()
+
+
+class User(Base):
+    """用户模型"""
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    # 关联关系
+    operation_logs = relationship("OperationLog", back_populates="user")
+    config_backups = relationship("ConfigBackup", back_populates="creator")
+    certificates = relationship("Certificate", back_populates="creator")
+
+
+class ConfigBackup(Base):
+    """配置文件备份模型"""
+    __tablename__ = "config_backups"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    # 关联关系
+    creator = relationship("User", back_populates="config_backups")
+
+
+class OperationLog(Base):
+    """操作日志模型"""
+    __tablename__ = "operation_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    username = Column(String(50), nullable=False, index=True)
+    action = Column(String(50), nullable=False, index=True)  # 操作类型
+    target = Column(String(500), nullable=True)  # 操作目标
+    details = Column(Text, nullable=True)  # 操作详情（JSON 格式）
+    ip_address = Column(String(50), nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    # 关联关系
+    user = relationship("User", back_populates="operation_logs")
+
+
+class Certificate(Base):
+    """证书模型"""
+    __tablename__ = "certificates"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(255), nullable=False, index=True)
+    cert_path = Column(String(500), nullable=False)
+    key_path = Column(String(500), nullable=False)
+    issuer = Column(String(255), nullable=True)  # 证书颁发者（如 Let's Encrypt）
+    valid_from = Column(DateTime, nullable=True)
+    valid_to = Column(DateTime, nullable=True, index=True)
+    auto_renew = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    # 关联关系
+    creator = relationship("User", back_populates="certificates")
+

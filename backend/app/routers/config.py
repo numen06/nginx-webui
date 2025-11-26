@@ -1,0 +1,253 @@
+"""
+Nginx 配置管理路由
+"""
+from typing import Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+
+from app.database import get_db
+from app.auth import get_current_user, get_current_user_basic, User
+from app.utils.nginx import get_config_content, save_config_content, test_config, reload_nginx, get_nginx_status
+from app.utils.backup import create_backup, list_backups, restore_backup, get_backup
+from app.utils.audit import create_audit_log, get_client_ip
+from fastapi import Request
+
+router = APIRouter(prefix="/api/config", tags=["config"])
+
+
+class ConfigUpdateRequest(BaseModel):
+    """配置更新请求"""
+    content: str
+
+
+class ConfigRestoreRequest(BaseModel):
+    """配置恢复请求"""
+    backup_id: int
+
+
+@router.get("", summary="读取当前 Nginx 配置")
+async def get_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """读取当前 Nginx 配置文件内容"""
+    try:
+        content = get_config_content()
+        return {
+            "success": True,
+            "content": content
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取配置失败: {str(e)}"
+        )
+
+
+@router.post("", summary="更新 Nginx 配置")
+async def update_config(
+    request_data: ConfigUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """更新 Nginx 配置文件（自动备份）"""
+    try:
+        # 先创建备份
+        backup = create_backup(db, created_by_id=current_user.id)
+        
+        # 保存新配置
+        save_config_content(request_data.content)
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_update",
+            target="nginx.conf",
+            details={"backup_id": backup.id},
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": "配置已保存，已创建备份",
+            "backup_id": backup.id
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"保存配置失败: {str(e)}"
+        )
+
+
+@router.post("/test", summary="测试配置有效性")
+async def test_nginx_config(
+    current_user: User = Depends(get_current_user)
+):
+    """测试 Nginx 配置是否有效"""
+    result = test_config()
+    return result
+
+
+@router.post("/reload", summary="重新加载 Nginx 配置")
+async def reload_nginx_config(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """重新加载 Nginx 配置"""
+    # 先测试配置
+    test_result = test_config()
+    if not test_result["success"]:
+        return {
+            "success": False,
+            "message": "配置测试失败，无法重载",
+            "test_result": test_result
+        }
+    
+    # 重载配置
+    result = reload_nginx()
+    
+    # 记录操作日志
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="config_reload",
+        target="nginx",
+        details={"result": result["success"]},
+        ip_address=get_client_ip(request)
+    )
+    
+    return result
+
+
+@router.get("/status", summary="获取 Nginx 运行状态")
+async def get_status(
+    current_user: User = Depends(get_current_user)
+):
+    """获取 Nginx 运行状态"""
+    status_info = get_nginx_status()
+    return status_info
+
+
+@router.get("/backups", summary="获取备份列表")
+async def get_config_backups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取所有配置备份列表"""
+    backups = list_backups(db)
+    return {
+        "success": True,
+        "backups": [
+            {
+                "id": backup.id,
+                "filename": backup.filename,
+                "file_path": backup.file_path,
+                "created_at": backup.created_at.isoformat() if backup.created_at else None,
+                "created_by_id": backup.created_by_id
+            }
+            for backup in backups
+        ]
+    }
+
+
+@router.post("/backup", summary="手动创建配置备份")
+async def create_config_backup(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """手动创建配置备份"""
+    try:
+        backup = create_backup(db, created_by_id=current_user.id)
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="backup_create",
+            target=backup.filename,
+            details={"backup_id": backup.id},
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": "备份创建成功",
+            "backup": {
+                "id": backup.id,
+                "filename": backup.filename,
+                "file_path": backup.file_path,
+                "created_at": backup.created_at.isoformat() if backup.created_at else None
+            }
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建备份失败: {str(e)}"
+        )
+
+
+@router.post("/restore/{backup_id}", summary="恢复指定备份")
+async def restore_config_backup(
+    backup_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """恢复指定备份的配置"""
+    backup = get_backup(db, backup_id)
+    if not backup:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="备份不存在"
+        )
+    
+    try:
+        # 恢复备份前先创建当前配置的备份
+        current_backup = create_backup(db, created_by_id=current_user.id)
+        
+        # 恢复备份
+        success = restore_backup(db, backup_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="恢复备份失败"
+            )
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="backup_restore",
+            target=backup.filename,
+            details={"backup_id": backup_id, "current_backup_id": current_backup.id},
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": "配置已恢复",
+            "backup_id": backup_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"恢复备份失败: {str(e)}"
+        )
+
