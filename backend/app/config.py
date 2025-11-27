@@ -11,6 +11,35 @@ from pydantic import BaseModel, Field
 from functools import lru_cache
 
 
+def _safe_mkdir(path: Path) -> None:
+    """安全地创建目录，处理挂载点等特殊情况"""
+    if path.exists():
+        return
+    
+    try:
+        # 尝试直接创建
+        path.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, OSError) as e:
+        # 如果失败，逐级创建（从根到目标）
+        try:
+            # path.parents 是从根到目标父目录的顺序，需要反转
+            parents_list = list(path.parents)
+            parents_list.reverse()  # 从根目录开始
+            for parent in parents_list:
+                if not parent.exists():
+                    try:
+                        parent.mkdir(exist_ok=True)
+                    except (FileExistsError, OSError):
+                        # 忽略父目录创建错误，继续尝试
+                        pass
+            # 最后创建目标目录
+            if not path.exists():
+                path.mkdir(exist_ok=True)
+        except (FileExistsError, OSError):
+            # 如果仍然失败，可能是挂载点或权限问题，忽略错误
+            pass
+
+
 class NginxConfig(BaseModel):
     """Nginx 相关配置"""
 
@@ -155,9 +184,9 @@ class ConfigManager:
             backup=BackupConfig(**backup_config),
         )
         
-        # 确保备份目录存在
+        # 确保备份目录存在（安全处理，避免挂载点冲突）
         backup_dir = Path(self._config.backup.backup_dir)
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        _safe_mkdir(backup_dir)
         
         return self._config
     

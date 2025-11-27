@@ -10,23 +10,46 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from app.config import get_config
 from app.models import Base, User, ConfigBackup, OperationLog, Certificate
 
 
+def _safe_mkdir(path: Path) -> None:
+    """安全地创建目录，处理挂载点等特殊情况"""
+    if path.exists():
+        return
+    
+    try:
+        # 尝试直接创建
+        path.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, OSError):
+        # 如果失败，逐级创建（从根到目标）
+        try:
+            # path.parents 是从根到目标父目录的顺序，需要反转
+            parents_list = list(path.parents)
+            parents_list.reverse()  # 从根目录开始
+            for parent in parents_list:
+                if not parent.exists():
+                    try:
+                        parent.mkdir(exist_ok=True)
+                    except (FileExistsError, OSError):
+                        # 忽略父目录创建错误，继续尝试
+                        pass
+            # 最后创建目标目录
+            if not path.exists():
+                path.mkdir(exist_ok=True)
+        except (FileExistsError, OSError):
+            # 如果仍然失败，可能是挂载点或权限问题，忽略错误
+            pass
+
+
 def _get_db_path() -> Path:
-    """获取数据库文件路径，使用配置中的 DATA_ROOT"""
-    config = get_config()
-    # 从配置中获取数据根目录，默认为 /app/data
+    """获取数据库文件路径，使用环境变量 DATA_ROOT（避免循环依赖）"""
+    # 直接从环境变量获取，不依赖 get_config()，避免循环依赖
     data_root = os.getenv("DATA_ROOT", "/app/data").rstrip("/")
     db_dir = Path(data_root) / "backend"
     
     # 安全地创建目录
-    try:
-        db_dir.mkdir(parents=True, exist_ok=True)
-    except (FileExistsError, OSError):
-        # 如果目录已存在（可能是挂载点），继续执行
-        pass
+    _safe_mkdir(db_dir)
     
     return db_dir / "app.db"
 
