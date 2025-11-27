@@ -1,5 +1,5 @@
 # ==================== 第一阶段：构建前端 ====================
-FROM node:18-bullseye AS frontend-builder
+FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/node:20.16 AS frontend-builder
 
 # 设置工作目录
 WORKDIR /app/frontend
