@@ -36,24 +36,34 @@ WORKDIR /app
 
 # 复制后端代码
 COPY backend/ /app/backend/
+# 复制 Nginx 配置到 /app/nginx，并替换系统目录
+RUN mkdir -p /app/nginx
+COPY nginx/ /app/nginx/
+RUN rm -rf /etc/nginx && ln -s /app/nginx /etc/nginx
 
 # 安装 Python 依赖
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 RUN pip install --upgrade pip
 RUN cd /app/backend && pip install --no-cache-dir -r requirements.txt
 
+# 准备数据目录结构，便于通过 /app/data 单目录持久化
+RUN mkdir -p /app/data/backend \
+    && mkdir -p /app/data/logs \
+    && mkdir -p /app/data/ssl \
+    && mkdir -p /app/data/nginx/versions \
+    && mkdir -p /app/data/nginx/build_logs \
+    && mkdir -p /app/nginx \
+    && rm -rf /app/backend/data && ln -s /app/data/backend /app/backend/data \
+    && rm -rf /var/log/nginx && ln -s /app/data/logs /var/log/nginx \
+    && rm -rf /app/nginx/ssl && ln -s /app/data/ssl /app/nginx/ssl \
+    && rm -rf /app/nginx/versions && ln -s /app/data/nginx/versions /app/nginx/versions \
+    && rm -rf /app/nginx/build_logs && ln -s /app/data/nginx/build_logs /app/nginx/build_logs
+
 # 从第一阶段复制前端构建产物
 COPY --from=frontend-builder /app/frontend/dist/ /app/backend/static/
 
 # 恢复工作目录
 WORKDIR /app
-
-# 创建必要的目录
-RUN mkdir -p /app/backend/data/backups \
-    && mkdir -p /app/backend/static \
-    && mkdir -p /app/nginx/versions \
-    && mkdir -p /app/nginx/build \
-    && mkdir -p /app/nginx/build_logs
 
 # 创建启动脚本（初始化数据库并启动 FastAPI）
 RUN echo '#!/bin/bash' > /app/start.sh && \

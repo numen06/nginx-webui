@@ -1,6 +1,7 @@
 """
 FastAPI 应用主入口
 """
+
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,9 +27,7 @@ init_db()
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="Nginx WebUI API",
-    description="Nginx 管理系统的后端 API",
-    version="1.0.0"
+    title="Nginx WebUI API", description="Nginx 管理系统的后端 API", version="1.0.0"
 )
 
 # 配置 CORS
@@ -59,7 +58,7 @@ if static_dir.exists():
     assets_dir = static_dir / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
-    
+
     # 提供前端静态文件服务（SPA 应用）
     # 注意：这个路由必须在最后注册，因为它会匹配所有路径
     @app.get("/{path:path}", include_in_schema=False)
@@ -74,38 +73,31 @@ if static_dir.exists():
                 path = "index.html"
         except Exception:
             path = "index.html"
-        
+
         # 尝试返回请求的文件
         file_path = static_dir / path
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
-        
+
         # 如果是目录或文件不存在，返回 index.html（SPA 路由支持）
         index_file = static_dir / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
-        
+
         return JSONResponse(status_code=404, content={"detail": "Not found"})
-else:
-    # 如果没有静态文件目录，提供 API 根路径
-    @app.get("/", summary="API 根路径")
-    async def root():
-        """API 根路径"""
-        return {
-            "message": "Nginx WebUI API",
-            "version": "1.0.0",
-            "docs": "/docs"
-        }
+
+
+@app.get("/", summary="API 根路径")
+async def root():
+    """API 根路径"""
+    return {"message": "Nginx WebUI API", "version": "1.0.0", "docs": "/docs"}
 
 
 @app.get("/api/health", summary="健康检查")
 async def health_check():
     """健康检查端点"""
     config = get_config()
-    return {
-        "status": "ok",
-        "config_loaded": config is not None
-    }
+    return {"status": "ok", "config_loaded": config is not None}
 
 
 @app.exception_handler(Exception)
@@ -113,22 +105,18 @@ async def global_exception_handler(request, exc):
     """全局异常处理"""
     return JSONResponse(
         status_code=500,
-        content={
-            "success": False,
-            "message": "服务器内部错误",
-            "detail": str(exc)
-        }
+        content={"success": False, "message": "服务器内部错误", "detail": str(exc)},
     )
 
 
 if __name__ == "__main__":
     import uvicorn
+
     config = get_config()
     # 调试模式下启用自动重载
     uvicorn.run(
         "app.main:app",
         host=config.app.host,
         port=config.app.port,
-        reload=config.app.debug  # 根据配置决定是否启用自动重载
+        reload=config.app.debug,  # 根据配置决定是否启用自动重载
     )
-
