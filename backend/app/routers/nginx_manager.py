@@ -9,10 +9,13 @@ import subprocess
 import signal
 import time
 import ssl
+import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Callable
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import urlopen, build_opener, HTTPHandler, HTTPSHandler
+from urllib.request import Request as URLRequest
+from urllib.error import HTTPError, URLError
 
 from fastapi import (
     APIRouter,
@@ -24,6 +27,7 @@ from fastapi import (
     File,
     Form,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -34,6 +38,10 @@ from app.utils.audit import create_audit_log, get_client_ip
 
 
 router = APIRouter(prefix="/api/nginx", tags=["nginx"])
+
+# 下载进度存储（线程安全）
+_download_progress: Dict[str, Dict] = {}
+_progress_lock = threading.Lock()
 
 
 class NginxVersionInfo(BaseModel):
@@ -66,6 +74,31 @@ class NginxBuildResult(BaseModel):
     message: str
     version: str
     build_log_path: Optional[str] = None
+
+
+class UrlCheckRequest(BaseModel):
+    """URL 检查请求"""
+
+    url: str
+
+
+class UrlCheckResult(BaseModel):
+    """URL 检查结果"""
+
+    accessible: bool
+    content_length: Optional[int] = None
+    status_code: Optional[int] = None
+    error: Optional[str] = None
+
+
+class DownloadProgress(BaseModel):
+    """下载进度"""
+
+    status: str
+    downloaded: int
+    total: Optional[int] = None
+    percentage: int
+    error: Optional[str] = None
 
 
 def _get_versions_root() -> Path:
@@ -451,21 +484,186 @@ def _list_all_versions() -> List[NginxVersionInfo]:
     return items
 
 
-def _download_to_file(url: str, dest: Path) -> None:
-    """将远程 URL 内容下载到本地文件（简单实现，避免额外依赖）"""
+def _check_url_accessible(url: str, timeout: int = 10) -> Dict[str, any]:
+    """
+    检查 URL 是否可以下载
+
+    使用与下载函数相同的逻辑，只验证可访问性
+
+    Returns:
+        dict: {
+            "accessible": bool,
+            "content_length": int | None,
+            "status_code": int | None,
+            "error": str | None
+        }
+    """
+    parsed = urlparse(url)
+
+    # 基本 URL 验证
+    if not parsed.scheme or not parsed.netloc:
+        return {
+            "accessible": False,
+            "content_length": None,
+            "status_code": None,
+            "error": "无效的 URL 格式",
+        }
+
+    # 创建请求（与下载函数保持一致）
+    req = URLRequest(url)
+    req.add_header("User-Agent", "Mozilla/5.0 (compatible; Nginx-WebUI/1.0)")
+
+    try:
+        # 使用与下载相同的 SSL 上下文处理
+        if parsed.scheme == "https":
+            context = ssl._create_unverified_context()
+            resp = urlopen(req, context=context, timeout=timeout)
+        else:
+            resp = urlopen(req, timeout=timeout)
+
+        # 读取响应头信息
+        content_length = resp.headers.get("Content-Length")
+        file_size = None
+        if content_length:
+            try:
+                file_size = int(content_length)
+            except:
+                pass
+
+        # 获取状态码
+        status_code = getattr(resp, "code", None) or getattr(resp, "status", 200)
+
+        # 读取少量数据验证连接
+        resp.read(1024)
+        resp.close()
+
+        return {
+            "accessible": True,
+            "content_length": file_size,
+            "status_code": status_code,
+            "error": None,
+        }
+
+    except HTTPError as e:
+        code = getattr(e, "code", None)
+        reason = getattr(e, "reason", "") or ""
+        return {
+            "accessible": False,
+            "content_length": None,
+            "status_code": code,
+            "error": (
+                f"HTTP {code}: {reason}"
+                if code
+                else f"HTTP 错误: {reason}" if reason else "HTTP 错误"
+            ),
+        }
+    except URLError as e:
+        reason = getattr(e, "reason", "") or str(e)
+        return {
+            "accessible": False,
+            "content_length": None,
+            "status_code": None,
+            "error": f"网络错误: {reason}",
+        }
+    except Exception as e:
+        # 最简单的错误处理
+        error_str = str(e) if e else "未知错误"
+        return {
+            "accessible": False,
+            "content_length": None,
+            "status_code": None,
+            "error": f"检查失败: {error_str}",
+        }
+
+
+def _download_to_file(url: str, dest: Path, progress_key: Optional[str] = None) -> None:
+    """
+    将远程 URL 内容下载到本地文件，支持进度显示
+
+    Args:
+        url: 下载地址
+        dest: 目标文件路径
+        progress_key: 进度存储的键，用于查询下载进度
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(url)
 
-    # 某些环境（尤其是本地 macOS）可能缺少系统 CA，导致 HTTPS 校验证书失败。
-    # 这里显式使用不校验证书的 SSL 上下文，保证下载功能可用。
-    if parsed.scheme == "https":
-        context = ssl._create_unverified_context()
-        resp = urlopen(url, context=context)
-    else:
-        resp = urlopen(url)
+    # 初始化进度
+    if progress_key:
+        with _progress_lock:
+            _download_progress[progress_key] = {
+                "status": "downloading",
+                "downloaded": 0,
+                "total": None,
+                "percentage": 0,
+                "error": None,
+            }
 
-    with resp, open(dest, "wb") as f:
-        shutil.copyfileobj(resp, f)
+    try:
+        # 创建请求
+        req = URLRequest(url)
+        req.add_header("User-Agent", "Mozilla/5.0 (compatible; Nginx-WebUI/1.0)")
+
+        # 某些环境（尤其是本地 macOS）可能缺少系统 CA，导致 HTTPS 校验证书失败。
+        # 这里显式使用不校验证书的 SSL 上下文，保证下载功能可用。
+        if parsed.scheme == "https":
+            context = ssl._create_unverified_context()
+            resp = urlopen(req, context=context, timeout=300)  # 5分钟超时
+        else:
+            resp = urlopen(req, timeout=300)  # 5分钟超时
+
+        # 获取文件大小
+        content_length = resp.headers.get("Content-Length")
+        total_size = int(content_length) if content_length else None
+
+        if progress_key:
+            with _progress_lock:
+                _download_progress[progress_key]["total"] = total_size
+
+        # 下载文件并更新进度
+        downloaded = 0
+        chunk_size = 8192  # 8KB chunks
+
+        with open(dest, "wb") as f:
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+
+                # 更新进度
+                if progress_key:
+                    percentage = 0
+                    if total_size:
+                        percentage = min(100, int((downloaded / total_size) * 100))
+                    elif downloaded > 0:
+                        percentage = -1  # 未知大小，显示为进行中
+
+                    with _progress_lock:
+                        _download_progress[progress_key].update(
+                            {
+                                "downloaded": downloaded,
+                                "total": total_size,
+                                "percentage": percentage,
+                            }
+                        )
+
+        # 标记完成
+        if progress_key:
+            with _progress_lock:
+                _download_progress[progress_key].update(
+                    {"status": "completed", "percentage": 100}
+                )
+
+    except Exception as e:
+        # 标记错误
+        if progress_key:
+            with _progress_lock:
+                _download_progress[progress_key].update(
+                    {"status": "error", "error": str(e)}
+                )
+        raise
 
 
 def _infer_version_from_filename(filename: str) -> Optional[str]:
@@ -502,6 +700,104 @@ async def list_nginx_versions(
 
 
 @router.post(
+    "/versions/download/check-url",
+    response_model=UrlCheckResult,
+    summary="检查下载地址是否可以访问",
+)
+async def check_download_url(
+    payload: UrlCheckRequest,
+    current_user: User = Depends(get_current_user),
+) -> UrlCheckResult:
+    """
+    检查指定的下载地址是否可以访问
+
+    用于在下载前验证 URL 是否有效
+    """
+    url = payload.url.strip()
+
+    if not url:
+        return UrlCheckResult(
+            accessible=False,
+            content_length=None,
+            status_code=None,
+            error="URL 不能为空",
+        )
+
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return UrlCheckResult(
+                accessible=False,
+                content_length=None,
+                status_code=None,
+                error="无效的 URL 格式",
+            )
+    except Exception as e:
+        return UrlCheckResult(
+            accessible=False,
+            content_length=None,
+            status_code=None,
+            error=f"URL 解析失败: {e}",
+        )
+
+    try:
+        result = _check_url_accessible(url)
+
+        # 确保 result 是字典类型
+        if not isinstance(result, dict):
+            return UrlCheckResult(
+                accessible=False,
+                content_length=None,
+                status_code=None,
+                error=f"检查函数返回了无效的数据类型: {type(result)}",
+            )
+
+        # 直接使用字典中的值，_check_url_accessible 已确保类型正确
+        return UrlCheckResult(
+            accessible=bool(result.get("accessible", False)),
+            content_length=result.get("content_length"),
+            status_code=result.get("status_code"),
+            error=result.get("error"),
+        )
+    except Exception as e:
+        # 捕获任何意外的异常，确保返回有效的 UrlCheckResult
+        return UrlCheckResult(
+            accessible=False,
+            content_length=None,
+            status_code=None,
+            error=f"检查失败: {str(e)}",
+        )
+
+
+@router.get(
+    "/versions/download/progress/{version}",
+    response_model=DownloadProgress,
+    summary="获取下载进度",
+)
+async def get_download_progress(
+    version: str,
+    current_user: User = Depends(get_current_user),
+) -> DownloadProgress:
+    """
+    获取指定版本的下载进度
+    """
+    progress_key = f"download_{version}"
+    with _progress_lock:
+        progress = _download_progress.get(
+            progress_key,
+            {
+                "status": "not_started",
+                "downloaded": 0,
+                "total": None,
+                "percentage": 0,
+                "error": None,
+            },
+        )
+        # 返回 DownloadProgress 对象，确保格式一致
+        return DownloadProgress(**progress)
+
+
+@router.post(
     "/versions/download",
     response_model=NginxBuildResult,
     summary="在线下载指定版本 Nginx 源码包（不编译）",
@@ -520,6 +816,8 @@ async def download_and_build_nginx_version(
 
     仅负责下载并保存源码包，不进行编译。
     编译由 /versions/{version}/compile 接口触发。
+
+    下载进度可通过 /versions/download/progress/{version} 接口查询。
     """
     version = payload.version.strip()
     if not version:
@@ -546,10 +844,43 @@ async def download_and_build_nginx_version(
             detail=f"下载地址不合法: {e}",
         )
 
+    # 检查 URL 是否可访问
+    url_check = _check_url_accessible(url)
+
+    # 确保 url_check 是字典类型
+    if not isinstance(url_check, dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"URL 检查返回了无效的数据类型",
+        )
+
+    # 安全地访问字典
+    if not url_check.get("accessible", False):
+        error_msg = url_check.get("error", "未知错误")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"下载地址不可访问: {error_msg}",
+        )
+
     source_tar = _get_source_tar_path(version)
+    progress_key = f"download_{version}"
+
     try:
-        _download_to_file(url, source_tar)
+        # 异步下载，使用进度键
+        _download_to_file(url, source_tar, progress_key=progress_key)
+
+        # 清理进度信息（延迟清理，给前端时间获取最终状态）
+        def cleanup_progress():
+            time.sleep(5)  # 5秒后清理
+            with _progress_lock:
+                _download_progress.pop(progress_key, None)
+
+        threading.Thread(target=cleanup_progress, daemon=True).start()
+
     except Exception as e:
+        # 清理错误进度
+        with _progress_lock:
+            _download_progress.pop(progress_key, None)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"下载源码包失败: {e}",

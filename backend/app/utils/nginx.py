@@ -53,12 +53,120 @@ def get_config_path() -> Path:
     return config_path
 
 
+def _create_default_config() -> None:
+    """创建默认的 Nginx 配置文件"""
+    config = get_config()
+    config_path = get_config_path()
+    
+    # 如果配置文件已存在，不创建
+    if config_path.exists():
+        return
+    
+    # 确保目录存在
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    conf_dir = Path(config.nginx.conf_dir)
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 创建默认的 nginx.conf
+    default_nginx_conf = f"""## 在非 root 权限下运行时，禁用 user 指令以避免无意义的告警
+#user www-data;
+worker_processes auto;
+## PID 文件路径
+pid /var/run/nginx.pid;
+
+## 如果你本机没有 /etc/nginx/modules-enabled，可以先注释掉这行
+#include /etc/nginx/modules-enabled/*.conf;
+
+events {{
+    worker_connections 768;
+}}
+
+http {{
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    ## 使用系统自带的 mime.types
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    ## 将日志输出到配置的目录
+    access_log {config.nginx.access_log};
+    error_log  {config.nginx.error_log};
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss;
+
+    ## 引用 conf.d 配置
+    include {config.nginx.conf_dir}/*.conf;
+    ## 如果你有额外站点配置，可在上面这行基础上新增 include
+}}
+"""
+    
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(default_nginx_conf)
+    
+    # 创建默认的 conf.d/default.conf
+    default_conf_path = conf_dir / "default.conf"
+    if not default_conf_path.exists():
+        default_server_conf = f"""server {{
+    listen 80;
+    server_name _;
+
+    root {config.nginx.static_dir};
+    index index.html;
+
+    # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
+    location ~* \\.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)$ {{
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+        try_files $uri =404;
+    }}
+
+    # 前端静态文件
+    location / {{
+        # 先尝试直接访问文件，再尝试作为目录，最后回退到 index.html
+        try_files $uri $uri/ /index.html;
+    }}
+
+    # API 代理
+    location /api/ {{
+        proxy_pass http://127.0.0.1:{config.app.port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    # 健康检查
+    location /health {{
+        access_log off;
+        return 200 "healthy\\n";
+        add_header Content-Type text/plain;
+    }}
+}}
+"""
+        with open(default_conf_path, "w", encoding="utf-8") as f:
+            f.write(default_server_conf)
+    
+    # 确保日志目录存在
+    log_dir = Path(config.nginx.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+
 def get_config_content() -> str:
-    """读取 Nginx 配置文件内容"""
+    """读取 Nginx 配置文件内容，如果不存在则创建默认配置"""
     config_path = get_config_path()
 
     if not config_path.exists():
-        raise FileNotFoundError(f"Nginx 配置文件不存在: {config_path}")
+        # 自动创建默认配置
+        _create_default_config()
 
     with open(config_path, "r", encoding="utf-8") as f:
         return f.read()
@@ -79,7 +187,7 @@ def save_config_content(content: str) -> bool:
 
 def test_config() -> Dict[str, Any]:
     """
-    测试 Nginx 配置有效性
+    测试 Nginx 配置有效性，如果配置文件不存在则自动创建默认配置
 
     Returns:
         {
@@ -99,6 +207,11 @@ def test_config() -> Dict[str, Any]:
 
     try:
         config_path = get_config_path()
+        
+        # 如果配置文件不存在，自动创建默认配置
+        if not config_path.exists():
+            _create_default_config()
+        
         active = get_active_version()
         
         # 构建测试命令

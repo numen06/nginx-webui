@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.database import init_db
+from app.database import init_db, DB_PATH
 from app.config import get_config
 from app.routers import (
     auth,
@@ -50,6 +50,28 @@ app.include_router(nginx_manager.router)
 app.include_router(users.router)
 app.include_router(statistics.router)
 app.include_router(system.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时打印核心配置信息"""
+    cfg = get_config()
+    print("\n" + "=" * 60)
+    print("Nginx WebUI 核心配置路径")
+    print("=" * 60)
+    print(f"NGINX 配置目录:     {cfg.nginx.conf_dir}")
+    print(f"Nginx 配置文件:     {cfg.nginx.config_path}")
+    print(f"Nginx 可执行文件:   {cfg.nginx.executable}")
+    print(f"静态文件目录:       {cfg.nginx.static_dir}")
+    print(f"日志目录:           {cfg.nginx.log_dir}")
+    print(f"SSL 证书目录:       {cfg.nginx.ssl_dir}")
+    print(f"数据库文件:         {DB_PATH}")
+    print(f"备份目录:           {cfg.backup.backup_dir}")
+    print(f"Nginx 版本目录:     {cfg.nginx.versions_root}")
+    print(f"Nginx 构建目录:     {cfg.nginx.build_root}")
+    print(f"构建日志目录:       {cfg.nginx.build_logs_dir}")
+    print(f"应用监听地址:       {cfg.app.host}:{cfg.app.port}")
+    print("=" * 60 + "\n")
 
 # 挂载静态文件目录（前端打包文件）
 static_dir = Path(__file__).parent.parent / "static"

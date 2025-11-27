@@ -11,6 +11,18 @@ export const nginxApi = {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/status`)
   },
 
+  // 检查下载地址是否可以访问
+  checkDownloadUrl(url) {
+    return api.post('/nginx/versions/download/check-url', {
+      url: url
+    })
+  },
+
+  // 获取下载进度
+  getDownloadProgress(version) {
+    return api.get(`/nginx/versions/download/progress/${encodeURIComponent(version)}`)
+  },
+
   // 在线下载 Nginx 源码包（不编译）
   downloadAndBuild(payload) {
     return api.post('/nginx/versions/download', payload)

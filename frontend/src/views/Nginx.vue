@@ -136,6 +136,7 @@
       title="在线下载 Nginx 源码包"
       width="600px"
       :close-on-click-modal="false"
+      @close="resetDownloadForm"
     >
       <el-form :model="downloadForm" label-width="100px">
         <el-form-item label="版本号">
@@ -146,6 +147,7 @@
             default-first-option
             placeholder="选择或输入版本号，例如：1.28.0"
             style="width: 100%"
+            @change="handleVersionChange"
           >
             <el-option
               v-for="item in builtinVersions"
@@ -158,14 +160,80 @@
         <el-form-item label="下载地址">
           <el-input
             v-model="downloadForm.url"
-            placeholder="留空使用官方地址：https://nginx.org/download/nginx-&lt;version&gt;.tar.gz"
+            :placeholder="getDefaultUrl()"
+            @blur="handleUrlBlur"
+            clearable
+            type="textarea"
+            :rows="2"
+            style="width: 100%"
           />
+          <div style="margin-top: 4px; font-size: 12px; color: var(--el-text-color-secondary)">
+            默认地址: {{ getDefaultUrl() }}
+          </div>
+          <div v-if="isUrlCheckResultValid(urlCheckResult)" style="margin-top: 8px; font-size: 12px">
+            <el-alert
+              v-if="urlCheckResult && urlCheckResult.accessible === true"
+              type="success"
+              :closable="false"
+              show-icon
+            >
+              <template #default>
+                <span>地址可访问</span>
+                <span v-if="urlCheckResult && typeof urlCheckResult.content_length === 'number'" style="margin-left: 8px">
+                  (大小: {{ formatFileSize(urlCheckResult.content_length) }})
+                </span>
+              </template>
+            </el-alert>
+            <el-alert
+              v-else
+              type="error"
+              :closable="false"
+              show-icon
+            >
+              <template #default>
+                <span>地址不可访问: {{ getUrlCheckErrorMessage(urlCheckResult) }}</span>
+              </template>
+            </el-alert>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="downloadProgress.status === 'downloading'" label="下载进度">
+          <el-progress
+            :percentage="downloadProgress.percentage >= 0 ? downloadProgress.percentage : undefined"
+            :status="downloadProgress.percentage >= 0 ? undefined : 'active'"
+            :stroke-width="20"
+          >
+            <template #default="{ percentage }">
+              <span v-if="percentage >= 0">{{ percentage }}%</span>
+              <span v-else>下载中...</span>
+            </template>
+          </el-progress>
+          <div style="margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary)">
+            已下载: {{ formatFileSize(downloadProgress.downloaded) }}
+            <span v-if="downloadProgress.total">
+              / {{ formatFileSize(downloadProgress.total) }}
+            </span>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="downloadDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="downloadLoading" @click="handleDownload">
+          <el-button type="info" @click="downloadDialogVisible = false" :disabled="downloadLoading">
+            取消
+          </el-button>
+          <el-button
+            type="info"
+            :loading="checkingUrl"
+            :disabled="downloadLoading"
+            @click="checkUrl"
+          >
+            检查地址
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="downloadLoading"
+            :disabled="urlCheckResult && typeof urlCheckResult === 'object' && urlCheckResult.accessible === false"
+            @click="handleDownload"
+          >
             下载源码包
           </el-button>
         </span>
@@ -222,7 +290,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { nginxApi } from '../api/nginx'
 
@@ -240,6 +308,16 @@ const downloadForm = ref({
 })
 const downloadLoading = ref(false)
 const downloadDialogVisible = ref(false)
+const checkingUrl = ref(false)
+const urlCheckResult = ref(null)
+const downloadProgress = ref({
+  status: 'not_started',
+  downloaded: 0,
+  total: null,
+  percentage: 0,
+  error: null
+})
+let progressInterval = null
 
 // 正在下载/编译的版本列表（前端感知的“进行中”状态）
 const buildingVersions = ref([])
@@ -269,36 +347,344 @@ const loadVersions = async () => {
   }
 }
 
+const getDefaultUrl = () => {
+  if (downloadForm.value.version) {
+    return `https://nginx.org/download/nginx-${downloadForm.value.version}.tar.gz`
+  }
+  return 'https://nginx.org/download/nginx-<version>.tar.gz'
+}
+
+const handleVersionChange = () => {
+  // 当版本改变时，自动填充默认下载地址
+  if (downloadForm.value.version) {
+    const defaultUrl = getDefaultUrl()
+    // 如果当前 URL 为空或者是默认地址格式，则自动填充
+    if (!downloadForm.value.url || downloadForm.value.url.includes('nginx.org/download/nginx-')) {
+      downloadForm.value.url = defaultUrl
+    }
+    // 重置检查结果
+    urlCheckResult.value = null
+  }
+}
+
+const formatFileSize = (bytes) => {
+  if (!bytes) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+const isUrlCheckResultValid = (result) => {
+  return result && typeof result === 'object' && !Array.isArray(result) && result !== null
+}
+
+const getUrlCheckErrorMessage = (result) => {
+  try {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      return '未知错误'
+    }
+    
+    // 安全地访问 error 属性
+    if ('error' in result) {
+      const errorValue = result.error
+      if (errorValue === null || errorValue === undefined) {
+        return '未知错误'
+      }
+      if (typeof errorValue === 'string') {
+        return errorValue
+      }
+      // 如果不是字符串，尝试转换
+      try {
+        return String(errorValue)
+      } catch (e) {
+        return '未知错误'
+      }
+    }
+    
+    return '未知错误'
+  } catch (e) {
+    console.error('获取错误信息失败:', e)
+    return '未知错误'
+  }
+}
+
+const checkUrl = async () => {
+  // 如果没有输入 URL，使用默认地址
+  const url = downloadForm.value.url || getDefaultUrl()
+  
+  if (!url || url.includes('<version>')) {
+    ElMessage.warning('请先输入版本号或下载地址')
+    return
+  }
+
+  checkingUrl.value = true
+  urlCheckResult.value = null // 先清空之前的结果
+  
+  try {
+    const result = await nginxApi.checkDownloadUrl(url)
+    console.log('URL 检查结果:', result, typeof result, 'isArray:', Array.isArray(result))
+    
+    // 处理各种可能的返回格式
+    let processedResult = null
+    
+    try {
+      // 如果是字符串，尝试解析
+      if (typeof result === 'string') {
+        try {
+          processedResult = JSON.parse(result)
+          // 确保解析后是对象
+          if (!processedResult || typeof processedResult !== 'object' || Array.isArray(processedResult)) {
+            processedResult = {
+              accessible: false,
+              error: result
+            }
+          }
+        } catch (e) {
+          processedResult = {
+            accessible: false,
+            error: result
+          }
+        }
+      }
+      // 如果是对象且不是数组
+      else if (result && typeof result === 'object' && !Array.isArray(result) && result !== null) {
+        processedResult = result
+      }
+      // 其他情况（null, undefined, 数组等）
+      else {
+        processedResult = {
+          accessible: false,
+          error: '返回数据格式错误'
+        }
+      }
+    } catch (e) {
+      console.error('处理返回结果时出错:', e)
+      processedResult = {
+        accessible: false,
+        error: '处理返回结果失败'
+      }
+    }
+    
+    // 确保对象包含必要的属性，统一格式
+    // 安全地获取属性值
+    let accessible = false
+    if (processedResult.accessible === true || processedResult.accessible === 'true' || processedResult.accessible === 1) {
+      accessible = true
+    }
+    
+    let errorMsg = null
+    if (processedResult.error !== undefined && processedResult.error !== null) {
+      if (typeof processedResult.error === 'string') {
+        errorMsg = processedResult.error
+      } else {
+        errorMsg = String(processedResult.error)
+      }
+    }
+    
+    urlCheckResult.value = {
+      accessible: accessible,
+      content_length: (typeof processedResult.content_length === 'number') ? processedResult.content_length : null,
+      status_code: (typeof processedResult.status_code === 'number') ? processedResult.status_code : null,
+      error: errorMsg
+    }
+    
+    if (urlCheckResult.value.accessible) {
+      ElMessage.success('地址可访问')
+    } else {
+      const displayError = urlCheckResult.value.error || '未知错误'
+      ElMessage.error(`地址不可访问: ${displayError}`)
+    }
+  } catch (error) {
+    console.error('URL 检查出错:', error, typeof error, error?.constructor?.name)
+    
+    // 确保错误处理总是创建对象
+    let errorMessage = '检查失败'
+    
+    try {
+      // 处理各种错误格式
+      if (error) {
+        if (typeof error === 'string') {
+          errorMessage = error
+        } else if (typeof error === 'object' && error !== null) {
+          // 检查是否是 axios 错误对象
+          if (error.response) {
+            const responseData = error.response.data
+            if (typeof responseData === 'string') {
+              errorMessage = responseData
+            } else if (responseData && typeof responseData === 'object' && !Array.isArray(responseData)) {
+              // 安全地访问对象属性
+              errorMessage = responseData.detail || responseData.message || responseData.error || '请求失败'
+            } else {
+              errorMessage = error.response.statusText || `HTTP ${error.response.status}`
+            }
+          } else if (error.request) {
+            errorMessage = '无法连接到服务器'
+          } else {
+            // 尝试安全地获取错误信息
+            if ('detail' in error && typeof error.detail === 'string') {
+              errorMessage = error.detail
+            } else if ('message' in error && typeof error.message === 'string') {
+              errorMessage = error.message
+            } else if ('error' in error && typeof error.error === 'string') {
+              errorMessage = error.error
+            } else {
+              errorMessage = error.toString ? error.toString() : '检查失败'
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // 如果错误处理本身出错，使用简单的字符串
+      console.error('错误处理失败:', e)
+      errorMessage = '检查失败，请查看控制台'
+    }
+    
+    // 确保创建有效的错误对象
+    urlCheckResult.value = {
+      accessible: false,
+      content_length: null,
+      status_code: null,
+      error: String(errorMessage)
+    }
+    
+    ElMessage.error(String(errorMessage))
+  } finally {
+    checkingUrl.value = false
+  }
+}
+
+const handleUrlBlur = () => {
+  // URL 失焦时自动检查（如果有版本号或 URL）
+  if (downloadForm.value.version || downloadForm.value.url) {
+    // 延迟检查，避免在用户正在输入时触发
+    setTimeout(() => {
+      if (downloadForm.value.version || downloadForm.value.url) {
+        checkUrl()
+      }
+    }, 300)
+  }
+}
+
+const startProgressPolling = (version) => {
+  // 清除之前的定时器
+  if (progressInterval) {
+    clearInterval(progressInterval)
+  }
+  
+  // 重置进度
+  downloadProgress.value = {
+    status: 'downloading',
+    downloaded: 0,
+    total: null,
+    percentage: 0,
+    error: null
+  }
+  
+  // 开始轮询进度
+  progressInterval = setInterval(async () => {
+    try {
+      const progress = await nginxApi.getDownloadProgress(version)
+      downloadProgress.value = progress
+      
+      // 如果完成或出错，停止轮询
+      if (progress.status === 'completed' || progress.status === 'error') {
+        if (progressInterval) {
+          clearInterval(progressInterval)
+          progressInterval = null
+        }
+        
+        if (progress.status === 'error') {
+          ElMessage.error(`下载失败: ${progress.error || '未知错误'}`)
+        }
+      }
+    } catch (error) {
+      console.error('获取下载进度失败:', error)
+    }
+  }, 500) // 每500ms查询一次
+}
+
+const stopProgressPolling = () => {
+  if (progressInterval) {
+    clearInterval(progressInterval)
+    progressInterval = null
+  }
+  downloadProgress.value = {
+    status: 'not_started',
+    downloaded: 0,
+    total: null,
+    percentage: 0,
+    error: null
+  }
+}
+
+const resetDownloadForm = () => {
+  downloadForm.value = {
+    version: '',
+    url: ''
+  }
+  urlCheckResult.value = null
+  stopProgressPolling()
+  checkingUrl.value = false
+}
+
 const handleDownload = async () => {
   if (!downloadForm.value.version) {
     ElMessage.warning('请先输入版本号')
     return
   }
+  
+  // 如果 URL 可访问性检查失败，阻止下载
+  if (isUrlCheckResultValid(urlCheckResult.value) && urlCheckResult.value.accessible === false) {
+    ElMessage.warning('下载地址不可访问，请检查后重试')
+    return
+  }
+  
   const targetVersion = downloadForm.value.version
+  // 如果没有输入 URL，使用默认地址
+  const downloadUrl = downloadForm.value.url || getDefaultUrl()
+  
+  // 确保 URL 有效
+  if (!downloadUrl || downloadUrl.includes('<version>')) {
+    ElMessage.warning('下载地址无效，请检查版本号')
+    return
+  }
+  
   downloadLoading.value = true
   setBuilding(targetVersion, true)
+  
+  // 开始进度轮询
+  startProgressPolling(targetVersion)
+  
   try {
     await nginxApi.downloadAndBuild({
       version: targetVersion,
-      url: downloadForm.value.url || undefined
+      url: downloadUrl
     })
-    ElMessage.success('下载并编译任务完成')
+    
+    // 等待一下，确保进度更新到100%
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    
+    ElMessage.success('源码包下载成功')
     await loadVersions()
     downloadDialogVisible.value = false
+    resetDownloadForm()
   } catch (error) {
-    // 有些情况下后端实际上已经在后台继续下载/编译，但前端因为超时/代理中断收到了错误
-    // 这里在报错前先刷新一次列表，如果目标版本已经出现，则提示“可能已完成”
+    // 有些情况下后端实际上已经在后台继续下载，但前端因为超时收到了错误
+    // 这里在报错前先刷新一次列表，如果目标版本已经出现，则提示"可能已完成"
     await loadVersions()
-    const exists = versions.value?.some((v) => v.version === targetVersion)
+    const exists = versions.value?.some((v) => v.version === targetVersion && v.has_source)
     if (exists) {
-      ElMessage.success('下载/编译任务可能已在后台完成，请查看版本列表')
+      ElMessage.success('下载任务可能已在后台完成，请查看版本列表')
       downloadDialogVisible.value = false
+      resetDownloadForm()
     } else {
-      ElMessage.error(error.detail || '下载编译失败')
+      ElMessage.error(error.detail || '下载失败')
     }
   } finally {
     downloadLoading.value = false
     setBuilding(targetVersion, false)
+    stopProgressPolling()
   }
 }
 
@@ -416,6 +802,11 @@ const deleteVersion = async (version) => {
 
 onMounted(() => {
   loadVersions()
+})
+
+// 组件卸载时清理定时器
+onUnmounted(() => {
+  stopProgressPolling()
 })
 </script>
 

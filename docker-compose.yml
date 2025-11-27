@@ -6,10 +6,9 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ./nginx:/app/nginx
-      - ./data:/app/data
+      - /opt/nginx-webui/nginx:/app/nginx
+      - /opt/nginx-webui/data:/app/data
     environment:
       - APP_PORT=8001
-      - NGINX_DIR=/app/nginx
     restart: unless-stopped
 

@@ -23,7 +23,17 @@ api.interceptors.request.use(
 // 响应拦截器 - 处理错误
 api.interceptors.response.use(
   (response) => {
-    return response.data
+    // 确保返回的是对象，如果后端返回字符串则尝试解析
+    const data = response.data
+    if (typeof data === 'string') {
+      try {
+        return JSON.parse(data)
+      } catch (e) {
+        // 如果无法解析，返回包装后的对象
+        return { message: data, raw: data }
+      }
+    }
+    return data
   },
   (error) => {
     console.error('API 请求错误:', error)
@@ -36,13 +46,48 @@ api.interceptors.response.use(
         window.location.href = '/login'
       }
       // 返回错误信息，包含 detail 字段
-      const errorData = error.response.data || {}
+      let errorData = error.response.data
+      
+      // 如果 errorData 是字符串，尝试解析或创建对象
+      if (typeof errorData === 'string') {
+        try {
+          errorData = JSON.parse(errorData)
+        } catch (e) {
+          // 解析失败，创建一个对象包装字符串
+          errorData = { detail: errorData, message: errorData }
+        }
+      }
+      
+      // 如果 errorData 不存在或不是对象，创建一个默认对象
+      if (!errorData || typeof errorData !== 'object' || Array.isArray(errorData)) {
+        errorData = { 
+          detail: errorData ? String(errorData) : `请求失败 (${error.response.status})`,
+          message: errorData ? String(errorData) : `请求失败 (${error.response.status})`
+        }
+      }
+      
+      // 安全地展开 errorData，只复制字符串和基本类型的属性
       const errorObj = {
-        ...errorData,
         status: error.response.status,
         statusText: error.response.statusText,
-        detail: errorData.detail || errorData.message || `请求失败 (${error.response.status})`
+        detail: (errorData.detail && typeof errorData.detail === 'string') 
+          ? errorData.detail 
+          : (errorData.message && typeof errorData.message === 'string')
+            ? errorData.message
+            : `请求失败 (${error.response.status})`
       }
+      
+      // 安全地复制其他属性（只复制字符串、数字、布尔值）
+      for (const key in errorData) {
+        if (errorData.hasOwnProperty(key) && 
+            (typeof errorData[key] === 'string' || 
+             typeof errorData[key] === 'number' || 
+             typeof errorData[key] === 'boolean' ||
+             errorData[key] === null)) {
+          errorObj[key] = errorData[key]
+        }
+      }
+      
       return Promise.reject(errorObj)
     } else if (error.request) {
       // 请求已发出但没有收到响应
