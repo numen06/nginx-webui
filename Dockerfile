@@ -1,28 +1,16 @@
 # ==================== 第一阶段：构建前端 ====================
-FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1 AS frontend-builder
-
-# 安装 Node.js（用于构建前端）
-RUN dnf update -y && \
-    dnf install -y curl ca-certificates && \
-    dnf clean all
-
-# 使用 NodeSource 安装 Node.js 18
-RUN curl -fsSL https://rpm.nodesource.com/setup_18.x | bash - && \
-    dnf install -y nodejs --nogpgcheck && \
-    node --version && \
-    npm --version
+FROM node:18-bullseye AS frontend-builder
 
 # 设置工作目录
 WORKDIR /app/frontend
 
-# 复制前端代码
+# 仅复制依赖文件以利用缓存
 COPY frontend/package*.json ./
-COPY frontend/ ./
+RUN npm config set registry https://registry.npmmirror.com && npm install
 
-# 安装依赖并构建前端
-RUN npm config set registry https://registry.npmmirror.com && \
-    npm install && \
-    npm run build
+# 复制剩余前端代码并构建
+COPY frontend/ ./
+RUN npm run build
 
 # ==================== 第二阶段：运行后端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1
