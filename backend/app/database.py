@@ -6,6 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
 import bcrypt
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -13,10 +14,25 @@ from app.config import get_config
 from app.models import Base, User, ConfigBackup, OperationLog, Certificate
 
 
+def _get_db_path() -> Path:
+    """获取数据库文件路径，使用配置中的 DATA_ROOT"""
+    config = get_config()
+    # 从配置中获取数据根目录，默认为 /app/data
+    data_root = os.getenv("DATA_ROOT", "/app/data").rstrip("/")
+    db_dir = Path(data_root) / "backend"
+    
+    # 安全地创建目录
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, OSError):
+        # 如果目录已存在（可能是挂载点），继续执行
+        pass
+    
+    return db_dir / "app.db"
+
+
 # 数据库文件路径
-DB_DIR = Path(__file__).parent.parent / "data"
-DB_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DB_DIR / "app.db"
+DB_PATH = _get_db_path()
 
 # SQLite 数据库连接字符串
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
