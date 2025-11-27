@@ -1,15 +1,17 @@
 # ==================== 第一阶段：构建前端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/node:20.16 AS frontend-builder
 
-# 设置工作目录
+# 设置工作目录并确保权限
 WORKDIR /app/frontend
+RUN mkdir -p /app/frontend && chown -R node:node /app/frontend
+USER node
 
 # 仅复制依赖文件以利用缓存
-COPY frontend/package*.json ./
+COPY --chown=node:node frontend/package*.json ./
 RUN npm config set registry https://registry.npmmirror.com && npm install
 
 # 复制剩余前端代码并构建
-COPY frontend/ ./
+COPY --chown=node:node frontend/ ./
 RUN npm run build
 
 # ==================== 第二阶段：运行后端 ====================
