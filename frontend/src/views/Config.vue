@@ -23,7 +23,7 @@
             </el-button>
             <el-button type="warning" @click="handleReload">
               <el-icon><Refresh /></el-icon>
-              <span class="btn-label">重载配置</span>
+              <span class="btn-label">重新装载</span>
             </el-button>
           </div>
         </div>
@@ -119,7 +119,7 @@
       >
         <template #title>临时副本模式</template>
         <p class="working-copy-text">
-          保存后仅更新工作副本，需先测试/校验，再点击“重载配置”才能覆盖线上 nginx.conf 并自动备份。
+          保存后仅更新工作副本，需先测试/校验，再点击"重新装载"才能覆盖线上 nginx.conf 并自动备份。
         </p>
       </el-alert>
     </el-card>
@@ -307,7 +307,7 @@ const handleSaveShortcut = (event) => {
 
 const handleReload = async () => {
   try {
-    await ElMessageBox.confirm('确定要重载配置吗？', '提示', {
+    await ElMessageBox.confirm('确定要重新装载配置吗？', '提示', {
       type: 'warning'
     })
     
@@ -322,7 +322,7 @@ const handleReload = async () => {
     }
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('重载配置失败')
+      ElMessage.error('重新装载配置失败')
     }
   }
 }

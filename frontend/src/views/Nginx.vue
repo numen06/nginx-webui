@@ -1,13 +1,17 @@
 <template>
   <div class="nginx-manager">
     <div v-if="pinnedVersion" class="pinned-card-wrapper">
-      <el-card class="version-card pinned-card" shadow="hover">
+      <el-card 
+        class="version-card pinned-card" 
+        :class="{ 'running-version': pinnedVersion.running }"
+        shadow="hover"
+      >
         <template #header>
           <div class="version-card-header">
             <div class="version-title">
               <div class="version-name">
                 <span class="directory-text">目录：{{ pinnedVersion.directory }}</span>
-                <span class="running-flag">（运行版）</span>
+                <span class="running-flag">（发布版）</span>
               </div>
               <div class="version-tags">
                 <el-tag
@@ -69,7 +73,7 @@
                 <el-icon><Tools /></el-icon>
               </el-button>
             </el-tooltip>
-            <el-tooltip class="action-tooltip" content="升级到运行版" placement="top">
+            <el-tooltip class="action-tooltip" content="发布" placement="top">
               <el-button
                 circle
                 size="small"
@@ -172,7 +176,11 @@
           :key="row.directory"
           :span="12"
         >
-          <el-card class="version-card" shadow="hover">
+          <el-card 
+            class="version-card" 
+            :class="{ 'running-version': row.running }"
+            shadow="hover"
+          >
             <template #header>
               <div class="version-card-header">
                 <div class="version-title">
@@ -238,7 +246,7 @@
                   <el-icon><Tools /></el-icon>
                 </el-button>
               </el-tooltip>
-              <el-tooltip class="action-tooltip" content="升级到运行版" placement="top">
+              <el-tooltip class="action-tooltip" content="发布" placement="top">
                 <el-button
                   circle
                   size="small"
@@ -1026,10 +1034,10 @@ const upgradeToProduction = async (directory) => {
       : `目录 ${directory}`
   try {
     await ElMessageBox.confirm(
-      `确认将 ${directoryDesc} 升级到运行目录（last）？升级将覆盖当前运行版本的核心文件，但会保留 html/conf/logs 中的自定义内容。升级后需手动重启 Nginx 生效。`,
-      '升级确认',
+      `确认将 ${directoryDesc} 发布到运行目录（last）？发布将覆盖当前运行版本的核心文件，但会保留 html/conf/logs 中的自定义内容。发布后需手动重启 Nginx 生效。`,
+      '发布确认',
       {
-        confirmButtonText: '升级',
+        confirmButtonText: '发布',
         cancelButtonText: '取消',
         type: 'warning'
       }
@@ -1041,10 +1049,10 @@ const upgradeToProduction = async (directory) => {
   setBuilding(directory, true)
   try {
     await nginxApi.upgradeToProduction(directory)
-    ElMessage.success(`已将 ${getDisplayLabelByDirectory(directory)} 升级到运行版（last）`)
+    ElMessage.success(`已将 ${getDisplayLabelByDirectory(directory)} 发布到发布版（last）`)
     await loadVersions()
   } catch (error) {
-    ElMessage.error(error.detail || '升级运行版失败')
+    ElMessage.error(error.detail || '发布失败')
   } finally {
     setBuilding(directory, false)
   }
@@ -1205,6 +1213,18 @@ onUnmounted(() => {
 
 .force-release-btn {
   margin-left: 8px;
+}
+
+.running-version {
+  border: 2px solid var(--el-color-success);
+  box-shadow: 0 2px 12px 0 rgba(103, 194, 58, 0.3);
+  background: linear-gradient(to bottom, rgba(103, 194, 58, 0.05), transparent);
+}
+
+.running-version:hover {
+  box-shadow: 0 4px 16px 0 rgba(103, 194, 58, 0.4);
+  transform: translateY(-2px);
+  transition: all 0.3s ease;
 }
 
 .dialog-footer {
