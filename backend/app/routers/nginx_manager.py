@@ -1105,7 +1105,8 @@ async def start_nginx_version(
 
     约定：
     - 可执行文件位于 <versions_root>/<version>/sbin/nginx
-    - 使用全局配置中的 nginx.conf（/etc/nginx/nginx.conf），前缀为该版本的安装路径
+    - 使用编译版本自带的配置文件 <versions_root>/<version>/conf/nginx.conf
+    - 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 等路径
     """
     install_path = _get_install_path(version)
     executable = _get_nginx_executable(install_path)
@@ -1129,16 +1130,24 @@ async def start_nginx_version(
     # 确保必要目录存在（logs、conf 等）
     (install_path / "logs").mkdir(parents=True, exist_ok=True)
 
+    # 使用编译版本自带的配置文件（conf/nginx.conf）
+    # 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 路径
+    version_config_path = install_path / "conf" / "nginx.conf"
+    if not version_config_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
+        )
+
     # 先测试配置
     try:
         import subprocess
 
-        config_path = _get_nginx_config_path()
         test_cmd = [
             str(executable),
             "-t",
             "-c",
-            str(config_path),
+            str(version_config_path),
             "-p",
             str(install_path),
         ]
@@ -1166,11 +1175,11 @@ async def start_nginx_version(
     try:
         import subprocess
 
-        config_path = _get_nginx_config_path()
+        # 使用编译版本自带的配置文件
         cmd = [
             str(executable),
             "-c",
-            str(config_path),
+            str(version_config_path),
             "-p",
             str(install_path),
         ]
@@ -1228,7 +1237,7 @@ async def stop_nginx_version(
 
     约定：
     - 可执行文件位于 <versions_root>/<version>/sbin/nginx
-    - 使用全局配置中的 nginx.conf 和该版本安装路径作为前缀
+    - 使用编译版本自带的配置文件 <versions_root>/<version>/conf/nginx.conf
     """
     install_path = _get_install_path(version)
     executable = _get_nginx_executable(install_path)
@@ -1251,11 +1260,12 @@ async def stop_nginx_version(
     try:
         import subprocess
 
-        config_path = _get_nginx_config_path()
+        # 使用编译版本自带的配置文件
+        version_config_path = install_path / "conf" / "nginx.conf"
         cmd = [
             str(executable),
             "-c",
-            str(config_path),
+            str(version_config_path),
             "-p",
             str(install_path),
             "-s",
