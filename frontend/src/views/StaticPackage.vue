@@ -46,6 +46,13 @@
               刷新
             </el-button>
             <el-button
+              type="warning"
+              :icon="Download"
+              @click="extractDialogVisible = true"
+            >
+              提取资源包
+            </el-button>
+            <el-button
               type="cyan"
               :icon="Upload"
               @click="uploadDialogVisible = true"
@@ -157,6 +164,77 @@
       </template>
     </el-dialog>
 
+    <!-- 提取资源包对话框 -->
+    <el-dialog
+      v-model="extractDialogVisible"
+      title="提取静态资源包"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="extractForm" label-width="140px">
+        <el-form-item label="选择 Nginx 目录/版本">
+          <el-select
+            v-model="extractForm.directory"
+            placeholder="选择 Nginx 目录/版本"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="version in versions"
+              :key="version.directory"
+              :label="formatOptionLabel(version)"
+              :value="version.directory"
+            />
+          </el-select>
+        </el-form-item>
+        <el-alert
+          title="说明"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 15px"
+        >
+          <template #default>
+            将扫描静态文件夹（html目录）中的压缩包文件（.zip、.tar.gz、.tgz、.tar），
+            并将它们提取到资源包存储目录。
+          </template>
+        </el-alert>
+        <el-form-item label="提取选项">
+          <el-switch
+            v-model="extractForm.deleteAfterExtract"
+            active-text="提取后删除静态文件夹中的资源包"
+            inactive-text="保留源文件"
+          />
+        </el-form-item>
+        <el-alert
+          v-if="extractForm.deleteAfterExtract"
+          title="警告"
+          type="warning"
+          :closable="false"
+          style="margin-top: 10px"
+        >
+          <template #default>
+            提取后将删除静态文件夹（html目录）中的资源包文件，此操作不可恢复！
+          </template>
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="info" @click="extractDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
+          <el-button
+            type="warning"
+            :loading="extracting"
+            :disabled="!extractForm.directory"
+            @click="handleExtractConfirm"
+          >
+            <el-icon><Download /></el-icon>
+            <span class="btn-label">确认提取</span>
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <!-- 部署对话框 -->
     <el-dialog
       v-model="deployDialogVisible"
@@ -215,23 +293,29 @@ import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Upload, Document, Promotion, Delete, FolderOpened, CloseBold, UploadFilled, CircleCheck } from '@element-plus/icons-vue'
+import { Refresh, Upload, Document, Promotion, Delete, FolderOpened, CloseBold, UploadFilled, CircleCheck, Download } from '@element-plus/icons-vue'
 import { formatDateTime } from '../utils/date'
 
 const versions = ref([])
 const selectedDirectory = ref(null)
 const uploadDialogVisible = ref(false)
 const deployDialogVisible = ref(false)
+const extractDialogVisible = ref(false)
 const uploadForm = ref({})
 const deployForm = ref({
   filename: null,
   directory: null,
   extractToSubdir: false
 })
+const extractForm = ref({
+  directory: null,
+  deleteAfterExtract: false
+})
 const selectedFile = ref(null)
 const uploading = ref(false)
 const deploying = ref(null)
 const deleting = ref(null)
+const extracting = ref(false)
 const uploadRef = ref(null)
 const packages = ref([])
 const loadingPackages = ref(false)
@@ -277,6 +361,7 @@ const loadVersions = async () => {
       const stillExists = versions.value.some(v => v.directory === selectedDirectory.value)
       if (stillExists) {
         deployForm.value.directory = selectedDirectory.value
+        extractForm.value.directory = selectedDirectory.value
         return
       }
     }
@@ -285,6 +370,7 @@ const loadVersions = async () => {
     if (running) {
       selectedDirectory.value = running.directory
       deployForm.value.directory = running.directory
+      extractForm.value.directory = running.directory
       return
     }
 
@@ -292,11 +378,13 @@ const loadVersions = async () => {
     if (compiled) {
       selectedDirectory.value = compiled.directory
       deployForm.value.directory = compiled.directory
+      extractForm.value.directory = compiled.directory
       return
     }
 
     selectedDirectory.value = versions.value[0].directory
     deployForm.value.directory = versions.value[0].directory
+    extractForm.value.directory = versions.value[0].directory
   } catch (error) {
     console.error('加载版本列表失败:', error)
   }
@@ -401,6 +489,49 @@ const handleDeletePackage = async (filename) => {
     }
   } catch {
     // 用户取消
+  }
+}
+
+const handleExtractConfirm = async () => {
+  if (!extractForm.value.directory) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
+    return
+  }
+
+  // 如果选择删除，需要二次确认
+  if (extractForm.value.deleteAfterExtract) {
+    try {
+      await ElMessageBox.confirm(
+        '确定要提取资源包并删除静态文件夹中的资源包文件吗？此操作不可恢复！',
+        '确认提取',
+        {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+      )
+    } catch {
+      // 用户取消
+      return
+    }
+  }
+
+  extracting.value = true
+  try {
+    const res = await filesApi.extractPackage(
+      extractForm.value.directory,
+      extractForm.value.deleteAfterExtract
+    )
+    ElMessage.success(res.message || '提取成功')
+    extractDialogVisible.value = false
+    // 重置表单
+    extractForm.value.deleteAfterExtract = false
+    // 刷新列表
+    await loadPackages()
+  } catch (error) {
+    ElMessage.error(error.detail || '提取失败')
+  } finally {
+    extracting.value = false
   }
 }
 

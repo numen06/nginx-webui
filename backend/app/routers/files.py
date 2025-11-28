@@ -796,6 +796,125 @@ async def deploy_package(
         )
 
 
+@router.post("/extract-package", summary="从静态文件夹根目录提取资源包")
+async def extract_package(
+    request: Request,
+    directory: Optional[str] = Form(None, description="Nginx 目录名称（版本号）"),
+    delete_after_extract: bool = Form(False, description="提取后是否删除静态文件夹中的资源包"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    从静态文件夹根目录（html目录）扫描并提取资源包文件
+    
+    扫描html目录中的压缩包文件（.zip、.tar.gz、.tgz、.tar），
+    将它们复制到资源包存储目录。
+    
+    如果 delete_after_extract 为 True，提取后会删除 html 目录中的这些压缩包文件
+    """
+    try:
+        # directory 就是版本号，使用它来获取 html 目录
+        version = directory
+        # 获取 html 目录
+        html_dir = get_version_root_dir(version, root_only=False)
+        
+        if not html_dir.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="html 目录不存在"
+            )
+        
+        # 扫描html目录中的压缩包文件
+        package_extensions = ['.zip', '.tar.gz', '.tgz', '.tar']
+        found_packages = []
+        
+        for item in html_dir.iterdir():
+            if item.is_file():
+                filename_lower = item.name.lower()
+                # 检查是否是压缩包文件
+                if any(filename_lower.endswith(ext) for ext in package_extensions):
+                    found_packages.append(item)
+        
+        if not found_packages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="html 目录中未找到任何资源包文件（.zip、.tar.gz、.tgz、.tar）"
+            )
+        
+        # 获取资源包存储目录
+        packages_dir = get_packages_dir()
+        
+        extracted_packages = []
+        total_size = 0
+        
+        for package_file in found_packages:
+            filename = package_file.name
+            
+            # 目标路径
+            target_path = packages_dir / filename
+            
+            # 如果同名文件已存在，添加时间戳
+            if target_path.exists():
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                stem = package_file.stem
+                suffix = package_file.suffix
+                # 处理 .tar.gz 的情况
+                if stem.endswith('.tar') and suffix == '.gz':
+                    stem = stem[:-4]
+                    suffix = '.tar.gz'
+                filename = f"{stem}_{timestamp}{suffix}"
+                target_path = packages_dir / filename
+            
+            # 复制文件到资源包目录
+            shutil.copy2(package_file, target_path)
+            package_size = target_path.stat().st_size
+            total_size += package_size
+            
+            extracted_packages.append({
+                "original_name": package_file.name,
+                "saved_as": filename,
+                "size": package_size
+            })
+            
+            # 如果选择删除，删除html目录中的压缩包文件
+            if delete_after_extract:
+                package_file.unlink()
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="package_extract",
+            target=f"{len(extracted_packages)}个资源包",
+            details={
+                "extracted_count": len(extracted_packages),
+                "total_size": total_size,
+                "version": version,
+                "delete_after_extract": delete_after_extract,
+                "packages": [p["saved_as"] for p in extracted_packages]
+            },
+            ip_address=get_client_ip(request)
+        )
+        
+        return {
+            "success": True,
+            "message": f"成功提取 {len(extracted_packages)} 个资源包{'，已删除源文件' if delete_after_extract else ''}",
+            "extracted_count": len(extracted_packages),
+            "total_size": total_size,
+            "packages": extracted_packages
+        }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"提取资源包失败: {str(e)}"
+        )
+
+
 @router.put("/{file_path:path}", summary="修改文件内容")
 async def update_file(
     file_path: str,
@@ -1093,5 +1212,252 @@ async def get_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"读取文件失败: {str(e)}"
+        )
+
+
+@router.post("/compress", summary="压缩文件夹")
+async def compress_directory(
+    request: Request,
+    path: str = Form(..., description="要压缩的文件夹路径（相对路径）"),
+    format: str = Form("zip", description="压缩格式：zip 或 tar.gz"),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
+    root_only: bool = Form(False, description="是否管理整个安装目录（而非仅 html）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    压缩指定文件夹
+    
+    支持的格式：
+    - zip
+    - tar.gz
+    """
+    try:
+        # 验证格式
+        format = format.lower()
+        if format not in ['zip', 'tar.gz', 'tgz']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不支持的压缩格式，仅支持 zip、tar.gz、tgz"
+            )
+        
+        root_dir = get_version_root_dir(version, root_only)
+        target_path = validate_path(path, version, root_only)
+        
+        if not target_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="文件夹不存在"
+            )
+        
+        if not target_path.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="指定路径不是文件夹"
+            )
+        
+        # 检查目录是否为空
+        items = list(target_path.iterdir())
+        if not items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="文件夹为空，无法压缩"
+            )
+        
+        # 生成压缩包名称（使用文件夹名称）
+        folder_name = target_path.name
+        if format == 'zip':
+            ext = '.zip'
+        elif format in ['tar.gz', 'tgz']:
+            ext = '.tar.gz'
+        else:
+            ext = '.zip'
+        
+        # 压缩包保存在同一目录下
+        archive_name = f"{folder_name}{ext}"
+        archive_path = target_path.parent / archive_name
+        
+        # 如果同名文件已存在，添加时间戳
+        if archive_path.exists():
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_name = f"{folder_name}_{timestamp}{ext}"
+            archive_path = target_path.parent / archive_name
+        
+        # 创建压缩包
+        try:
+            if format == 'zip':
+                with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zip_ref:
+                    # 遍历文件夹中的所有文件和目录
+                    for item in target_path.rglob('*'):
+                        if item.is_file():
+                            # 计算相对路径（相对于要压缩的文件夹）
+                            arcname = item.relative_to(target_path)
+                            zip_ref.write(item, arcname)
+            else:  # tar.gz
+                with tarfile.open(archive_path, 'w:gz') as tar_ref:
+                    # 遍历文件夹中的所有文件和目录
+                    for item in target_path.rglob('*'):
+                        if item.is_file():
+                            # 计算相对路径（相对于要压缩的文件夹）
+                            arcname = item.relative_to(target_path)
+                            tar_ref.add(item, arcname=arcname)
+            
+            archive_size = archive_path.stat().st_size
+            relative_archive_path = str(archive_path.relative_to(root_dir))
+            
+            # 记录操作日志
+            create_audit_log(
+                db=db,
+                user_id=current_user.id,
+                username=current_user.username,
+                action="dir_compress",
+                target=path,
+                details={
+                    "archive_path": relative_archive_path,
+                    "archive_name": archive_name,
+                    "size": archive_size,
+                    "format": format,
+                    "version": version,
+                    "root_only": root_only
+                },
+                ip_address=get_client_ip(request)
+            )
+            
+            return {
+                "success": True,
+                "message": "文件夹压缩成功",
+                "archive_path": relative_archive_path,
+                "archive_name": archive_name,
+                "size": archive_size
+            }
+        except Exception as e:
+            # 如果压缩失败，删除已创建的文件
+            if archive_path.exists():
+                archive_path.unlink()
+            raise e
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"压缩文件夹失败: {str(e)}"
+        )
+
+
+@router.post("/extract", summary="解压压缩包到指定目录")
+async def extract_archive(
+    request: Request,
+    path: str = Form(..., description="压缩包文件路径（相对路径）"),
+    extract_to: Optional[str] = Form(None, description="解压目标目录（相对路径，默认为压缩包所在目录）"),
+    version: Optional[str] = Form(None, description="Nginx 版本号"),
+    root_only: bool = Form(False, description="是否管理整个安装目录（而非仅 html）"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    解压压缩包到指定目录
+    
+    支持的格式：
+    - .zip
+    - .tar.gz / .tgz
+    - .tar
+    """
+    try:
+        root_dir = get_version_root_dir(version, root_only)
+        archive_path = validate_path(path, version, root_only)
+        
+        if not archive_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="压缩包不存在"
+            )
+        
+        if archive_path.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="指定路径是文件夹，不是压缩包"
+            )
+        
+        # 验证文件格式
+        filename_lower = archive_path.name.lower()
+        is_zip = filename_lower.endswith('.zip')
+        is_tar_gz = filename_lower.endswith(('.tar.gz', '.tgz'))
+        is_tar = filename_lower.endswith('.tar')
+        
+        if not (is_zip or is_tar_gz or is_tar):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar"
+            )
+        
+        # 确定解压目标目录
+        if extract_to:
+            target_dir = validate_path(extract_to, version, root_only)
+        else:
+            # 默认解压到压缩包所在目录
+            target_dir = archive_path.parent
+        
+        # 确保目标目录存在
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 解压文件
+        extracted_files = []
+        try:
+            if is_zip:
+                with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                    zip_ref.extractall(target_dir)
+                    extracted_files = zip_ref.namelist()
+            elif is_tar_gz:
+                with tarfile.open(archive_path, 'r:gz') as tar_ref:
+                    tar_ref.extractall(target_dir)
+                    extracted_files = tar_ref.getnames()
+            elif is_tar:
+                with tarfile.open(archive_path, 'r') as tar_ref:
+                    tar_ref.extractall(target_dir)
+                    extracted_files = tar_ref.getnames()
+            
+            relative_target_dir = str(target_dir.relative_to(root_dir))
+            
+            # 记录操作日志
+            create_audit_log(
+                db=db,
+                user_id=current_user.id,
+                username=current_user.username,
+                action="archive_extract",
+                target=path,
+                details={
+                    "extract_to": relative_target_dir,
+                    "extracted_files_count": len(extracted_files),
+                    "version": version,
+                    "root_only": root_only
+                },
+                ip_address=get_client_ip(request)
+            )
+            
+            return {
+                "success": True,
+                "message": f"压缩包解压成功，共解压 {len(extracted_files)} 个文件/目录",
+                "extract_to": relative_target_dir,
+                "extracted_files_count": len(extracted_files)
+            }
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ZIP 文件格式错误或已损坏"
+            )
+        except tarfile.TarError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"TAR 文件格式错误: {str(e)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"解压压缩包失败: {str(e)}"
         )
 

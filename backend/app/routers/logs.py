@@ -203,60 +203,109 @@ def _resolve_log_path(config_path: str) -> str:
     return str(resolved_path)
 
 
+def _parse_log_path_from_nginx_config(config_path: Path, log_type: str = "access_log") -> Optional[str]:
+    """
+    从nginx配置文件中解析日志路径
+    
+    Args:
+        config_path: nginx配置文件路径
+        log_type: 日志类型，'access_log' 或 'error_log'
+    
+    Returns:
+        解析出的日志路径，如果未找到或为off则返回None
+    """
+    if not config_path.exists():
+        return None
+    
+    try:
+        content = config_path.read_text(encoding="utf-8")
+        # 匹配 access_log 或 error_log 配置行
+        # 支持格式：access_log /path/to/log; 或 access_log logs/access.log;
+        pattern = rf"{log_type}\s+([^;]+);"
+        match = re.search(pattern, content)
+        
+        if match:
+            log_path_str = match.group(1).strip()
+            # 如果是 off，返回 None
+            if log_path_str.lower() == "off":
+                return None
+            
+            # 如果是绝对路径，直接返回
+            log_path = Path(log_path_str)
+            if log_path.is_absolute():
+                return str(log_path.resolve())
+            
+            # 如果是相对路径，相对于nginx配置文件所在目录解析
+            # nginx配置中的相对路径是相对于nginx运行目录（通常是安装目录）
+            config_dir = config_path.parent
+            # 如果配置文件在 conf/ 目录下，安装目录应该是 conf 的父目录
+            if config_dir.name == "conf":
+                install_path = config_dir.parent
+                resolved = (install_path / log_path).resolve()
+                return str(resolved)
+            else:
+                resolved = (config_dir / log_path).resolve()
+                return str(resolved)
+    except Exception:
+        pass
+    
+    return None
+
+
 def _resolve_access_log_path() -> str:
     """
     解析当前应当读取的访问日志路径。
 
-    优先级：
-    1. 优先使用配置文件中的 nginx.access_log 路径（这是nginx实际使用的路径）
-    2. 如果配置文件中的路径不存在，尝试从当前运行版本的安装目录读取
+    如果检测到运行中的nginx版本，从该版本的nginx配置文件中解析访问日志路径。
+    如果配置文件中未找到或为off，尝试使用 logs/access.log。
+    否则使用配置文件中的路径。
     """
-    config = get_config()
-    
-    # 优先使用配置文件中的路径
-    config_log_path = _resolve_log_path(config.nginx.access_log)
-    config_log_file = Path(config_log_path)
-    
-    if config_log_file.exists():
-        return config_log_path
-    
-    # 如果配置文件中的路径不存在，尝试从版本安装目录读取
+    # 如果检测到运行中的nginx版本，从nginx配置文件中解析
     active = get_active_version()
     if active is not None:
-        candidate = active["install_path"] / "logs" / "access.log"
-        if candidate.exists():
-            return str(candidate.resolve())
+        nginx_conf_path = active["install_path"] / "conf" / "nginx.conf"
+        parsed_path = _parse_log_path_from_nginx_config(nginx_conf_path, "access_log")
+        if parsed_path:
+            return parsed_path
+        
+        # 如果配置文件中未找到或为off，尝试使用默认路径
+        default_path = active["install_path"] / "logs" / "access.log"
+        if default_path.exists():
+            return str(default_path.resolve())
+        # 即使不存在也返回默认路径（让调用者处理错误）
+        return str(default_path.resolve())
     
-    # 如果都不存在，仍然返回配置的路径（让调用者处理错误）
-    return config_log_path
+    # 如果没有运行中的nginx版本，使用配置文件中的路径
+    config = get_config()
+    return _resolve_log_path(config.nginx.access_log)
 
 
 def _resolve_error_log_path() -> str:
     """
     解析当前应当读取的错误日志路径。
 
-    优先级：
-    1. 优先使用配置文件中的 nginx.error_log 路径（这是nginx实际使用的路径）
-    2. 如果配置文件中的路径不存在，尝试从当前运行版本的安装目录读取
+    如果检测到运行中的nginx版本，从该版本的nginx配置文件中解析错误日志路径。
+    如果配置文件中未找到，尝试使用 logs/error.log。
+    否则使用配置文件中的路径。
     """
-    config = get_config()
-    
-    # 优先使用配置文件中的路径
-    config_log_path = _resolve_log_path(config.nginx.error_log)
-    config_log_file = Path(config_log_path)
-    
-    if config_log_file.exists():
-        return config_log_path
-    
-    # 如果配置文件中的路径不存在，尝试从版本安装目录读取
+    # 如果检测到运行中的nginx版本，从nginx配置文件中解析
     active = get_active_version()
     if active is not None:
-        candidate = active["install_path"] / "logs" / "error.log"
-        if candidate.exists():
-            return str(candidate.resolve())
+        nginx_conf_path = active["install_path"] / "conf" / "nginx.conf"
+        parsed_path = _parse_log_path_from_nginx_config(nginx_conf_path, "error_log")
+        if parsed_path:
+            return parsed_path
+        
+        # 如果配置文件中未找到，尝试使用默认路径
+        default_path = active["install_path"] / "logs" / "error.log"
+        if default_path.exists():
+            return str(default_path.resolve())
+        # 即使不存在也返回默认路径（让调用者处理错误）
+        return str(default_path.resolve())
     
-    # 如果都不存在，仍然返回配置的路径（让调用者处理错误）
-    return config_log_path
+    # 如果没有运行中的nginx版本，使用配置文件中的路径
+    config = get_config()
+    return _resolve_log_path(config.nginx.error_log)
 
 
 def _get_nginx_version_info() -> dict:

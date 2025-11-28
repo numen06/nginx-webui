@@ -111,7 +111,7 @@
             {{ row.modified_time || '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="320" fixed="right" align="center" class-name="file-ops-column">
+        <el-table-column label="操作" width="400" fixed="right" align="center" class-name="file-ops-column">
           <template #default="{ row }">
             <div class="file-actions" :class="{ 'is-dir': row.is_dir }">
               <template v-if="row.is_dir">
@@ -126,9 +126,31 @@
                     <el-icon><ArrowRightBold /></el-icon>
                   </el-button>
                 </el-tooltip>
+                <el-tooltip content="压缩" placement="top">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    circle
+                    aria-label="压缩文件夹"
+                    @click="handleCompress(row)"
+                  >
+                    <el-icon><Box /></el-icon>
+                  </el-button>
+                </el-tooltip>
               </template>
               <template v-else>
-                <el-tooltip content="编辑" placement="top">
+                <el-tooltip v-if="isArchiveFile(row.name)" content="解压" placement="top">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    circle
+                    aria-label="解压压缩包"
+                    @click="handleExtract(row)"
+                  >
+                    <el-icon><FolderOpened /></el-icon>
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip v-else content="编辑" placement="top">
                   <el-button
                     size="small"
                     type="info"
@@ -239,7 +261,9 @@ import {
   FolderAdd,
   RefreshRight,
   CloseBold,
-  Check
+  Check,
+  Box,
+  FolderOpened
 } from '@element-plus/icons-vue'
 import MonacoEditor from '../components/MonacoEditor.vue'
 
@@ -510,6 +534,98 @@ const handleDownload = async (file) => {
     window.URL.revokeObjectURL(url)
   } catch (error) {
     ElMessage.error(error.detail || '下载失败')
+  }
+}
+
+// 判断是否为压缩包文件
+const isArchiveFile = (filename) => {
+  if (!filename) return false
+  const lower = filename.toLowerCase()
+  return lower.endsWith('.zip') || 
+         lower.endsWith('.tar.gz') || 
+         lower.endsWith('.tgz') || 
+         lower.endsWith('.tar')
+}
+
+// 压缩文件夹
+const handleCompress = async (file) => {
+  if (!file.is_dir) {
+    ElMessage.warning('只能压缩文件夹')
+    return
+  }
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
+    return
+  }
+  try {
+    // 使用 prompt 让用户输入格式，提供默认值 zip
+    const { value: format } = await ElMessageBox.prompt(
+      '请输入压缩格式（zip 或 tar.gz），默认为 zip',
+      '压缩文件夹',
+      {
+        inputValue: 'zip',
+        inputPlaceholder: 'zip 或 tar.gz',
+        inputPattern: /^(zip|tar\.gz|tgz)$/,
+        inputErrorMessage: '格式必须是 zip、tar.gz 或 tgz',
+        confirmButtonText: '确 定',
+        cancelButtonText: '取 消'
+      }
+    )
+    if (!format) return
+    
+    const normalizedFormat = format.toLowerCase() === 'tgz' ? 'tar.gz' : format.toLowerCase()
+    
+    const res = await filesApi.compressDirectory(
+      file.path,
+      normalizedFormat,
+      selectedDirectory.value,
+      rootOnly.value
+    )
+    ElMessage.success(res.message || '压缩成功')
+    loadFiles()
+  } catch (error) {
+    if (error === 'cancel') return
+    ElMessage.error(error.detail || '压缩失败')
+  }
+}
+
+// 解压压缩包
+const handleExtract = async (file) => {
+  if (file.is_dir) {
+    ElMessage.warning('只能解压压缩包文件')
+    return
+  }
+  if (!isArchiveFile(file.name)) {
+    ElMessage.warning('不支持的文件格式')
+    return
+  }
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
+    return
+  }
+  try {
+    const { value: extractTo } = await ElMessageBox.prompt(
+      '请输入解压目标目录（留空则解压到当前目录）',
+      '解压压缩包',
+      {
+        inputValue: '',
+        inputPlaceholder: '留空则解压到压缩包所在目录',
+        confirmButtonText: '确 定',
+        cancelButtonText: '取 消'
+      }
+    )
+    
+    const res = await filesApi.extractArchive(
+      file.path,
+      extractTo || undefined,
+      selectedDirectory.value,
+      rootOnly.value
+    )
+    ElMessage.success(res.message || '解压成功')
+    loadFiles()
+  } catch (error) {
+    if (error === 'cancel') return
+    ElMessage.error(error.detail || '解压失败')
   }
 }
 

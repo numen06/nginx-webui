@@ -59,6 +59,20 @@ export const filesApi = {
     })
   },
 
+  // 从静态文件夹根目录提取资源包（扫描压缩包文件）
+  extractPackage(directory, deleteAfterExtract) {
+    const formData = new FormData()
+    if (directory) {
+      formData.append('directory', directory)
+    }
+    formData.append('delete_after_extract', deleteAfterExtract || false)
+    return api.post('/files/extract-package', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
   // 获取文件内容
   getFile(path, version, rootOnly) {
     const params = {}
@@ -151,6 +165,44 @@ export const filesApi = {
     return api.get(`/files/download/${encodePath(path)}`, {
       params,
       responseType: 'blob'
+    })
+  },
+
+  // 压缩文件夹
+  compressDirectory(path, format, version, rootOnly) {
+    const formData = new FormData()
+    formData.append('path', path)
+    formData.append('format', format || 'zip')
+    if (version) {
+      formData.append('version', version)
+    }
+    if (typeof rootOnly === 'boolean') {
+      formData.append('root_only', rootOnly)
+    }
+    return api.post('/files/compress', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
+  // 解压压缩包
+  extractArchive(path, extractTo, version, rootOnly) {
+    const formData = new FormData()
+    formData.append('path', path)
+    if (extractTo) {
+      formData.append('extract_to', extractTo)
+    }
+    if (version) {
+      formData.append('version', version)
+    }
+    if (typeof rootOnly === 'boolean') {
+      formData.append('root_only', rootOnly)
+    }
+    return api.post('/files/extract', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
     })
   }
 }
