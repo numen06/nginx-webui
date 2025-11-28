@@ -25,10 +25,23 @@ export const certificatesApi = {
     })
   },
 
+  // 解析压缩包并提取域名（预览）
+  parseCertificateArchive(archiveFile) {
+    const formData = new FormData()
+    formData.append('archive_file', archiveFile)
+    return api.post('/certificates/parse-archive', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
   // 上传压缩包并自动解析证书
   uploadCertificateArchive(domain, archiveFile, autoRenew) {
     const formData = new FormData()
-    formData.append('domain', domain)
+    if (domain) {
+      formData.append('domain', domain)
+    }
     formData.append('archive_file', archiveFile)
     formData.append('auto_renew', autoRenew)
     return api.post('/certificates/upload-archive', formData, {

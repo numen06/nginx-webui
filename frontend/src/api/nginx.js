@@ -6,6 +6,13 @@ export const nginxApi = {
     return api.get('/nginx/versions')
   },
 
+  // 获取 Nginx 官方最新版本列表
+  getLatestVersions(limit = 5) {
+    return api.get('/nginx/versions/latest', {
+      params: { limit }
+    })
+  },
+
   // 获取单个版本状态
   getVersionStatus(version) {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/status`)

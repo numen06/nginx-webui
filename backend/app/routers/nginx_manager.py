@@ -131,6 +131,35 @@ def _get_install_path(version: str) -> Path:
     return _get_versions_root() / version
 
 
+def _get_last_started_version_file() -> Path:
+    """获取最后启动版本记录文件路径"""
+    return _get_versions_root() / ".last_started_version"
+
+
+def _save_last_started_version(version: str) -> None:
+    """保存最后启动的nginx版本"""
+    try:
+        version_file = _get_last_started_version_file()
+        version_file.parent.mkdir(parents=True, exist_ok=True)
+        version_file.write_text(version, encoding="utf-8")
+    except Exception:
+        # 保存失败不影响主流程
+        pass
+
+
+def _get_last_started_version() -> Optional[str]:
+    """读取最后启动的nginx版本"""
+    try:
+        version_file = _get_last_started_version_file()
+        if version_file.exists():
+            version = version_file.read_text(encoding="utf-8").strip()
+            if version:
+                return version
+    except Exception:
+        pass
+    return None
+
+
 def _get_nginx_executable(install_path: Path) -> Path:
     """
     获取指定安装路径下的 Nginx 可执行文件
@@ -240,6 +269,17 @@ def _get_build_logs_dir() -> Path:
 def _get_source_tar_path(version: str) -> Path:
     """根据版本号获取源码包 tar.gz 路径"""
     return _get_build_root() / f"nginx-{version}.tar.gz"
+
+
+def _get_default_nginx_tar_path() -> Optional[Path]:
+    """获取默认nginx压缩包路径（系统自带的）"""
+    # 当前文件在 backend/app/routers/nginx_manager.py
+    # parents[2] -> backend 目录
+    backend_dir = Path(__file__).resolve().parents[2]
+    default_tar = backend_dir / "default-nginx" / "nginx-1.29.3.tar.gz"
+    if default_tar.exists():
+        return default_tar
+    return None
 
 
 def _ensure_nginx_dirs() -> None:
@@ -1057,6 +1097,9 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
             "version": None,
         }
 
+    # 记录最后启动的版本
+    _save_last_started_version(version)
+
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 启动成功",
@@ -1288,6 +1331,79 @@ def _infer_version_from_filename(filename: str) -> Optional[str]:
     if name.startswith("nginx-"):
         return name[len("nginx-") :]
     return None
+
+
+@router.get(
+    "/versions/latest",
+    summary="获取 Nginx 官方最新版本列表",
+)
+async def get_latest_nginx_versions(
+    limit: int = 5,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    从 nginx.org/download/ 获取最新的 Nginx 版本列表
+
+    Args:
+        limit: 返回的版本数量，默认5个
+
+    Returns:
+        {
+            "success": bool,
+            "versions": List[str],  # 版本号列表，如 ["1.28.0", "1.26.2", ...]
+            "message": str
+        }
+    """
+    try:
+        import httpx
+        from bs4 import BeautifulSoup
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("https://nginx.org/download/")
+            response.raise_for_status()
+
+            # 解析 HTML
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # 查找所有 nginx-*.tar.gz 链接
+            version_pattern = re.compile(r"nginx-(\d+\.\d+\.\d+)\.tar\.gz")
+            versions = []
+
+            for link in soup.find_all("a", href=True):
+                href = link.get("href", "")
+                match = version_pattern.search(href)
+                if match:
+                    version = match.group(1)
+                    if version not in versions:
+                        versions.append(version)
+
+            # 按版本号排序（降序，最新的在前）
+            def version_key(v):
+                parts = v.split(".")
+                return tuple(int(p) for p in parts)
+
+            versions.sort(key=version_key, reverse=True)
+
+            # 返回最新的 limit 个版本
+            latest_versions = versions[:limit]
+
+            return {
+                "success": True,
+                "versions": latest_versions,
+                "message": f"成功获取 {len(latest_versions)} 个最新版本",
+            }
+    except ImportError:
+        return {
+            "success": False,
+            "versions": [],
+            "message": "缺少依赖包，请安装 httpx 和 beautifulsoup4",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "versions": [],
+            "message": f"获取最新版本列表失败: {str(e)}",
+        }
 
 
 @router.get(
@@ -1958,6 +2074,9 @@ async def start_nginx_version(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Nginx 启动出错: {str(e)}",
         )
+
+    # 记录最后启动的版本
+    _save_last_started_version(version)
 
     # 写入审计日志
     create_audit_log(

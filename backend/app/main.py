@@ -2,6 +2,8 @@
 FastAPI 应用主入口
 """
 
+import shutil
+import threading
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +14,16 @@ from app.database import init_db, DB_PATH
 from app.config import get_config
 from app.utils.nginx import is_nginx_available
 from app.utils.nginx_versions import get_active_version
-from app.routers.nginx_manager import _list_all_versions, _start_nginx_version_internal
+from app.routers.nginx_manager import (
+    _list_all_versions,
+    _start_nginx_version_internal,
+    _get_last_started_version,
+    _get_install_path,
+    _get_nginx_executable,
+    _get_default_nginx_tar_path,
+    _get_build_root,
+    _compile_nginx_from_source,
+)
 from app.routers import (
     auth,
     config,
@@ -106,24 +117,91 @@ async def startup_event():
         if active is not None:
             print(f"✓ Nginx 版本 {active['version']} 已在运行")
         else:
-            # 查找所有已编译的版本
-            all_versions = _list_all_versions()
-            compiled_versions = [v for v in all_versions if v.compiled]
+            version_to_start = None
             
-            if compiled_versions:
-                # 按版本号排序，优先启动最新版本
-                compiled_versions.sort(key=lambda x: x.version, reverse=True)
-                latest_version = compiled_versions[0]
+            # 1. 优先尝试启动最后执行的nginx版本
+            last_started = _get_last_started_version()
+            if last_started:
+                install_path = _get_install_path(last_started)
+                executable = _get_nginx_executable(install_path)
+                if install_path.exists() and executable.exists():
+                    version_to_start = last_started
+                    print(f"检测到最后执行的 Nginx 版本: {last_started}")
+            
+            # 2. 如果没有最后执行的版本或该版本不存在，尝试启动发布版（last目录）
+            if version_to_start is None:
+                last_install_path = _get_install_path("last")
+                last_executable = _get_nginx_executable(last_install_path)
+                if last_install_path.exists() and last_executable.exists():
+                    version_to_start = "last"
+                    print("检测到发布版 Nginx (last目录)")
+            
+            # 3. 如果都没有，则启动最新版本（保持原有逻辑）
+            if version_to_start is None:
+                all_versions = _list_all_versions()
+                compiled_versions = [v for v in all_versions if v.compiled]
                 
-                print(f"正在自动启动 Nginx 版本 {latest_version.version}...")
-                result = _start_nginx_version_internal(latest_version.version)
+                if compiled_versions:
+                    # 按版本号排序，优先启动最新版本
+                    compiled_versions.sort(key=lambda x: x.version, reverse=True)
+                    latest_version = compiled_versions[0]
+                    version_to_start = latest_version.version
+                    print(f"未找到最后执行的版本或发布版，将启动最新版本: {version_to_start}")
+            
+            # 启动选定的版本
+            if version_to_start:
+                print(f"正在自动启动 Nginx 版本 {version_to_start}...")
+                result = _start_nginx_version_internal(version_to_start)
                 
                 if result["success"]:
                     print(f"✓ {result['message']}")
                 else:
                     print(f"✗ 自动启动失败: {result['message']}")
             else:
-                print("提示: 未找到已编译的 Nginx 版本，请先下载并编译一个版本")
+                # 4. 如果都没有，尝试使用默认nginx压缩包自动编译（后台运行）
+                default_version = "1.29.3"
+                default_tar = _get_default_nginx_tar_path()
+                
+                if default_tar and default_tar.exists():
+                    print(f"未找到已编译的 Nginx 版本，检测到默认压缩包，将在后台自动编译 Nginx {default_version}...")
+                    print("   提示: 编译过程在后台进行，不会影响应用启动，编译完成后会自动启动 Nginx")
+                    
+                    # 在后台线程中执行编译和启动
+                    def compile_and_start_nginx():
+                        try:
+                            # 将默认压缩包复制到build_root
+                            build_root = _get_build_root()
+                            build_root.mkdir(parents=True, exist_ok=True)
+                            target_tar = build_root / f"nginx-{default_version}.tar.gz"
+                            
+                            shutil.copy2(default_tar, target_tar)
+                            print(f"[后台任务] 已复制默认压缩包到构建目录: {target_tar}")
+                            
+                            # 编译nginx
+                            print(f"[后台任务] 开始编译 Nginx {default_version}，这可能需要几分钟...")
+                            compile_result = _compile_nginx_from_source(target_tar, default_version)
+                            
+                            if compile_result.success:
+                                print(f"[后台任务] ✓ {compile_result.message}")
+                                # 编译成功后，尝试启动
+                                print(f"[后台任务] 正在自动启动 Nginx 版本 {default_version}...")
+                                start_result = _start_nginx_version_internal(default_version)
+                                if start_result["success"]:
+                                    print(f"[后台任务] ✓ {start_result['message']}")
+                                else:
+                                    print(f"[后台任务] ✗ 自动启动失败: {start_result['message']}")
+                            else:
+                                print(f"[后台任务] ✗ 自动编译失败: {compile_result.message}")
+                                if compile_result.build_log_path:
+                                    print(f"[后台任务]    编译日志: {compile_result.build_log_path}")
+                        except Exception as e:
+                            print(f"[后台任务] ✗ 自动编译过程出错: {str(e)}")
+                    
+                    # 启动后台线程
+                    thread = threading.Thread(target=compile_and_start_nginx, daemon=True)
+                    thread.start()
+                else:
+                    print("提示: 未找到已编译的 Nginx 版本，请先下载并编译一个版本")
     except Exception as e:
         # 自动启动失败不影响应用启动
         print(f"⚠ 自动启动 Nginx 时出错: {str(e)}")

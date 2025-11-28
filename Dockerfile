@@ -37,6 +37,9 @@ WORKDIR /app
 # 复制后端代码
 COPY backend/ /app/backend/
 
+# 复制默认nginx压缩包
+COPY backend/default-nginx/ /app/backend/default-nginx/
+
 
 # 安装 Python 依赖
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/

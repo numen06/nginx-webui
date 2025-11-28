@@ -322,22 +322,35 @@
     >
       <el-form :model="downloadForm" label-width="100px">
         <el-form-item label="版本号">
-          <el-select
-            v-model="downloadForm.version"
-            filterable
-            allow-create
-            default-first-option
-            placeholder="选择或输入版本号，例如：1.28.0"
-            style="width: 100%"
-            @change="handleVersionChange"
-          >
-            <el-option
-              v-for="item in builtinVersions"
-              :key="item"
-              :label="item"
-              :value="item"
-            />
-          </el-select>
+          <div style="display: flex; gap: 8px; align-items: center; width: 100%">
+            <el-select
+              v-model="downloadForm.version"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="选择或输入版本号，例如：1.28.0"
+              style="flex: 1"
+              @change="handleVersionChange"
+            >
+              <el-option-group label="最新版本（来自 nginx.org）">
+                <el-option
+                  v-for="item in builtinVersions"
+                  :key="item"
+                  :label="item"
+                  :value="item"
+                />
+              </el-option-group>
+            </el-select>
+            <el-button
+              type="info"
+              :loading="loadingLatestVersions"
+              @click="loadLatestVersions"
+              size="small"
+            >
+              <el-icon><RefreshRight /></el-icon>
+              <span class="btn-label">获取最新</span>
+            </el-button>
+          </div>
         </el-form-item>
         <el-form-item label="下载地址">
           <el-input
@@ -482,7 +495,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { nginxApi } from '../api/nginx'
 import {
@@ -514,12 +527,13 @@ const sortedVersions = computed(() => {
   ]
 })
 // 常用 Nginx 版本列表，用于下拉选择；也可以手动输入任意版本号
-const builtinVersions = [
+const builtinVersions = ref([
   '1.28.0', // mainline
   '1.26.2',
   '1.24.0',
   '1.22.1'
-]
+])
+const loadingLatestVersions = ref(false)
 const downloadForm = ref({
   version: '',
   url: ''
@@ -581,6 +595,23 @@ const loadVersions = async () => {
     versions.value = data || []
   } catch (error) {
     ElMessage.error(error.detail || '获取版本列表失败')
+  }
+}
+
+const loadLatestVersions = async () => {
+  loadingLatestVersions.value = true
+  try {
+    const response = await nginxApi.getLatestVersions(5)
+    if (response.success && response.versions && response.versions.length > 0) {
+      builtinVersions.value = response.versions
+      ElMessage.success(`已获取 ${response.versions.length} 个最新版本`)
+    } else {
+      ElMessage.warning(response.message || '获取最新版本失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '获取最新版本列表失败')
+  } finally {
+    loadingLatestVersions.value = false
   }
 }
 
@@ -1098,6 +1129,13 @@ const deleteVersion = async (directory) => {
     ElMessage.error(error.detail || '删除失败')
   }
 }
+
+// 监听下载对话框打开，自动加载最新版本
+watch(downloadDialogVisible, (visible) => {
+  if (visible) {
+    loadLatestVersions()
+  }
+})
 
 onMounted(() => {
   loadVersions()
