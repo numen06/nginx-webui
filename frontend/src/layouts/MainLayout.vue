@@ -2,7 +2,13 @@
   <el-container class="layout-container">
     <el-aside width="200px" class="sidebar">
       <div class="logo">
-        <NginxLogo :small="true" />
+        <svg viewBox="0 0 120 120" class="logo-icon">
+          <circle cx="60" cy="60" r="50" fill="none" stroke="var(--nginx-green)" stroke-width="3" opacity="0.3"/>
+          <path d="M 30 60 L 60 30 L 90 60 L 60 90 Z" fill="var(--nginx-green)" opacity="0.8"/>
+          <path d="M 40 60 L 60 40 L 80 60 L 60 80 Z" fill="var(--nginx-green)"/>
+          <circle cx="60" cy="60" r="8" fill="var(--nginx-green-light)"/>
+        </svg>
+        <span class="logo-text">Nginx WebUI</span>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -89,7 +95,6 @@ import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { ElMessage } from 'element-plus'
-import NginxLogo from '../components/NginxLogo.vue'
 import { SwitchButton } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -128,9 +133,37 @@ const handleLogout = () => {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   border-bottom: 1px solid var(--border-color);
   background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
   padding: 10px;
+}
+
+.logo-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  animation: logoRotate 8s linear infinite;
+}
+
+@keyframes logoRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.logo-text {
+  font-size: 16px;
+  font-weight: 600;
+  background: linear-gradient(135deg, var(--nginx-green) 0%, var(--nginx-green-light) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 .sidebar-menu {
