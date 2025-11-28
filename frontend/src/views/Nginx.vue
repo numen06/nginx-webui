@@ -56,62 +56,80 @@
         </div>
 
         <div class="version-actions">
-          <el-button
-            size="small"
-            type="purple"
-            v-if="pinnedVersion.directory !== 'last'"
-            :disabled="buildingVersions.includes(pinnedVersion.directory) || pinnedVersion.compiled || !pinnedVersion.has_source"
-            @click="compileVersion(pinnedVersion.directory)"
-          >
-            <el-icon><Tools /></el-icon>
-            <span class="btn-label">编译</span>
-          </el-button>
-          <el-button
-            size="small"
-            type="primary"
-            v-if="pinnedVersion.directory !== 'last'"
-            :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
-            @click="upgradeToProduction(pinnedVersion.directory)"
-          >
-            <el-icon><Promotion /></el-icon>
-            <span class="btn-label">升级到运行版</span>
-          </el-button>
-          <el-button
-            size="small"
-            type="success"
-            :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
-            @click="startVersion(pinnedVersion.directory)"
-          >
-            <el-icon><VideoPlay /></el-icon>
-            <span class="btn-label">启动</span>
-          </el-button>
-          <el-button
-            size="small"
-            type="warning"
-            :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
-            @click="stopVersion(pinnedVersion.directory)"
-          >
-            <el-icon><VideoPause /></el-icon>
-            <span class="btn-label">停止</span>
-          </el-button>
-          <el-button
-            size="small"
-            type="orange"
-            :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
-            @click="forceStopVersion(pinnedVersion.directory)"
-          >
-            <el-icon><Lightning /></el-icon>
-            <span class="btn-label">强制停止</span>
-          </el-button>
-          <el-button
-            size="small"
-            type="danger"
-            :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
-            @click="deleteVersion(pinnedVersion.directory)"
-          >
-            <el-icon><Delete /></el-icon>
-            <span class="btn-label">删除</span>
-          </el-button>
+          <template v-if="pinnedVersion.directory !== 'last'">
+            <el-tooltip class="action-tooltip" content="编译" placement="top">
+              <el-button
+                circle
+                size="small"
+                type="purple"
+                class="action-icon-btn"
+                :disabled="buildingVersions.includes(pinnedVersion.directory) || pinnedVersion.compiled || !pinnedVersion.has_source"
+                @click="compileVersion(pinnedVersion.directory)"
+              >
+                <el-icon><Tools /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip class="action-tooltip" content="升级到运行版" placement="top">
+              <el-button
+                circle
+                size="small"
+                type="primary"
+                class="action-icon-btn"
+                :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
+                @click="upgradeToProduction(pinnedVersion.directory)"
+              >
+                <el-icon><Promotion /></el-icon>
+              </el-button>
+            </el-tooltip>
+          </template>
+          <el-tooltip class="action-tooltip" content="启动" placement="top">
+            <el-button
+              circle
+              size="small"
+              type="success"
+              class="action-icon-btn"
+              :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
+              @click="startVersion(pinnedVersion.directory)"
+            >
+              <el-icon><VideoPlay /></el-icon>
+            </el-button>
+          </el-tooltip>
+          <el-tooltip class="action-tooltip" content="停止" placement="top">
+            <el-button
+              circle
+              size="small"
+              type="warning"
+              class="action-icon-btn"
+              :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
+              @click="stopVersion(pinnedVersion.directory)"
+            >
+              <el-icon><VideoPause /></el-icon>
+            </el-button>
+          </el-tooltip>
+          <el-tooltip class="action-tooltip" content="强制停止" placement="top">
+            <el-button
+              circle
+              size="small"
+              type="orange"
+              class="action-icon-btn"
+              :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
+              @click="forceStopVersion(pinnedVersion.directory)"
+            >
+              <el-icon><Lightning /></el-icon>
+            </el-button>
+          </el-tooltip>
+          <el-tooltip class="action-tooltip" content="删除" placement="top">
+            <el-button
+              circle
+              size="small"
+              type="danger"
+              class="action-icon-btn"
+              :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
+              @click="deleteVersion(pinnedVersion.directory)"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </el-tooltip>
         </div>
       </el-card>
     </div>
