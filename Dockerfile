@@ -8,11 +8,15 @@ USER node
 
 # 仅复制依赖文件以利用缓存
 COPY --chown=node:node frontend/package*.json ./
-RUN npm config set registry https://registry.npmmirror.com && npm install
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install && \
+    npm cache clean --force
 
 # 复制剩余前端代码并构建
 COPY --chown=node:node frontend/ ./
-RUN npm run build
+RUN npm run build && \
+    rm -rf node_modules && \
+    rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
 # ==================== 第二阶段：运行后端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1
@@ -22,31 +26,32 @@ ENV PYTHONUNBUFFERED=1
 ENV APP_PORT=8000
 
 # 安装系统依赖（包含编译 Nginx 所需工具链）
+# 合并安装命令并清理缓存以减少镜像大小
 RUN dnf update -y && \
-    # 安装基础工具（基础镜像已包含 Python 和 pip）
-    dnf install -y ca-certificates curl wget tar && \
-    # 安装编译工具
-    dnf install -y gcc gcc-c++ make && \
-    # 安装开发库（编译 nginx 所需）
-    dnf install -y pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
-    dnf clean all
+    dnf install -y ca-certificates curl wget tar \
+                   gcc gcc-c++ make \
+                   pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
 
 # 设置工作目录
 WORKDIR /app
 
-# 复制后端代码
+# 复制后端代码（排除不需要的文件，.dockerignore 已处理）
 COPY backend/ /app/backend/
 
-# 复制默认nginx压缩包
-COPY backend/default-nginx/ /app/backend/default-nginx/
+# 清理可能存在的缓存文件
+RUN find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
+    find /app/backend -type f -name "*.pyc" -delete 2>/dev/null || true && \
+    find /app/backend -type f -name "*.pyo" -delete 2>/dev/null || true
 
-
-# 安装 Python 依赖
-RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
-RUN pip install --upgrade pip
-RUN cd /app/backend && pip install --no-cache-dir -r requirements.txt
+# 安装 Python 依赖（合并命令减少层数）
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    pip install --upgrade pip && \
+    cd /app/backend && pip install --no-cache-dir -r requirements.txt
 
 # 准备数据目录结构，便于通过 /app/data 单目录持久化
+# 同时清理临时文件和缓存
 RUN mkdir -p /app/data/backend \
     && mkdir -p /app/data/logs \
     && mkdir -p /app/data/ssl \
@@ -57,7 +62,10 @@ RUN mkdir -p /app/data/backend \
     && rm -rf /var/log/nginx && ln -s /app/data/logs /var/log/nginx \
     && rm -rf /app/nginx/ssl && ln -s /app/data/ssl /app/nginx/ssl \
     && rm -rf /app/nginx/versions && ln -s /app/data/nginx/versions /app/nginx/versions \
-    && rm -rf /app/nginx/build_logs && ln -s /app/data/nginx/build_logs /app/nginx/build_logs
+    && rm -rf /app/nginx/build_logs && ln -s /app/data/nginx/build_logs /app/nginx/build_logs \
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true \
+    && find /app/backend -type f -name "*.pyc" -delete 2>/dev/null || true
 
 # 从第一阶段复制前端构建产物
 COPY --from=frontend-builder /app/frontend/dist/ /app/backend/static/
