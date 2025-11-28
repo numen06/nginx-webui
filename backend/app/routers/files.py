@@ -19,8 +19,6 @@ from app.config import get_config
 from app.utils.audit import create_audit_log, get_client_ip
 from app.utils.nginx_versions import _get_versions_root, _get_install_path
 
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
-
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 
@@ -95,21 +93,13 @@ def get_version_install_dir(version: Optional[str] = None) -> Path:
             )
 
 
-def _resolve_config_path(path_str: str) -> Path:
-    """将配置中的相对路径解析为绝对路径"""
-    path = Path(path_str)
-    if not path.is_absolute():
-        path = (BACKEND_ROOT / path).resolve()
-    return path
-
-
 def get_version_root_dir(version: Optional[str] = None, root_only: bool = False) -> Path:
     """
     获取指定 Nginx 版本的文件管理根目录
     
     Args:
         version: Nginx 版本号，如果为 None 则使用当前活动版本
-        root_only: 如果为 True，返回整个安装目录；如果为 False，返回统一的静态目录
+        root_only: 如果为 True，返回整个安装目录；如果为 False，返回 html 目录
     
     Returns:
         Path: Nginx 版本的文件管理根目录绝对路径
@@ -117,13 +107,15 @@ def get_version_root_dir(version: Optional[str] = None, root_only: bool = False)
     Raises:
         HTTPException: 如果版本不存在或未编译
     """
-    if root_only:
-        return get_version_install_dir(version)
+    install_path = get_version_install_dir(version)
     
-    config = get_config()
-    static_dir = _resolve_config_path(config.nginx.static_dir)
-    static_dir.mkdir(parents=True, exist_ok=True)
-    return static_dir
+    if root_only:
+        return install_path
+    else:
+        html_dir = install_path / "html"
+        if not html_dir.exists():
+            html_dir.mkdir(parents=True, exist_ok=True)
+        return html_dir
 
 
 def validate_path(relative_path: Optional[str], version: Optional[str] = None, root_only: bool = False) -> Path:
