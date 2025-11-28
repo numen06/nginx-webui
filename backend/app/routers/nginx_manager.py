@@ -557,6 +557,205 @@ def _get_version_status(version: str) -> NginxVersionInfo:
     )
 
 
+def _start_nginx_version_internal(version: str) -> Dict[str, any]:
+    """
+    内部函数：启动指定版本的 Nginx（不依赖HTTP请求和用户认证）
+    
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,
+            "version": Optional[str]
+        }
+    """
+    install_path = _get_install_path(version)
+    executable = _get_nginx_executable(install_path)
+    config = get_config()
+
+    if not install_path.exists() or not executable.exists():
+        return {
+            "success": False,
+            "message": f"Nginx 版本未正确安装: {version}",
+            "version": None,
+        }
+
+    # 检查是否已经在运行
+    current_info = _get_version_status(version)
+    if current_info.running:
+        return {
+            "success": True,
+            "message": f"Nginx 版本 {version} 已在运行",
+            "version": version,
+        }
+
+    # 确保系统只有一个nginx在运行：先停止所有其他正在运行的版本
+    all_versions = _list_all_versions()
+    for v_info in all_versions:
+        if v_info.version != version and v_info.running:
+            # 停止其他正在运行的版本
+            try:
+                other_install_path = _get_install_path(v_info.version)
+                other_executable = _get_nginx_executable(other_install_path)
+                other_config_path = other_install_path / "conf" / "nginx.conf"
+                
+                stop_cmd = [
+                    str(other_executable),
+                    "-c",
+                    str(other_config_path),
+                    "-p",
+                    str(other_install_path),
+                    "-s",
+                    "quit",
+                ]
+                subprocess.run(
+                    stop_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except Exception:
+                # 忽略错误，继续执行
+                pass
+
+    # 确保必要目录存在（logs、conf 等）
+    (install_path / "logs").mkdir(parents=True, exist_ok=True)
+
+    # 确保统一的配置目录和静态文件目录存在，并创建默认配置
+    conf_dir = Path(config.nginx.conf_dir)
+    if not conf_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        conf_dir = (backend_dir / conf_dir).resolve()
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    
+    static_dir = Path(config.nginx.static_dir)
+    if not static_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        static_dir = (backend_dir / static_dir).resolve()
+    static_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 如果统一的配置目录中没有default.conf，创建默认配置
+    default_conf_path = conf_dir / "default.conf"
+    if not default_conf_path.exists():
+        default_server_conf = f"""server {{
+    listen 80;
+    server_name _;
+
+    root {static_dir};
+    index index.html;
+
+    # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
+    location ~* \\.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)$ {{
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+        try_files $uri =404;
+    }}
+
+    # 前端静态文件
+    location / {{
+        # 先尝试直接访问文件，再尝试作为目录，最后回退到 index.html
+        try_files $uri $uri/ /index.html;
+    }}
+
+    # API 代理
+    location /api/ {{
+        proxy_pass http://127.0.0.1:{config.app.port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    # 健康检查
+    location /health {{
+        access_log off;
+        return 200 "healthy\\n";
+        add_header Content-Type text/plain;
+    }}
+}}
+"""
+        default_conf_path.write_text(default_server_conf, encoding="utf-8")
+
+    # 使用编译版本自带的配置文件（conf/nginx.conf）
+    version_config_path = install_path / "conf" / "nginx.conf"
+    if not version_config_path.exists():
+        return {
+            "success": False,
+            "message": f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
+            "version": None,
+        }
+    
+    # 确保nginx.conf已更新为使用统一的配置目录和静态文件目录
+    config_content = version_config_path.read_text(encoding="utf-8")
+    if str(conf_dir) not in config_content:
+        _update_nginx_config_for_unified_dirs(install_path, version)
+
+    # 先测试配置
+    try:
+        test_cmd = [
+            str(executable),
+            "-t",
+            "-c",
+            str(version_config_path),
+            "-p",
+            str(install_path),
+        ]
+        test_result = subprocess.run(
+            test_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if test_result.returncode != 0:
+            output = test_result.stdout + test_result.stderr
+            return {
+                "success": False,
+                "message": f"配置测试失败: {output}",
+                "version": None,
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"配置测试出错: {str(e)}",
+            "version": None,
+        }
+
+    # 启动 Nginx（作为守护进程，由其自己在后台运行）
+    try:
+        cmd = [
+            str(executable),
+            "-c",
+            str(version_config_path),
+            "-p",
+            str(install_path),
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            output = result.stdout + result.stderr
+            return {
+                "success": False,
+                "message": f"Nginx 启动失败: {output}",
+                "version": None,
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Nginx 启动出错: {str(e)}",
+            "version": None,
+        }
+
+    return {
+        "success": True,
+        "message": f"Nginx 版本 {version} 启动成功",
+        "version": version,
+    }
+
+
 def _list_all_versions() -> List[NginxVersionInfo]:
     """
     获取所有已知版本的信息：

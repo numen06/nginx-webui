@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from app.database import init_db, DB_PATH
 from app.config import get_config
 from app.utils.nginx import is_nginx_available
+from app.utils.nginx_versions import get_active_version
+from app.routers.nginx_manager import _list_all_versions, _start_nginx_version_internal
 from app.routers import (
     auth,
     config,
@@ -55,7 +57,7 @@ app.include_router(system.router)
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时打印核心配置信息"""
+    """应用启动时打印核心配置信息并自动启动nginx"""
     cfg = get_config()
     nginx_available = is_nginx_available()
     
@@ -79,6 +81,36 @@ async def startup_event():
     print(f"构建日志目录:       {cfg.nginx.build_logs_dir}")
     print(f"应用监听地址:       {cfg.app.host}:{cfg.app.port}")
     print("=" * 60 + "\n")
+    
+    # 自动启动nginx（如果有已安装的版本）
+    try:
+        # 检查是否有运行中的nginx
+        active = get_active_version()
+        if active is not None:
+            print(f"✓ Nginx 版本 {active['version']} 已在运行")
+        else:
+            # 查找所有已编译的版本
+            all_versions = _list_all_versions()
+            compiled_versions = [v for v in all_versions if v.compiled]
+            
+            if compiled_versions:
+                # 按版本号排序，优先启动最新版本
+                compiled_versions.sort(key=lambda x: x.version, reverse=True)
+                latest_version = compiled_versions[0]
+                
+                print(f"正在自动启动 Nginx 版本 {latest_version.version}...")
+                result = _start_nginx_version_internal(latest_version.version)
+                
+                if result["success"]:
+                    print(f"✓ {result['message']}")
+                else:
+                    print(f"✗ 自动启动失败: {result['message']}")
+            else:
+                print("提示: 未找到已编译的 Nginx 版本，请先下载并编译一个版本")
+    except Exception as e:
+        # 自动启动失败不影响应用启动
+        print(f"⚠ 自动启动 Nginx 时出错: {str(e)}")
+        print("   应用将继续启动，您可以稍后手动启动 Nginx")
 
 # 挂载静态文件目录（前端打包文件）
 static_dir = Path(__file__).parent.parent / "static"
