@@ -76,6 +76,15 @@
       <el-main class="main-content">
         <router-view />
       </el-main>
+      
+      <!-- Nginx 初始设置向导 -->
+      <NginxSetupWizard
+        v-model="showSetupWizard"
+        @complete="handleSetupComplete"
+      />
+      
+      <!-- 遮罩层，在设置完成前阻止其他操作 -->
+      <div v-if="showSetupWizard" class="setup-overlay"></div>
       <el-footer class="footer" height="auto">
         <span>Power by numen06 · 项目地址：</span>
         <a
@@ -91,17 +100,31 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
+import { useSetupStore } from '../store/setup'
 import { ElMessage } from 'element-plus'
 import { SwitchButton } from '@element-plus/icons-vue'
+import NginxSetupWizard from '../components/NginxSetupWizard.vue'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const setupStore = useSetupStore()
 
 const activeMenu = computed(() => route.path)
+
+// 使用store中的状态
+const showSetupWizard = computed({
+  get: () => setupStore.showSetupWizard,
+  set: (value) => setupStore.setShowSetupWizard(value)
+})
+
+const handleSetupComplete = () => {
+  setupStore.setShowSetupWizard(false)
+  ElMessage.success('Nginx 设置完成，系统已就绪')
+}
 
 const handleLogout = () => {
   authStore.logout()
@@ -214,6 +237,17 @@ const handleLogout = () => {
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.setup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+  pointer-events: auto;
 }
 </style>
 

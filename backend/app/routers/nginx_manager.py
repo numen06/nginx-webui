@@ -1900,6 +1900,186 @@ async def get_nginx_build_log(
 
 
 @router.get(
+    "/versions/{version}/compile-progress",
+    summary="获取编译进度",
+)
+async def get_compile_progress(
+    version: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    获取指定版本的编译进度
+    
+    通过检查编译日志和文件系统状态来判断编译进度
+    """
+    log_path = _get_build_log_path(version)
+    build_root = _get_build_root()
+    build_dir = build_root / version
+    install_path = _get_install_path(version)
+    executable = _get_nginx_executable(install_path)
+    
+    progress = 0
+    stage = "等待开始"
+    message = ""
+    
+    # 检查是否已编译完成
+    if install_path.exists() and executable.exists():
+        progress = 100
+        stage = "编译完成"
+        message = "Nginx 已成功编译"
+        return {
+            "progress": progress,
+            "stage": stage,
+            "message": message,
+            "completed": True
+        }
+    
+    # 检查编译日志
+    log_size = 0
+    if log_path.exists():
+        try:
+            log_size = log_path.stat().st_size
+            log_content = log_path.read_text(encoding="utf-8", errors="ignore")
+            
+            # 先检查错误情况
+            if "configure 失败" in log_content:
+                progress = 20
+                stage = "配置失败"
+                message = "配置阶段失败，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            if "make 失败" in log_content:
+                progress = 50
+                stage = "编译失败"
+                message = "编译阶段失败，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            if "make install 失败" in log_content:
+                progress = 80
+                stage = "安装失败"
+                message = "安装阶段失败，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            if "编译过程出错" in log_content:
+                progress = max(progress, 10)
+                stage = "编译出错"
+                message = "编译过程中出现错误，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            
+            # 根据日志内容判断进度（按顺序检查，确保进度递增）
+            # 检查是否已完成安装
+            if "已将临时安装目录移动到正式路径" in log_content or "已更新nginx.conf" in log_content:
+                progress = 95
+                stage = "完成安装"
+                message = "正在完成最后的配置..."
+            # 检查是否在执行安装
+            elif "执行安装命令" in log_content or "make install" in log_content:
+                progress = 80
+                stage = "安装中"
+                message = "正在安装到目标目录..."
+            # 检查是否在编译中
+            elif "执行编译命令" in log_content:
+                # 编译阶段，根据日志大小和内容估算进度
+                # make阶段通常比较长，根据日志增长来估算
+                base_progress = 50
+                # 如果日志中有make的输出，说明正在编译
+                if "cc " in log_content or "linking" in log_content.lower():
+                    # 编译正在进行，根据日志行数或大小估算
+                    line_count = len(log_content.splitlines())
+                    # 假设编译过程会产生大量输出，根据行数估算
+                    if line_count > 100:
+                        # 编译进行中，进度在50-70之间
+                        progress = min(70, base_progress + int((line_count - 100) / 10))
+                    else:
+                        progress = base_progress
+                else:
+                    progress = base_progress
+                stage = "编译中"
+                message = f"正在编译 Nginx（已处理 {line_count if 'line_count' in locals() else 0} 行输出）..."
+            # 检查是否在配置
+            elif "执行配置命令" in log_content or "configure" in log_content.lower():
+                progress = 30
+                stage = "配置环境"
+                message = "正在配置编译环境..."
+            # 检查是否已解压
+            elif "已解压到构建目录" in log_content or "检测到源码目录" in log_content:
+                progress = 15
+                stage = "解压源码"
+                message = "源码包已解压，准备配置..."
+        except Exception as e:
+            # 读取日志失败，尝试通过文件系统判断
+            pass
+    
+    # 通过文件系统和日志大小判断进度（用于实时更新）
+    if build_dir.exists():
+        source_dirs = [d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")]
+        if source_dirs:
+            source_dir = source_dirs[0]
+            # 检查是否有编译产物
+            if (source_dir / "objs").exists():
+                # 有编译目录，说明configure已完成
+                progress = max(progress, 35)
+                # 检查编译产物数量来估算编译进度
+                objs_dir = source_dir / "objs"
+                if objs_dir.exists():
+                    obj_files = list(objs_dir.glob("*.o"))
+                    # 假设nginx编译会产生约100-200个目标文件
+                    if len(obj_files) > 0:
+                        # 根据目标文件数量估算编译进度
+                        estimated_progress = min(70, 35 + int(len(obj_files) / 3))
+                        progress = max(progress, estimated_progress)
+                        stage = "编译中"
+                        message = f"正在编译（已生成 {len(obj_files)} 个目标文件）..."
+            
+            # 如果日志文件在增长，说明编译正在进行
+            if log_size > 0 and progress < 50:
+                # 根据日志大小估算进度（粗略估算）
+                # 假设完整编译日志大约50-100KB
+                if log_size > 50000:  # 50KB
+                    progress = max(progress, 60)
+                elif log_size > 20000:  # 20KB
+                    progress = max(progress, 45)
+                elif log_size > 5000:  # 5KB
+                    progress = max(progress, 30)
+    
+    # 通过文件系统判断
+    if build_dir.exists():
+        source_dirs = [d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")]
+        if source_dirs:
+            progress = max(progress, 15)
+            stage = "源码已解压"
+            message = "源码包已解压，准备配置..."
+    
+    return {
+        "progress": progress,
+        "stage": stage,
+        "message": message,
+        "completed": False
+    }
+
+
+@router.get(
     "/versions/{version}/status",
     response_model=NginxVersionInfo,
     summary="获取指定版本 Nginx 运行状态",
@@ -2487,3 +2667,93 @@ async def delete_nginx_version(
         "message": f"Nginx 版本 {version} 已删除",
         "version": version,
     }
+
+
+@router.get(
+    "/setup/check",
+    summary="检查初始设置状态",
+)
+async def check_setup_status(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    检查系统初始设置状态：
+    - 是否有已编译的nginx版本
+    - 是否有默认nginx压缩包可用
+    """
+    # 检查是否有已编译的nginx版本
+    all_versions = _list_all_versions()
+    compiled_versions = [v for v in all_versions if v.compiled]
+    has_compiled = len(compiled_versions) > 0
+    
+    # 检查是否有默认nginx压缩包
+    default_tar = _get_default_nginx_tar_path()
+    has_default_tar = default_tar is not None and default_tar.exists()
+    
+    return {
+        "has_compiled_nginx": has_compiled,
+        "has_default_tar": has_default_tar,
+        "default_version": "1.29.3" if has_default_tar else None,
+    }
+
+
+@router.post(
+    "/setup/prepare-default",
+    summary="准备默认nginx压缩包（复制到构建目录）",
+)
+async def prepare_default_nginx(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    将默认nginx压缩包复制到构建目录，准备编译
+    """
+    default_version = "1.29.3"
+    default_tar = _get_default_nginx_tar_path()
+    
+    if not default_tar or not default_tar.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="默认nginx压缩包不存在",
+        )
+    
+    # 检查目标文件是否已存在
+    build_root = _get_build_root()
+    build_root.mkdir(parents=True, exist_ok=True)
+    target_tar = build_root / f"nginx-{default_version}.tar.gz"
+    
+    if target_tar.exists():
+        return {
+            "success": True,
+            "message": f"默认压缩包已存在于构建目录",
+            "version": default_version,
+        }
+    
+    try:
+        shutil.copy2(default_tar, target_tar)
+        
+        # 记录审计日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="nginx_setup_prepare_default",
+            target=default_version,
+            details={
+                "source": str(default_tar),
+                "target": str(target_tar),
+            },
+            ip_address=get_client_ip(request),
+        )
+        
+        return {
+            "success": True,
+            "message": f"默认压缩包已复制到构建目录",
+            "version": default_version,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"复制默认压缩包失败: {str(e)}",
+        )

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../store/auth'
+import { useSetupStore } from '../store/setup'
 
 const routes = [
   {
@@ -84,16 +85,34 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+  const setupStore = useSetupStore()
   
+  // 检查认证
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next('/login')
-  } else if (to.path === '/login' && authStore.isAuthenticated) {
-    next('/')
-  } else {
-    next()
+    return
   }
+  
+  if (to.path === '/login' && authStore.isAuthenticated) {
+    next('/')
+    return
+  }
+  
+  // 如果需要认证的页面，提前检查nginx设置状态
+  // 这样可以在其他API调用之前就显示引导页面
+  if (to.meta.requiresAuth && authStore.isAuthenticated && !setupStore.hasCheckedSetup) {
+    console.log('[Router] 在路由守卫中检查nginx设置状态')
+    try {
+      await setupStore.checkSetupStatus()
+    } catch (error) {
+      console.error('[Router] 检查设置状态失败:', error)
+      // 即使检查失败也继续导航
+    }
+  }
+  
+  next()
 })
 
 export default router

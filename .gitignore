@@ -56,7 +56,4 @@ backend/data/*.db
 backend/data/backups/
 data/
 
-# Build
-*.tar
-*.tar.gz
 

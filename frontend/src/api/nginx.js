@@ -83,6 +83,21 @@ export const nginxApi = {
   // 获取编译日志
   getBuildLog(version) {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/build_log`)
+  },
+
+  // 检查初始设置状态
+  checkSetupStatus() {
+    return api.get('/nginx/setup/check')
+  },
+
+  // 准备默认nginx压缩包
+  prepareDefaultNginx() {
+    return api.post('/nginx/setup/prepare-default')
+  },
+
+  // 获取编译进度
+  getCompileProgress(version) {
+    return api.get(`/nginx/versions/${encodeURIComponent(version)}/compile-progress`)
   }
 }
 

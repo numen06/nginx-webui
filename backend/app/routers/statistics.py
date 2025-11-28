@@ -139,21 +139,15 @@ def analyze_logs(time_range_hours: int = 24) -> Dict:
     
     # 读取访问日志
     access_log_file = Path(access_log_path)
-    if not access_log_file.exists():
-        return {
-            "success": False,
-            "error": f"访问日志文件不存在: {access_log_path}"
-        }
-    
-    # 读取日志内容
-    try:
-        with open(access_log_file, 'r', encoding='utf-8', errors='ignore') as f:
-            all_lines = f.readlines()
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"读取访问日志失败: {str(e)}"
-        }
+    all_lines = []
+    # 如果日志文件存在，尝试读取；不存在或读取失败时返回空统计数据，不报错
+    if access_log_file.exists():
+        try:
+            with open(access_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                all_lines = f.readlines()
+        except Exception:
+            # 读取失败时返回空统计数据，不报错
+            pass
     
     # 解析日志
     log_entries = []
