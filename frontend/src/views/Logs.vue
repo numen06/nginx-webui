@@ -1,6 +1,6 @@
 <template>
   <div class="logs-page">
-    <el-tabs v-model="activeTab">
+    <el-tabs v-model="activeTab" class="logs-tabs" stretch>
       <el-tab-pane label="访问日志" name="access">
         <el-card>
           <template #header>
@@ -17,13 +17,22 @@
           </template>
           <div class="log-info">
             <el-descriptions :column="2" border size="small">
+              <el-descriptions-item v-if="accessLogInfo.install_path" label="当前 Nginx 目录">
+                <el-text type="info" size="small">{{ accessLogInfo.install_path }}</el-text>
+              </el-descriptions-item>
               <el-descriptions-item label="当前 Nginx 版本">
-                <el-tag v-if="accessLogInfo.nginx_version" type="info" size="small">
-                  {{ accessLogInfo.nginx_version }}
-                </el-tag>
+                <el-tooltip
+                  v-if="accessLogInfo.nginx_version"
+                  :content="accessLogInfo.nginx_version"
+                  placement="top"
+                >
+                  <el-tag type="info" size="small" class="version-tag">
+                    {{ formatShortVersion(accessLogInfo.nginx_version) }}
+                  </el-tag>
+                </el-tooltip>
                 <span v-else class="text-muted">未知</span>
               </el-descriptions-item>
-              <el-descriptions-item label="日志文件路径">
+              <el-descriptions-item label="日志文件路径" :span="2">
                 <el-text v-if="accessLogInfo.log_path" class="log-path" size="small">
                   {{ accessLogInfo.log_path }}
                 </el-text>
@@ -111,13 +120,22 @@
           </template>
           <div class="log-info">
             <el-descriptions :column="2" border size="small">
+              <el-descriptions-item v-if="errorLogInfo.install_path" label="当前 Nginx 目录">
+                <el-text type="info" size="small">{{ errorLogInfo.install_path }}</el-text>
+              </el-descriptions-item>
               <el-descriptions-item label="当前 Nginx 版本">
-                <el-tag v-if="errorLogInfo.nginx_version" type="info" size="small">
-                  {{ errorLogInfo.nginx_version }}
-                </el-tag>
+                <el-tooltip
+                  v-if="errorLogInfo.nginx_version"
+                  :content="errorLogInfo.nginx_version"
+                  placement="top"
+                >
+                  <el-tag type="info" size="small" class="version-tag">
+                    {{ formatShortVersion(errorLogInfo.nginx_version) }}
+                  </el-tag>
+                </el-tooltip>
                 <span v-else class="text-muted">未知</span>
               </el-descriptions-item>
-              <el-descriptions-item label="日志文件路径">
+              <el-descriptions-item label="日志文件路径" :span="2">
                 <el-text v-if="errorLogInfo.log_path" class="log-path" size="small">
                   {{ errorLogInfo.log_path }}
                 </el-text>
@@ -230,6 +248,14 @@ const errorFilters = ref({
 })
 const accessLogViewerRef = ref(null)
 const errorLogViewerRef = ref(null)
+const MAX_VERSION_LABEL_LENGTH = 20
+
+const formatShortVersion = (text) => {
+  if (!text) return ''
+  return text.length > MAX_VERSION_LABEL_LENGTH
+    ? `${text.slice(0, MAX_VERSION_LABEL_LENGTH)}…`
+    : text
+}
 
 const loadLogs = async () => {
   loading.value = true
@@ -424,6 +450,55 @@ onMounted(() => {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
+}
+
+.logs-tabs :deep(.el-tabs__header) {
+  margin-bottom: 15px;
+}
+
+.logs-tabs :deep(.el-tabs__nav-wrap) {
+  padding: 0;
+}
+
+.logs-tabs :deep(.el-tabs__nav) {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.logs-tabs :deep(.el-tabs__item) {
+  flex: 1;
+  text-align: center;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 0;
+  transition: all 0.2s ease;
+}
+
+.logs-tabs :deep(.el-tabs__item.is-active) {
+  background-color: var(--nginx-green);
+  color: var(--text-white) !important;
+  border-color: var(--nginx-green);
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0, 150, 57, 0.35);
+}
+
+.logs-tabs :deep(.el-tabs__item:not(.is-active):hover) {
+  border-color: var(--nginx-green);
+  color: var(--nginx-green) !important;
+}
+
+.logs-tabs :deep(.el-tabs__active-bar) {
+  display: none;
+}
+
+.version-tag {
+  max-width: 220px;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 </style>

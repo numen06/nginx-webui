@@ -19,7 +19,8 @@
       "cwd": "${workspaceFolder}/backend",
       "env": {
         "PYTHONPATH": "${workspaceFolder}/backend",
-        "SECRET_KEY": "dev-secret-key-change-in-production"
+        "SECRET_KEY": "dev-secret-key-change-in-production",
+        "DATA_ROOT": "${workspaceFolder}/data"
       },
       "console": "integratedTerminal"
     },
@@ -41,7 +42,8 @@
       "cwd": "${workspaceFolder}/backend",
       "env": {
         "PYTHONPATH": "${workspaceFolder}/backend",
-        "SECRET_KEY": "dev-secret-key-change-in-production"
+        "SECRET_KEY": "dev-secret-key-change-in-production",
+        "DATA_ROOT": "${workspaceFolder}/data"
       },
       "preLaunchTask": "安装后端依赖（如需要）",
       "console": "integratedTerminal"
@@ -54,7 +56,8 @@
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/backend",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/backend"
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "DATA_ROOT": "${workspaceFolder}/data"
       },
       "justMyCode": false
     },
@@ -113,7 +116,8 @@
       ],
       "cwd": "${workspaceFolder}/backend",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/backend"
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "DATA_ROOT": "${workspaceFolder}/data"
       },
       "console": "integratedTerminal",
       "justMyCode": false

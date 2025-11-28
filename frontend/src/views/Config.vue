@@ -14,15 +14,18 @@
         </div>
       </template>
       <div class="config-info">
-        <el-descriptions :column="2" border>
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item v-if="configInfo.install_path" label="当前 Nginx 目录">
+            <el-text type="info" size="small">{{ configInfo.install_path }}</el-text>
+          </el-descriptions-item>
           <el-descriptions-item label="当前 Nginx 版本">
-            <el-tag v-if="configInfo.nginx_version" type="info">
+            <el-tag v-if="configInfo.nginx_version" type="info" size="small">
               {{ configInfo.nginx_version }}
             </el-tag>
             <span v-else class="text-muted">未知</span>
           </el-descriptions-item>
-          <el-descriptions-item label="配置文件路径">
-            <el-text v-if="configInfo.config_path" class="config-path">
+          <el-descriptions-item label="配置文件路径" :span="2">
+            <el-text v-if="configInfo.config_path" class="config-path" size="small">
               {{ configInfo.config_path }}
             </el-text>
             <span v-else class="text-muted">未知</span>

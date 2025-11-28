@@ -11,6 +11,7 @@ import signal
 import time
 import ssl
 import threading
+import re
 from pathlib import Path
 from typing import List, Optional, Dict, Callable
 from urllib.parse import urlparse
@@ -44,12 +45,14 @@ router = APIRouter(prefix="/api/nginx", tags=["nginx"])
 # 下载进度存储（线程安全）
 _download_progress: Dict[str, Dict] = {}
 _progress_lock = threading.Lock()
+_VERSION_METADATA_FILENAME = ".nginx-version"
 
 
 class NginxVersionInfo(BaseModel):
     """Nginx 版本信息"""
 
-    version: str
+    directory: str  # 实际目录名称
+    version: Optional[str] = None  # 二进制版本号
     install_path: str
     executable: str
     running: bool
@@ -67,8 +70,6 @@ class NginxDownloadRequest(BaseModel):
 
     version: str
     url: Optional[str] = None
-
-
 
 
 class NginxBuildResult(BaseModel):
@@ -137,6 +138,74 @@ def _get_nginx_executable(install_path: Path) -> Path:
     约定：编译时使用 --prefix=<install_path>，则可执行文件位于 <install_path>/sbin/nginx
     """
     return install_path / "sbin" / "nginx"
+
+
+def _get_version_metadata_path(install_path: Path) -> Path:
+    """返回存储版本信息的元数据文件路径"""
+    return install_path / _VERSION_METADATA_FILENAME
+
+
+def _write_version_metadata(install_path: Path, version: str) -> None:
+    """将版本号写入元数据文件，忽略写入失败"""
+    version = (version or "").strip()
+    if not version:
+        return
+
+    meta_path = _get_version_metadata_path(install_path)
+    try:
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text(version, encoding="utf-8")
+    except Exception:
+        # 忽略写入失败，避免影响主流程
+        pass
+
+
+def _detect_nginx_binary_version(executable: Path) -> Optional[str]:
+    """通过执行 nginx -v 推断真实版本号"""
+    if not executable.exists():
+        return None
+
+    try:
+        result = subprocess.run(
+            [str(executable), "-v"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+    output = (result.stdout or "") + (result.stderr or "")
+    if not output:
+        return None
+
+    match = re.search(r"nginx/([\w\.\-]+)", output)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _resolve_version_label(
+    directory: str, install_path: Path, executable: Path
+) -> Optional[str]:
+    """
+    解析目录对应的版本号，优先使用元数据文件，其次使用目录名，最后尝试读取二进制。
+    """
+    meta_path = _get_version_metadata_path(install_path)
+    if meta_path.exists():
+        try:
+            content = meta_path.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+        except Exception:
+            pass
+
+    # 目录名本身就是版本号的情况（例如 1.28.0）
+    if directory != "last":
+        return directory
+
+    # last 目录需要从二进制中解析
+    return _detect_nginx_binary_version(executable)
 
 
 def _get_pid_file(install_path: Path) -> Path:
@@ -268,49 +337,49 @@ def _detect_source_dir(build_dir: Path) -> Path:
 def _update_nginx_config_for_unified_dirs(install_path: Path, version: str) -> None:
     """
     更新编译后的nginx.conf，使其使用统一的配置目录和静态文件目录
-    
+
     这样所有版本共享同一个配置目录（conf.d）和静态文件目录（html），
     在版本切换时配置和静态文件保持一致。
     """
     config = get_config()
     nginx_conf_path = install_path / "conf" / "nginx.conf"
-    
+
     if not nginx_conf_path.exists():
         return
-    
+
     # 解析配置路径（统一配置目录）
     conf_dir = Path(config.nginx.conf_dir)
     if not conf_dir.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         conf_dir = (backend_dir / conf_dir).resolve()
-    
+
     # 解析静态文件目录路径
     static_dir = Path(config.nginx.static_dir)
     if not static_dir.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         static_dir = (backend_dir / static_dir).resolve()
-    
+
     # 解析日志目录路径
     log_dir = Path(config.nginx.log_dir)
     if not log_dir.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         log_dir = (backend_dir / log_dir).resolve()
-    
+
     access_log = Path(config.nginx.access_log)
     if not access_log.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         access_log = (backend_dir / access_log).resolve()
-    
+
     error_log = Path(config.nginx.error_log)
     if not error_log.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         error_log = (backend_dir / error_log).resolve()
-    
+
     # 确保目录存在
     conf_dir.mkdir(parents=True, exist_ok=True)
     static_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 生成新的配置内容
     new_config = f"""#user  nobody;
 worker_processes  auto;
@@ -352,7 +421,7 @@ http {{
     include {conf_dir}/*.conf;
 }}
 """
-    
+
     # 写入新配置
     nginx_conf_path.write_text(new_config, encoding="utf-8")
 
@@ -360,46 +429,46 @@ http {{
 def _update_nginx_config_for_version(install_path: Path, version: str) -> None:
     """
     更新编译后的nginx.conf，使其使用版本目录下的配置目录和静态文件目录
-    
+
     每个版本都有自己独立的配置目录（conf/conf.d）和静态文件目录（html），
     通过切换nginx版本来管理和使用不同的配置。
     """
     config = get_config()
     nginx_conf_path = install_path / "conf" / "nginx.conf"
-    
+
     if not nginx_conf_path.exists():
         return
-    
+
     # 使用版本目录下的 conf.d 配置目录
     conf_d_dir = install_path / "conf" / "conf.d"
     conf_d_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 使用版本目录下的 html 静态文件目录
     html_dir = install_path / "html"
     html_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 解析日志目录路径（日志可以统一放在一个地方）
     log_dir = Path(config.nginx.log_dir)
     if not log_dir.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         log_dir = (backend_dir / log_dir).resolve()
-    
+
     access_log = Path(config.nginx.access_log)
     if not access_log.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         access_log = (backend_dir / access_log).resolve()
-    
+
     error_log = Path(config.nginx.error_log)
     if not error_log.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         error_log = (backend_dir / error_log).resolve()
-    
+
     # 确保日志目录存在
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 读取原始配置（可能包含一些自定义设置）
     original_content = nginx_conf_path.read_text(encoding="utf-8")
-    
+
     # 生成新的配置内容
     # 保留基本的worker_processes、events等配置
     # 但修改http块中的配置，使其指向版本目录下的配置
@@ -432,10 +501,10 @@ http {{
     include conf.d/*.conf;
 }}
 """
-    
+
     # 写入新配置
     nginx_conf_path.write_text(new_config, encoding="utf-8")
-    
+
     # 如果 conf.d 目录下没有 default.conf，创建一个默认配置
     default_conf_path = conf_d_dir / "default.conf"
     if not default_conf_path.exists():
@@ -483,7 +552,7 @@ http {{
 def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
     """
     备份需要保护的目录（静态文件、配置文件等）
-    
+
     Returns:
         dict: {
             "html": Path,  # 备份的html目录路径
@@ -493,9 +562,9 @@ def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
     """
     backup_dir = install_path.parent / f"{install_path.name}_backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    
+
     backups = {}
-    
+
     # 备份 html 目录（静态文件）
     html_dir = install_path / "html"
     if html_dir.exists() and any(html_dir.iterdir()):
@@ -504,7 +573,7 @@ def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
             shutil.rmtree(html_backup, ignore_errors=True)
         shutil.copytree(html_dir, html_backup, dirs_exist_ok=True)
         backups["html"] = html_backup
-    
+
     # 备份 conf 目录（配置文件，但排除nginx.conf，因为会重新生成）
     conf_dir = install_path / "conf"
     if conf_dir.exists():
@@ -521,7 +590,7 @@ def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
                     shutil.copy2(item, conf_backup / item.name)
         if any(conf_backup.iterdir()):
             backups["conf"] = conf_backup
-    
+
     # 备份 logs 目录（日志文件）
     logs_dir = install_path / "logs"
     if logs_dir.exists() and any(logs_dir.iterdir()):
@@ -530,20 +599,20 @@ def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
             shutil.rmtree(logs_backup, ignore_errors=True)
         shutil.copytree(logs_dir, logs_backup, dirs_exist_ok=True)
         backups["logs"] = logs_backup
-    
+
     return backups
 
 
 def _upgrade_to_production_version(version: str) -> Dict[str, any]:
     """
     将指定版本升级到运行版（复制到 last 目录）
-    
+
     升级过程：
     1. 检查版本是否已编译
     2. 备份 last 目录中的静态文件和配置文件
     3. 从版本目录复制到 last 目录
     4. 恢复备份的静态文件和配置文件
-    
+
     Returns:
         dict: {
             "success": bool,
@@ -553,7 +622,7 @@ def _upgrade_to_production_version(version: str) -> Dict[str, any]:
     """
     source_install_path = _get_install_path(version)
     target_install_path = _get_versions_root() / "last"
-    
+
     # 检查源版本是否存在且已编译
     executable = _get_nginx_executable(source_install_path)
     if not source_install_path.exists() or not executable.exists():
@@ -562,35 +631,38 @@ def _upgrade_to_production_version(version: str) -> Dict[str, any]:
             "message": f"Nginx 版本 {version} 未编译，请先编译该版本",
             "version": version,
         }
-    
+
     try:
         # 如果目标目录已存在，备份需要保护的文件
         backups = {}
         if target_install_path.exists() and any(target_install_path.iterdir()):
             backups = _backup_protected_dirs(target_install_path)
-        
+
         # 删除目标目录（如果存在）
         if target_install_path.exists():
             shutil.rmtree(target_install_path, ignore_errors=True)
-        
+
         # 复制整个版本目录到 last 目录
         shutil.copytree(source_install_path, target_install_path, dirs_exist_ok=True)
-        
+
         # 如果有备份，恢复备份的文件
         if backups:
             _restore_protected_dirs(target_install_path, backups)
-            
+
             # 清理备份目录
-            backup_dir = target_install_path.parent / f"{target_install_path.name}_backup"
+            backup_dir = (
+                target_install_path.parent / f"{target_install_path.name}_backup"
+            )
             if backup_dir.exists():
                 try:
                     shutil.rmtree(backup_dir, ignore_errors=True)
                 except Exception:
                     pass
-        
-        # 更新 last 目录的 nginx.conf
+
+        # 更新 last 目录的 nginx.conf 并记录真实版本号
         _update_nginx_config_for_version(target_install_path, version)
-        
+        _write_version_metadata(target_install_path, version)
+
         return {
             "success": True,
             "message": f"版本 {version} 已成功升级到运行版",
@@ -624,7 +696,9 @@ def _restore_protected_dirs(install_path: Path, backups: Dict[str, Path]) -> Non
                                 if subitem.is_dir():
                                     target_subitem.mkdir(parents=True, exist_ok=True)
                                 else:
-                                    target_subitem.parent.mkdir(parents=True, exist_ok=True)
+                                    target_subitem.parent.mkdir(
+                                        parents=True, exist_ok=True
+                                    )
                                     shutil.copy2(subitem, target_subitem)
                         else:
                             shutil.copytree(item, target_item, dirs_exist_ok=True)
@@ -647,10 +721,12 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
     """
     _ensure_nginx_dirs()
     build_root = _get_build_root()
-    
+
     logs: list[str] = []
-    
-    install_path = _get_install_path(version)  # 最终对外暴露的安装目录：<versions_root>/<version>
+
+    install_path = _get_install_path(
+        version
+    )  # 最终对外暴露的安装目录：<versions_root>/<version>
     build_dir = build_root / version  # 源码解压与编译目录：<build_root>/<version>
     tmp_install_path = build_root / f"{version}_install_tmp"  # 编译安装使用的临时目录
 
@@ -754,6 +830,9 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
         _update_nginx_config_for_version(install_path, version)
         logs.append("已更新nginx.conf以使用版本目录下的配置目录和静态文件目录")
 
+        # 记录真实版本号，供后续展示与 last 目录识别
+        _write_version_metadata(install_path, version)
+
         full_log = "\n".join(logs)
         log_path = _write_build_log(version, full_log)
         return NginxBuildResult(
@@ -774,21 +853,23 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
         )
 
 
-def _get_version_status(version: str) -> NginxVersionInfo:
-    """获取单个版本的状态信息"""
+def _get_version_status(directory: str) -> NginxVersionInfo:
+    """获取单个目录对应的版本状态信息"""
     # 内部使用绝对路径进行检测和编译
-    install_path = _get_install_path(version)
+    install_path = _get_install_path(directory)
     executable = _get_nginx_executable(install_path)
-    source_tar = _get_source_tar_path(version)
+    source_tar = _get_source_tar_path(directory)
 
     # 对外返回时，安装路径使用相对于配置的 versions_root 的“原始路径”，避免在 API 中暴露绝对路径
     raw_root = _get_versions_root_raw()
-    display_install_path = str(raw_root / version)
-    display_executable = str(raw_root / version / "sbin" / "nginx")
+    display_install_path = str(raw_root / directory)
+    display_executable = str(raw_root / directory / "sbin" / "nginx")
+    resolved_version = _resolve_version_label(directory, install_path, executable)
 
     if not install_path.exists():
         return NginxVersionInfo(
-            version=version,
+            directory=directory,
+            version=resolved_version,
             install_path=display_install_path,
             executable=display_executable,
             running=False,
@@ -801,7 +882,8 @@ def _get_version_status(version: str) -> NginxVersionInfo:
 
     if not executable.exists():
         return NginxVersionInfo(
-            version=version,
+            directory=directory,
+            version=resolved_version,
             install_path=display_install_path,
             executable=display_executable,
             running=False,
@@ -825,7 +907,8 @@ def _get_version_status(version: str) -> NginxVersionInfo:
             running = False
 
     return NginxVersionInfo(
-        version=version,
+        directory=directory,
+        version=resolved_version,
         install_path=display_install_path,
         executable=display_executable,
         running=running,
@@ -838,7 +921,7 @@ def _get_version_status(version: str) -> NginxVersionInfo:
 def _start_nginx_version_internal(version: str) -> Dict[str, any]:
     """
     内部函数：启动指定版本的 Nginx（不依赖HTTP请求和用户认证）
-    
+
     Returns:
         dict: {
             "success": bool,
@@ -869,13 +952,13 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
     # 确保系统只有一个nginx在运行：先停止所有其他正在运行的版本
     all_versions = _list_all_versions()
     for v_info in all_versions:
-        if v_info.version != version and v_info.running:
+        if v_info.directory != version and v_info.running:
             # 停止其他正在运行的版本
             try:
-                other_install_path = _get_install_path(v_info.version)
+                other_install_path = _get_install_path(v_info.directory)
                 other_executable = _get_nginx_executable(other_install_path)
                 other_config_path = other_install_path / "conf" / "nginx.conf"
-                
+
                 stop_cmd = [
                     str(other_executable),
                     "-c",
@@ -909,7 +992,10 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
         # 如果配置文件存在，检查是否需要更新（检查是否使用版本目录下的配置）
         config_content = version_config_path.read_text(encoding="utf-8")
         # 检查是否包含版本目录下的 conf.d 引用，如果没有则更新
-        if "conf.d/*.conf" not in config_content or "include conf.d/*.conf" not in config_content:
+        if (
+            "conf.d/*.conf" not in config_content
+            or "include conf.d/*.conf" not in config_content
+        ):
             _update_nginx_config_for_version(install_path, version)
 
     # 先测试配置
@@ -1110,16 +1196,17 @@ def _download_to_file(url: str, dest: Path, progress_key: Optional[str] = None) 
     dest.parent.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(url)
 
-    # 初始化进度
+    # 初始化进度（仅在不存在时初始化，避免覆盖已有的初始化）
     if progress_key:
         with _progress_lock:
-            _download_progress[progress_key] = {
-                "status": "downloading",
-                "downloaded": 0,
-                "total": None,
-                "percentage": 0,
-                "error": None,
-            }
+            if progress_key not in _download_progress:
+                _download_progress[progress_key] = {
+                    "status": "downloading",
+                    "downloaded": 0,
+                    "total": None,
+                    "percentage": 0,
+                    "error": None,
+                }
 
     try:
         # 创建请求
@@ -1387,28 +1474,51 @@ async def download_and_build_nginx_version(
     source_tar = _get_source_tar_path(version)
     progress_key = f"download_{version}"
 
-    try:
-        # 异步下载，使用进度键
-        _download_to_file(url, source_tar, progress_key=progress_key)
+    # 检查是否已经在下载中
+    with _progress_lock:
+        existing_progress = _download_progress.get(progress_key)
+        if existing_progress and existing_progress.get("status") == "downloading":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"版本 {version} 的下载任务已在进行中",
+            )
 
-        # 清理进度信息（延迟清理，给前端时间获取最终状态）
-        def cleanup_progress():
-            time.sleep(5)  # 5秒后清理
+    # 初始化进度状态
+    with _progress_lock:
+        _download_progress[progress_key] = {
+            "status": "downloading",
+            "downloaded": 0,
+            "total": None,
+            "percentage": 0,
+            "error": None,
+        }
+
+    def download_task():
+        """后台下载任务"""
+        try:
+            # 执行下载
+            _download_to_file(url, source_tar, progress_key=progress_key)
+
+            # 记录审计日志（仅记录下载）
+            # 注意：这里不能直接访问 db 和 current_user，需要在主线程中记录
+            # 或者在下载完成后通过其他方式记录
+
+        except Exception as e:
+            # 标记错误
             with _progress_lock:
-                _download_progress.pop(progress_key, None)
+                if progress_key in _download_progress:
+                    _download_progress[progress_key].update(
+                        {"status": "error", "error": str(e)}
+                    )
 
-        threading.Thread(target=cleanup_progress, daemon=True).start()
+    # 在后台线程中启动下载任务
+    download_thread = threading.Thread(target=download_task, daemon=True)
+    download_thread.start()
 
-    except Exception as e:
-        # 清理错误进度
-        with _progress_lock:
-            _download_progress.pop(progress_key, None)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"下载源码包失败: {e}",
-        )
+    # 等待一小段时间，确保下载任务已启动
+    time.sleep(0.1)
 
-    # 记录审计日志（仅记录下载）
+    # 记录审计日志（记录下载任务已启动）
     create_audit_log(
         db=db,
         user_id=current_user.id,
@@ -1417,15 +1527,40 @@ async def download_and_build_nginx_version(
         target=version,
         details={
             "url": url,
-            "success": True,
+            "status": "started",
             "build_log_path": None,
         },
         ip_address=get_client_ip(request),
     )
 
+    # 清理进度信息（延迟清理，给前端时间获取最终状态）
+    def cleanup_progress():
+        # 等待下载完成（最多等待1小时）
+        max_wait_time = 3600
+        wait_interval = 2
+        waited = 0
+        while waited < max_wait_time:
+            with _progress_lock:
+                progress = _download_progress.get(progress_key)
+                if not progress:
+                    break
+                status = progress.get("status")
+                if status in ("completed", "error"):
+                    time.sleep(5)  # 再等待5秒，给前端时间获取最终状态
+                    break
+            time.sleep(wait_interval)
+            waited += wait_interval
+
+        # 清理进度信息
+        with _progress_lock:
+            _download_progress.pop(progress_key, None)
+
+    threading.Thread(target=cleanup_progress, daemon=True).start()
+
+    # 立即返回，告诉前端下载已开始
     return NginxBuildResult(
         success=True,
-        message=f"源码包下载成功，请在列表中对版本 {version} 执行编译",
+        message=f"下载任务已启动，请通过进度接口查看下载进度",
         version=version,
         build_log_path=None,
     )
@@ -1575,7 +1710,7 @@ async def upgrade_to_production_version(
 ):
     """
     将指定版本升级到运行版（复制到 last 目录）。
-    
+
     要求：
     - 版本必须已编译完成
     - 升级过程会保留运行版（last 目录）中的静态文件和配置文件
@@ -1584,16 +1719,16 @@ async def upgrade_to_production_version(
     # 检查版本是否已编译
     install_path = _get_install_path(version)
     executable = _get_nginx_executable(install_path)
-    
+
     if not install_path.exists() or not executable.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Nginx 版本 {version} 未编译，请先编译该版本",
         )
-    
+
     # 执行升级
     result = _upgrade_to_production_version(version)
-    
+
     # 记录审计日志
     create_audit_log(
         db=db,
@@ -1607,13 +1742,13 @@ async def upgrade_to_production_version(
         },
         ip_address=get_client_ip(request),
     )
-    
+
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result["message"],
         )
-    
+
     return result
 
 
@@ -1710,13 +1845,13 @@ async def start_nginx_version(
     all_versions = _list_all_versions()
     stopped_versions = []
     for v_info in all_versions:
-        if v_info.version != version and v_info.running:
+        if v_info.directory != version and v_info.running:
             # 停止其他正在运行的版本
             try:
-                other_install_path = _get_install_path(v_info.version)
+                other_install_path = _get_install_path(v_info.directory)
                 other_executable = _get_nginx_executable(other_install_path)
                 other_config_path = other_install_path / "conf" / "nginx.conf"
-                
+
                 stop_cmd = [
                     str(other_executable),
                     "-c",
@@ -1732,7 +1867,7 @@ async def start_nginx_version(
                     text=True,
                     timeout=30,
                 )
-                stopped_versions.append(v_info.version)
+                stopped_versions.append(v_info.directory)
             except Exception as e:
                 # 记录错误但继续执行
                 pass
@@ -1750,11 +1885,14 @@ async def start_nginx_version(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
         )
-    
+
     # 确保nginx.conf已更新为使用版本目录下的配置
     # 检查配置文件中是否包含版本目录下的 conf.d，如果没有则更新
     config_content = version_config_path.read_text(encoding="utf-8")
-    if "conf.d/*.conf" not in config_content or "include conf.d/*.conf" not in config_content:
+    if (
+        "conf.d/*.conf" not in config_content
+        or "include conf.d/*.conf" not in config_content
+    ):
         _update_nginx_config_for_version(install_path, version)
 
     # 先测试配置
@@ -2043,7 +2181,7 @@ async def force_release_http_port(
     """
     system = platform.system().lower()
     pids: List[int] = []
-    
+
     try:
         if system == "windows":
             # Windows 使用 netstat 命令
@@ -2054,13 +2192,13 @@ async def force_release_http_port(
                 text=True,
                 timeout=10,
             )
-            
+
             if result.returncode != 0:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"netstat 调用错误: {result.stderr.strip() or result.stdout.strip()}",
                 )
-            
+
             # 解析 netstat 输出，查找监听指定端口的进程
             # 格式示例: TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       1234
             # 或者: TCP    [::]:80                 [::]:0                 LISTENING       1234
@@ -2087,15 +2225,17 @@ async def force_release_http_port(
                 text=True,
                 timeout=10,
             )
-            
+
             if result.returncode not in (0, 1):
                 # 1 表示没有匹配记录，也视为正常
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
                 )
-            
-            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+            lines = [
+                line.strip() for line in result.stdout.splitlines() if line.strip()
+            ]
             for line in lines:
                 try:
                     pids.append(int(line))
@@ -2111,7 +2251,7 @@ async def force_release_http_port(
 
     # 去重 PID 列表
     pids = list(set(pids))
-    
+
     if not pids:
         return {
             "success": True,

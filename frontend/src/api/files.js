@@ -1,12 +1,20 @@
 import api from './index'
 
+const encodePath = (path = '') => {
+  if (!path) return ''
+  return path
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/')
+}
+
 export const filesApi = {
   // 列出文件
   listFiles(path, version, rootOnly) {
     const params = {}
     if (path) params.path = path
     if (version) params.version = version
-    if (rootOnly) params.root_only = rootOnly
+    if (typeof rootOnly === 'boolean') params.root_only = rootOnly
     return api.get('/files', { params })
   },
 
@@ -52,20 +60,24 @@ export const filesApi = {
   },
 
   // 获取文件内容
-  getFile(path, version) {
+  getFile(path, version, rootOnly) {
     const params = {}
     if (version) params.version = version
-    return api.get(`/files/${encodeURIComponent(path)}`, { params })
+    if (typeof rootOnly === 'boolean') params.root_only = rootOnly
+    return api.get(`/files/${encodePath(path)}`, { params })
   },
 
   // 上传文件
-  uploadFile(path, files, version) {
+  uploadFile(path, files, version, rootOnly) {
     const formData = new FormData()
     if (path) {
       formData.append('path', path)
     }
     if (version) {
       formData.append('version', version)
+    }
+    if (typeof rootOnly === 'boolean') {
+      formData.append('root_only', rootOnly)
     }
     files.forEach(file => {
       formData.append('files', file)
@@ -78,13 +90,16 @@ export const filesApi = {
   },
 
   // 更新文件
-  updateFile(path, content, version) {
+  updateFile(path, content, version, rootOnly) {
     const formData = new FormData()
     formData.append('content', content)
     if (version) {
       formData.append('version', version)
     }
-    return api.put(`/files/${encodeURIComponent(path)}`, formData, {
+    if (typeof rootOnly === 'boolean') {
+      formData.append('root_only', rootOnly)
+    }
+    return api.put(`/files/${encodePath(path)}`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
@@ -92,14 +107,15 @@ export const filesApi = {
   },
 
   // 删除文件
-  deleteFile(path, version) {
+  deleteFile(path, version, rootOnly) {
     const params = {}
     if (version) params.version = version
-    return api.delete(`/files/${encodeURIComponent(path)}`, { params })
+    if (typeof rootOnly === 'boolean') params.root_only = rootOnly
+    return api.delete(`/files/${encodePath(path)}`, { params })
   },
 
   // 创建目录
-  createDirectory(path, name, version) {
+  createDirectory(path, name, version, rootOnly) {
     const formData = new FormData()
     if (path) {
       formData.append('path', path)
@@ -108,24 +124,31 @@ export const filesApi = {
       formData.append('version', version)
     }
     formData.append('name', name)
+    if (typeof rootOnly === 'boolean') {
+      formData.append('root_only', rootOnly)
+    }
     return api.post('/files/mkdir', formData)
   },
 
   // 重命名文件
-  renameFile(path, newName, version) {
+  renameFile(path, newName, version, rootOnly) {
     const formData = new FormData()
     formData.append('new_name', newName)
     if (version) {
       formData.append('version', version)
     }
-    return api.post(`/files/rename/${encodeURIComponent(path)}`, formData)
+    if (typeof rootOnly === 'boolean') {
+      formData.append('root_only', rootOnly)
+    }
+    return api.post(`/files/rename/${encodePath(path)}`, formData)
   },
 
   // 下载文件
-  downloadFile(path, version) {
+  downloadFile(path, version, rootOnly) {
     const params = {}
     if (version) params.version = version
-    return api.get(`/files/download/${encodeURIComponent(path)}`, {
+    if (typeof rootOnly === 'boolean') params.root_only = rootOnly
+    return api.get(`/files/download/${encodePath(path)}`, {
       params,
       responseType: 'blob'
     })

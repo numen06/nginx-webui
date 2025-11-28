@@ -6,6 +6,13 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
+
 from app.config import get_config
 from app.utils.nginx_versions import get_active_version
 
@@ -638,6 +645,69 @@ def format_config(content: str) -> Dict[str, Any]:
                     pass
 
 
+def _resolve_include_paths(content: str, conf_dir: Path) -> str:
+    """
+    将配置内容中的相对路径 include 指令转换为绝对路径
+    
+    Args:
+        content: 配置内容
+        conf_dir: 配置目录（通常是 versions/<version>/conf）
+        
+    Returns:
+        转换后的配置内容
+    """
+    import re
+    import os
+    
+    lines = content.split('\n')
+    resolved_lines = []
+    
+    # include 指令的正则表达式
+    # 匹配: include path; 或 include path/*.conf;
+    include_pattern = re.compile(r'^(\s*)include\s+([^;]+);\s*(.*)$')
+    
+    for line in lines:
+        match = include_pattern.match(line)
+        if match:
+            indent = match.group(1)
+            include_path = match.group(2).strip().strip('"').strip("'")
+            comment = match.group(3)
+            
+            # 如果是绝对路径，不需要转换
+            if os.path.isabs(include_path):
+                resolved_lines.append(line)
+                continue
+            
+            # 将相对路径转换为绝对路径
+            # 如果路径以 conf.d/ 开头，直接拼接
+            if include_path.startswith('conf.d/'):
+                abs_path = conf_dir / include_path
+            elif include_path.startswith('../'):
+                # 处理 ../ 的相对路径
+                abs_path = conf_dir.parent / include_path[3:]
+            elif include_path.startswith('./'):
+                # 处理 ./ 的相对路径
+                abs_path = conf_dir / include_path[2:]
+            else:
+                # 其他情况，假设相对于 conf 目录
+                abs_path = conf_dir / include_path
+            
+            # 转换为绝对路径字符串，并保持引号风格
+            abs_path_str = str(abs_path)
+            # 如果原路径有引号，保持引号风格
+            if '"' in match.group(2) or "'" in match.group(2):
+                abs_path_str = f'"{abs_path_str}"'
+            
+            resolved_line = f"{indent}include {abs_path_str};"
+            if comment:
+                resolved_line += f" {comment}"
+            resolved_lines.append(resolved_line)
+        else:
+            resolved_lines.append(line)
+    
+    return '\n'.join(resolved_lines)
+
+
 def validate_config(content: str) -> Dict[str, Any]:
     """
     校验 Nginx 配置内容（不保存到文件）
@@ -668,39 +738,25 @@ def validate_config(content: str) -> Dict[str, Any]:
             "warnings": [],
         }
 
-    # 创建临时文件保存配置内容
-    temp_file = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".conf", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(content)
-            temp_file = f.name
-
-        # 构建测试命令
-        active = get_active_version()
-        cmd = [str(nginx_executable), "-t", "-c", temp_file]
-        
-        # 必须指定 prefix 参数，这样 nginx 才能正确找到 mime.types 等文件
-        if active is not None:
-            # 使用活动版本的安装路径作为 prefix
-            cmd.extend(["-p", str(active["install_path"])])
-        else:
-            # 如果没有活动版本，需要从当前配置文件路径推断 prefix
+    # 获取配置目录路径（用于解析相对路径）
+    active = get_active_version()
+    conf_dir = None
+    install_path = None
+    
+    if active is not None:
+        install_path = active["install_path"]
+        conf_dir = install_path / "conf"
+    else:
+        # 如果没有活动版本，从当前配置文件路径推断
+        try:
             config_path = get_config_path()
-            
             # 如果配置文件在 versions/<version>/conf/ 目录下
-            # prefix 应该是 versions/<version> 目录
             if "versions" in str(config_path) and "conf" in str(config_path):
-                # 从 conf/nginx.conf 向上找到 versions/<version> 目录
-                current = config_path.parent  # conf 目录
-                if current.name == "conf":
-                    install_path = current.parent  # versions/<version> 目录
-                    if install_path.exists() and install_path.is_dir():
-                        cmd.extend(["-p", str(install_path)])
+                conf_dir = config_path.parent  # conf 目录
+                if conf_dir.name == "conf":
+                    install_path = conf_dir.parent  # versions/<version> 目录
             else:
                 # 尝试从配置文件路径推断
-                # 如果配置文件在 nginx/versions/ 下，使用该版本目录作为 prefix
                 config = get_config()
                 versions_root = Path(config.nginx.versions_root)
                 if not versions_root.is_absolute():
@@ -708,13 +764,46 @@ def validate_config(content: str) -> Dict[str, Any]:
                     versions_root = (backend_dir / versions_root).resolve()
                 
                 if versions_root.exists():
-                    # 查找所有版本目录，尝试找到匹配的
+                    # 查找所有版本目录，使用第一个找到的
                     for version_dir in sorted(versions_root.iterdir(), reverse=True):
                         if version_dir.is_dir():
                             conf_file = version_dir / "conf" / "nginx.conf"
                             if conf_file.exists():
-                                cmd.extend(["-p", str(version_dir)])
+                                install_path = version_dir
+                                conf_dir = version_dir / "conf"
                                 break
+        except Exception:
+            pass
+    
+    # 如果无法确定配置目录，使用默认处理
+    if conf_dir is None or not conf_dir.exists():
+        return {
+            "success": False,
+            "message": "无法确定 Nginx 配置目录，请确保已安装 Nginx 版本",
+            "output": "",
+            "errors": ["无法确定 Nginx 配置目录"],
+            "warnings": [],
+        }
+    
+    # 将配置内容中的相对路径转换为绝对路径
+    resolved_content = _resolve_include_paths(content, conf_dir)
+
+    # 创建临时文件保存配置内容
+    temp_file = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".conf", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(resolved_content)
+            temp_file = f.name
+
+        # 构建测试命令
+        cmd = [str(nginx_executable), "-t", "-c", temp_file]
+        
+        # 必须指定 prefix 参数，这样 nginx 才能正确找到 mime.types 等文件
+        if install_path is not None:
+            # 使用安装路径作为 prefix
+            cmd.extend(["-p", str(install_path)])
 
         # 使用 nginx -t -c 测试临时配置文件
         result = subprocess.run(
@@ -780,9 +869,13 @@ def get_nginx_status() -> Dict[str, Any]:
         {
             "running": bool,
             "pid": Optional[int],
-            "version": Optional[str]
+            "version": Optional[str],
+            "uptime": Optional[str],
+            "install_path": Optional[str]
         }
     """
+    from datetime import datetime
+
     config = get_config()
     nginx_executable = _resolve_nginx_executable()
     active = get_active_version()
@@ -792,45 +885,176 @@ def get_nginx_status() -> Dict[str, Any]:
             "running": False, 
             "pid": None, 
             "version": None,
+            "uptime": None,
             "available": False,
             "message": "Nginx 未安装或不可用"
         }
         if active is not None:
             info["active_version"] = active["version"]
-            info["install_path"] = str(active["install_path"])
+            info["directory"] = active["directory"]
             info["binary"] = str(active["executable"])
         return info
 
     try:
-        # 检查进程是否运行
-        result = subprocess.run(
-            ["pgrep", "-f", "nginx"], capture_output=True, text=True, timeout=5
-        )
-
-        running = result.returncode == 0
         pid = None
-        if running and result.stdout.strip():
-            pids = result.stdout.strip().split("\n")
-            pid = int(pids[0]) if pids else None
+        running = False
+        uptime_str = None
+        
+        # 尝试从 pid 文件读取主进程 PID
+        if active is not None:
+            pid_file = active["install_path"] / "logs" / "nginx.pid"
+        else:
+            # 尝试从配置文件路径推断 pid 文件位置
+            try:
+                config_path = get_config_path()
+                # config_path 通常是 versions/<version>/conf/nginx.conf
+                # pid 文件应该在 versions/<version>/logs/nginx.pid
+                install_path = config_path.parent.parent  # 从 conf 向上两级到版本目录
+                pid_file = install_path / "logs" / "nginx.pid"
+            except:
+                pid_file = None
+        
+        # 如果找到 pid 文件，读取 PID
+        if pid_file and pid_file.exists():
+            try:
+                with open(pid_file, 'r') as f:
+                    pid = int(f.read().strip())
+                
+                # 使用 psutil 检查进程是否在运行并获取运行时间
+                if PSUTIL_AVAILABLE:
+                    try:
+                        process = psutil.Process(pid)
+                        if process.is_running():
+                            running = True
+                            # 获取运行时间
+                            create_time = datetime.fromtimestamp(process.create_time())
+                            now = datetime.now()
+                            uptime_delta = now - create_time
+                            
+                            # 格式化运行时间
+                            days = uptime_delta.days
+                            hours, remainder = divmod(uptime_delta.seconds, 3600)
+                            minutes, seconds = divmod(remainder, 60)
+                            
+                            if days > 0:
+                                uptime_str = f"{days}天{hours}小时{minutes}分钟"
+                            elif hours > 0:
+                                uptime_str = f"{hours}小时{minutes}分钟"
+                            elif minutes > 0:
+                                uptime_str = f"{minutes}分钟{seconds}秒"
+                            else:
+                                uptime_str = f"{seconds}秒"
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        running = False
+                        pid = None
+                else:
+                    # 如果没有 psutil，使用 os.kill 简单检查进程是否存在
+                    try:
+                        import os
+                        os.kill(pid, 0)  # 发送信号 0 检查进程是否存在
+                        running = True
+                        uptime_str = "无法获取（需要 psutil）"
+                    except (OSError, ProcessLookupError):
+                        running = False
+                        pid = None
+            except (ValueError, IOError):
+                pass
+        
+        # 如果没有从 pid 文件获取到，尝试查找 nginx 主进程
+        if not running and nginx_executable and PSUTIL_AVAILABLE:
+            try:
+                # 查找与可执行文件匹配的主进程
+                executable_name = nginx_executable.name
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                    try:
+                        if proc.info['name'] == executable_name or (proc.info['cmdline'] and executable_name in ' '.join(proc.info['cmdline'] or [])):
+                            # 检查是否是主进程（通常主进程的 cmdline 包含 master process 或者只有配置文件参数）
+                            cmdline = proc.info['cmdline'] or []
+                            if 'master process' in ' '.join(cmdline).lower() or len([c for c in cmdline if c.endswith('.conf')]) > 0:
+                                pid = proc.info['pid']
+                                running = True
+                                
+                                # 获取运行时间
+                                create_time = datetime.fromtimestamp(proc.info['create_time'])
+                                now = datetime.now()
+                                uptime_delta = now - create_time
+                                
+                                days = uptime_delta.days
+                                hours, remainder = divmod(uptime_delta.seconds, 3600)
+                                minutes, seconds = divmod(remainder, 60)
+                                
+                                if days > 0:
+                                    uptime_str = f"{days}天{hours}小时{minutes}分钟"
+                                elif hours > 0:
+                                    uptime_str = f"{hours}小时{minutes}分钟"
+                                elif minutes > 0:
+                                    uptime_str = f"{minutes}分钟{seconds}秒"
+                                else:
+                                    uptime_str = f"{seconds}秒"
+                                break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+            except Exception:
+                pass
+        elif not running and nginx_executable and not PSUTIL_AVAILABLE:
+            # 如果没有 psutil，尝试使用 pgrep 查找进程
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", str(nginx_executable)], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    pids = result.stdout.strip().split("\n")
+                    pid = int(pids[0]) if pids else None
+                    running = pid is not None
+                    if running:
+                        uptime_str = "无法获取（需要 psutil）"
+            except Exception:
+                pass
 
         # 获取版本信息（来自 nginx 可执行文件本身）
-        version_result = subprocess.run(
-            [str(nginx_executable), "-v"], capture_output=True, text=True, timeout=5
-        )
-        version = version_result.stderr.strip() if version_result.stderr else None
+        version = None
+        version_detail = None
+        try:
+            version_result = subprocess.run(
+                [str(nginx_executable), "-v"], capture_output=True, text=True, timeout=5
+            )
+            if version_result.stderr:
+                version_detail = version_result.stderr.strip()
+                # 提取版本号（例如：nginx version: nginx/1.28.0）
+                import re
+                match = re.search(r'nginx/([\d.]+)', version_detail)
+                if match:
+                    version = match.group(1)
+        except Exception:
+            pass
 
         info: Dict[str, Any] = {
             "running": running, 
             "pid": pid, 
             "version": version,
+            "version_detail": version_detail,
+            "uptime": uptime_str,
             "available": True
         }
-        # 如果是通过多版本管理启动的 Nginx，可以补充当前活动版本号及安装路径
+        # 如果是通过多版本管理启动的 Nginx，补充当前活动版本号及目录名称
         if active is not None:
             info["active_version"] = active["version"]
-            info["install_path"] = str(active["install_path"])
+            info["directory"] = active["directory"]  # 使用目录简称（如：1.28.0 或 last）
             info["binary"] = str(active["executable"])
+            # 如果没有版本信息，使用活动版本号
+            if not version:
+                info["version"] = active["version"]
 
         return info
     except Exception as e:
-        return {"running": False, "pid": None, "version": None, "error": str(e)}
+        return {
+            "running": False, 
+            "pid": None, 
+            "version": None,
+            "uptime": None,
+            "error": str(e),
+            "available": True
+        }

@@ -1,5 +1,115 @@
 <template>
   <div class="nginx-manager">
+    <div v-if="pinnedVersion" class="pinned-card-wrapper">
+      <el-card class="version-card pinned-card" shadow="hover">
+        <template #header>
+          <div class="version-card-header">
+            <div class="version-title">
+              <div class="version-name">
+                <span class="directory-text">目录：{{ pinnedVersion.directory }}</span>
+                <span class="running-flag">（运行版）</span>
+              </div>
+              <div class="version-tags">
+                <el-tag
+                  v-if="buildingVersions.includes(pinnedVersion.directory)"
+                  type="warning"
+                  size="small"
+                >
+                  处理中
+                </el-tag>
+                <template v-else>
+                  <el-tag
+                    v-if="pinnedVersion.compiled"
+                    :type="pinnedVersion.running ? 'success' : 'info'"
+                    size="small"
+                  >
+                    {{ pinnedVersion.running ? '运行中' : '已编译' }}
+                  </el-tag>
+                  <el-tag
+                    v-else-if="pinnedVersion.has_source"
+                    type="warning"
+                    size="small"
+                  >
+                    未编译
+                  </el-tag>
+                  <el-tag
+                    v-else
+                    type="danger"
+                    size="small"
+                  >
+                    未准备
+                  </el-tag>
+                </template>
+              </div>
+            </div>
+            <div class="version-sub">
+              <span>版本：{{ formatVersionLabel(pinnedVersion) }}</span>
+              <span>PID：{{ pinnedVersion.pid || '-' }}</span>
+            </div>
+          </div>
+        </template>
+
+        <div class="version-body">
+          <div class="install-path" :title="pinnedVersion.install_path">
+            安装路径：{{ pinnedVersion.install_path }}
+          </div>
+        </div>
+
+        <div class="version-actions">
+          <el-button
+            size="small"
+            type="purple"
+            v-if="pinnedVersion.directory !== 'last'"
+            :disabled="buildingVersions.includes(pinnedVersion.directory) || pinnedVersion.compiled || !pinnedVersion.has_source"
+            @click="compileVersion(pinnedVersion.directory)"
+          >
+            编译
+          </el-button>
+          <el-button
+            size="small"
+            type="primary"
+            v-if="pinnedVersion.directory !== 'last'"
+            :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
+            @click="upgradeToProduction(pinnedVersion.directory)"
+          >
+            升级到运行版
+          </el-button>
+          <el-button
+            size="small"
+            type="success"
+            :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
+            @click="startVersion(pinnedVersion.directory)"
+          >
+            启动
+          </el-button>
+          <el-button
+            size="small"
+            type="warning"
+            :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
+            @click="stopVersion(pinnedVersion.directory)"
+          >
+            停止
+          </el-button>
+          <el-button
+            size="small"
+            type="orange"
+            :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
+            @click="forceStopVersion(pinnedVersion.directory)"
+          >
+            强制停止
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
+            @click="deleteVersion(pinnedVersion.directory)"
+          >
+            删除
+          </el-button>
+        </div>
+      </el-card>
+    </div>
+
     <el-card>
       <template #header>
         <div class="card-header">
@@ -29,18 +139,20 @@
 
       <el-row :gutter="16">
         <el-col
-          v-for="row in versions"
-          :key="row.version"
+          v-for="row in sortedVersions"
+          :key="row.directory"
           :span="12"
         >
           <el-card class="version-card" shadow="hover">
             <template #header>
               <div class="version-card-header">
                 <div class="version-title">
-                  <span class="version-name">{{ row.version }}</span>
+                  <div class="version-name">
+                    <span class="directory-text">目录：{{ row.directory }}</span>
+                  </div>
                   <div class="version-tags">
                     <el-tag
-                      v-if="buildingVersions.includes(row.version)"
+                      v-if="buildingVersions.includes(row.directory)"
                       type="warning"
                       size="small"
                     >
@@ -72,6 +184,7 @@
                   </div>
                 </div>
                 <div class="version-sub">
+                  <span>版本：{{ formatVersionLabel(row) }}</span>
                   <span>PID：{{ row.pid || '-' }}</span>
                 </div>
               </div>
@@ -87,48 +200,48 @@
               <el-button
                 size="small"
                 type="purple"
-                :disabled="buildingVersions.includes(row.version) || row.compiled || !row.has_source"
-                @click="compileVersion(row.version)"
+                :disabled="buildingVersions.includes(row.directory) || row.compiled || !row.has_source"
+                @click="compileVersion(row.directory)"
               >
                 编译
               </el-button>
               <el-button
                 size="small"
                 type="primary"
-                :disabled="buildingVersions.includes(row.version) || !row.compiled"
-                @click="upgradeToProduction(row.version)"
+                :disabled="buildingVersions.includes(row.directory) || !row.compiled"
+                @click="upgradeToProduction(row.directory)"
               >
                 升级到运行版
               </el-button>
               <el-button
                 size="small"
                 type="success"
-                :disabled="row.running || buildingVersions.includes(row.version) || !row.compiled"
-                @click="startVersion(row.version)"
+                :disabled="row.running || buildingVersions.includes(row.directory) || !row.compiled"
+                @click="startVersion(row.directory)"
               >
                 启动
               </el-button>
               <el-button
                 size="small"
                 type="warning"
-                :disabled="!row.running || buildingVersions.includes(row.version)"
-                @click="stopVersion(row.version)"
+                :disabled="!row.running || buildingVersions.includes(row.directory)"
+                @click="stopVersion(row.directory)"
               >
                 停止
               </el-button>
               <el-button
                 size="small"
                 type="orange"
-                :disabled="!row.running || buildingVersions.includes(row.version)"
-                @click="forceStopVersion(row.version)"
+                :disabled="!row.running || buildingVersions.includes(row.directory)"
+                @click="forceStopVersion(row.directory)"
               >
                 强制停止
               </el-button>
               <el-button
                 size="small"
                 type="danger"
-                :disabled="row.running || buildingVersions.includes(row.version)"
-                @click="deleteVersion(row.version)"
+                :disabled="row.running || buildingVersions.includes(row.directory)"
+                @click="deleteVersion(row.directory)"
               >
                 删除
               </el-button>
@@ -298,11 +411,23 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { nginxApi } from '../api/nginx'
 
 const versions = ref([])
+const pinnedVersion = computed(() => versions.value.find((item) => item.directory === 'last'))
+const sortedVersions = computed(() => {
+  if (!versions.value || versions.value.length === 0) {
+    return []
+  }
+  if (!pinnedVersion.value) {
+    return versions.value
+  }
+  return [
+    ...versions.value.filter((item) => item.directory !== 'last')
+  ]
+})
 // 常用 Nginx 版本列表，用于下拉选择；也可以手动输入任意版本号
 const builtinVersions = [
   '1.28.0', // mainline
@@ -330,11 +455,30 @@ let progressInterval = null
 // 正在下载/编译的版本列表（前端感知的“进行中”状态）
 const buildingVersions = ref([])
 
-const setBuilding = (version, building) => {
-  if (!version) return
-  const idx = buildingVersions.value.indexOf(version)
+const formatVersionLabel = (info) => {
+  if (!info || typeof info !== 'object') {
+    return '未知'
+  }
+  return info.version || '未知'
+}
+
+const getDisplayLabelByDirectory = (directory) => {
+  if (!directory) return ''
+  const target = versions.value.find((item) => item.directory === directory)
+  if (target && target.version) {
+    if (target.version !== target.directory) {
+      return `${target.version}（目录 ${target.directory}）`
+    }
+    return target.version
+  }
+  return target?.directory || directory
+}
+
+const setBuilding = (directory, building) => {
+  if (!directory) return
+  const idx = buildingVersions.value.indexOf(directory)
   if (building && idx === -1) {
-    buildingVersions.value.push(version)
+    buildingVersions.value.push(directory)
   } else if (!building && idx !== -1) {
     buildingVersions.value.splice(idx, 1)
   }
@@ -574,7 +718,7 @@ const handleUrlBlur = () => {
   }
 }
 
-const startProgressPolling = (version) => {
+const startProgressPolling = (version, onComplete) => {
   // 清除之前的定时器
   if (progressInterval) {
     clearInterval(progressInterval)
@@ -604,6 +748,11 @@ const startProgressPolling = (version) => {
         
         if (progress.status === 'error') {
           ElMessage.error(`下载失败: ${progress.error || '未知错误'}`)
+        }
+        
+        // 调用完成回调
+        if (onComplete) {
+          onComplete(progress.status === 'completed')
         }
       }
     } catch (error) {
@@ -661,34 +810,52 @@ const handleDownload = async () => {
   downloadLoading.value = true
   setBuilding(targetVersion, true)
   
-  // 开始进度轮询
-  startProgressPolling(targetVersion)
-  
   try {
+    // 启动下载任务（后端会立即返回，下载在后台进行）
     await nginxApi.downloadAndBuild({
       version: targetVersion,
       url: downloadUrl
     })
     
-    // 等待一下，确保进度更新到100%
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // 开始进度轮询，等待下载完成
+    let downloadCompleted = false
+    let downloadError = null
     
-    ElMessage.success('源码包下载成功')
-    await loadVersions()
-    downloadDialogVisible.value = false
-    resetDownloadForm()
-  } catch (error) {
-    // 有些情况下后端实际上已经在后台继续下载，但前端因为超时收到了错误
-    // 这里在报错前先刷新一次列表，如果目标版本已经出现，则提示"可能已完成"
-    await loadVersions()
-    const exists = versions.value?.some((v) => v.version === targetVersion && v.has_source)
-    if (exists) {
-      ElMessage.success('下载任务可能已在后台完成，请查看版本列表')
+    await new Promise((resolve) => {
+      startProgressPolling(targetVersion, (success) => {
+        downloadCompleted = success
+        resolve()
+      })
+      
+      // 设置超时（最多等待1小时）
+      setTimeout(() => {
+        if (progressInterval) {
+          clearInterval(progressInterval)
+          progressInterval = null
+        }
+        downloadError = '下载超时，请稍后刷新版本列表查看'
+        resolve()
+      }, 3600000) // 1小时超时
+    })
+    
+    // 下载完成后的处理
+    if (downloadCompleted) {
+      ElMessage.success('源码包下载成功')
+      await loadVersions()
       downloadDialogVisible.value = false
       resetDownloadForm()
+    } else if (downloadError) {
+      ElMessage.warning(downloadError)
+      await loadVersions()
     } else {
-      ElMessage.error(error.detail || '下载失败')
+      // 下载失败的情况已在进度轮询中处理
+      await loadVersions()
     }
+  } catch (error) {
+    // 启动下载任务失败
+    stopProgressPolling()
+    ElMessage.error(error.detail || error.message || '启动下载任务失败')
+    await loadVersions()
   } finally {
     downloadLoading.value = false
     setBuilding(targetVersion, false)
@@ -730,53 +897,59 @@ const handleUpload = async () => {
   }
 }
 
-const startVersion = async (version) => {
+const startVersion = async (directory) => {
   try {
-    await nginxApi.startVersion(version)
-    ElMessage.success(`已启动 Nginx ${version}`)
+    await nginxApi.startVersion(directory)
+    ElMessage.success(`已启动 Nginx ${getDisplayLabelByDirectory(directory)}`)
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '启动失败')
   }
 }
 
-const stopVersion = async (version) => {
+const stopVersion = async (directory) => {
   try {
-    await nginxApi.stopVersion(version)
-    ElMessage.success(`已停止 Nginx ${version}`)
+    await nginxApi.stopVersion(directory)
+    ElMessage.success(`已停止 Nginx ${getDisplayLabelByDirectory(directory)}`)
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '停止失败')
   }
 }
 
-const forceStopVersion = async (version) => {
+const forceStopVersion = async (directory) => {
   try {
-    await nginxApi.forceStopVersion(version)
-    ElMessage.success(`已强制停止 Nginx ${version}`)
+    await nginxApi.forceStopVersion(directory)
+    ElMessage.success(`已强制停止 Nginx ${getDisplayLabelByDirectory(directory)}`)
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '强制停止失败')
   }
 }
 
-const compileVersion = async (version) => {
-  setBuilding(version, true)
+const compileVersion = async (directory) => {
+  setBuilding(directory, true)
   try {
-    await nginxApi.compileVersion(version)
-    ElMessage.success(`已编译 Nginx ${version}`)
+    await nginxApi.compileVersion(directory)
+    ElMessage.success(`已编译 Nginx ${getDisplayLabelByDirectory(directory)}`)
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '编译失败')
   } finally {
-    setBuilding(version, false)
+    setBuilding(directory, false)
   }
 }
 
-const upgradeToProduction = async (version) => {
+const upgradeToProduction = async (directory) => {
+  const target = versions.value.find((item) => item.directory === directory)
+  const binaryVersion = target ? formatVersionLabel(target) : ''
+  const directoryDesc =
+    binaryVersion && binaryVersion !== directory
+      ? `目录 ${directory}（版本 ${binaryVersion}）`
+      : `目录 ${directory}`
   try {
     await ElMessageBox.confirm(
-      `确认将 Nginx 版本 ${version} 升级到运行目录（last）？升级将覆盖当前运行版本的核心文件，但会保留 html/conf/logs 中的自定义内容。升级后需手动重启 Nginx 生效。`,
+      `确认将 ${directoryDesc} 升级到运行目录（last）？升级将覆盖当前运行版本的核心文件，但会保留 html/conf/logs 中的自定义内容。升级后需手动重启 Nginx 生效。`,
       '升级确认',
       {
         confirmButtonText: '升级',
@@ -788,15 +961,15 @@ const upgradeToProduction = async (version) => {
     return
   }
 
-  setBuilding(version, true)
+  setBuilding(directory, true)
   try {
-    await nginxApi.upgradeToProduction(version)
-    ElMessage.success(`已将 Nginx ${version} 升级到运行版（last）`)
+    await nginxApi.upgradeToProduction(directory)
+    ElMessage.success(`已将 ${getDisplayLabelByDirectory(directory)} 升级到运行版（last）`)
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '升级运行版失败')
   } finally {
-    setBuilding(version, false)
+    setBuilding(directory, false)
   }
 }
 
@@ -810,10 +983,16 @@ const forceReleaseHttpPort = async () => {
   }
 }
 
-const deleteVersion = async (version) => {
+const deleteVersion = async (directory) => {
+  const target = versions.value.find((item) => item.directory === directory)
+  const binaryVersion = target ? formatVersionLabel(target) : ''
+  const directoryDesc =
+    binaryVersion && binaryVersion !== directory
+      ? `目录 ${directory}（版本 ${binaryVersion}）`
+      : `目录 ${directory}`
   try {
     await ElMessageBox.confirm(
-      `确定要删除 Nginx 版本 ${version} 吗？此操作不可恢复，仅在该版本已停止时允许删除。`,
+      `确定要删除 ${directoryDesc} 吗？此操作不可恢复，仅在该版本已停止时允许删除。`,
       '删除确认',
       {
         confirmButtonText: '删除',
@@ -827,8 +1006,8 @@ const deleteVersion = async (version) => {
   }
 
   try {
-    await nginxApi.deleteVersion(version)
-    ElMessage.success(`已删除 Nginx ${version}`)
+    await nginxApi.deleteVersion(directory)
+    ElMessage.success(`已删除 Nginx ${getDisplayLabelByDirectory(directory)}`)
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '删除失败')
@@ -860,6 +1039,16 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 
+.pinned-card-wrapper {
+  margin-bottom: 16px;
+}
+
+.pinned-card .version-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .version-card-header {
   display: flex;
   flex-direction: column;
@@ -875,6 +1064,10 @@ onUnmounted(() => {
 .version-name {
   font-weight: 600;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .version-tags {
@@ -885,6 +1078,9 @@ onUnmounted(() => {
 .version-sub {
   font-size: 12px;
   color: var(--text-muted);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .version-body {
@@ -902,6 +1098,14 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.directory-text {
+  font-weight: 600;
+}
+
+.running-flag {
+  color: var(--el-color-primary);
 }
 
 .force-release-icon {

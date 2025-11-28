@@ -13,20 +13,26 @@
               </el-button>
             </div>
           </template>
-          <el-descriptions :column="4" class="nginx-status-descriptions">
+          <el-descriptions :column="2" border size="small" class="nginx-status-descriptions">
             <el-descriptions-item label="运行状态">
-              <el-tag :type="nginxStatus.running ? 'success' : 'danger'" size="large">
+              <el-tag :type="nginxStatus.running ? 'success' : 'danger'" size="small">
                 {{ nginxStatus.running ? '运行中' : '已停止' }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="版本">
-              <span class="status-value">{{ nginxStatus.version || '未知' }}</span>
-            </el-descriptions-item>
             <el-descriptions-item label="进程ID">
-              <span class="status-value">{{ nginxStatus.pid || '无' }}</span>
+              <el-text type="info" size="small">{{ nginxStatus.pid || '无' }}</el-text>
             </el-descriptions-item>
-            <el-descriptions-item label="运行时间">
-              <span class="status-value">{{ nginxStatus.uptime || '-' }}</span>
+            <el-descriptions-item label="当前 Nginx 目录">
+              <el-text type="info" size="small">{{ nginxStatus.directory || '-' }}</el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="当前 Nginx 版本">
+              <el-tag v-if="nginxStatus.version" type="info" size="small">
+                {{ nginxStatus.version }}
+              </el-tag>
+              <span v-else class="text-muted">未知</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="运行时间" :span="2">
+              <el-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</el-text>
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -296,6 +302,7 @@ import { ElMessage } from 'element-plus'
 const nginxStatus = ref({
   running: false,
   version: null,
+  directory: null,
   pid: null,
   uptime: null
 })
@@ -718,19 +725,23 @@ onUnmounted(() => {
 }
 
 .nginx-status-descriptions :deep(.el-descriptions__label) {
-  background-color: transparent;
+  background-color: transparent !important;
   color: var(--text-secondary);
   font-weight: 500;
   padding-right: 20px;
 }
 
 .nginx-status-descriptions :deep(.el-descriptions__content) {
-  background-color: transparent;
+  background-color: transparent !important;
   color: var(--text-primary);
 }
 
 .status-value {
   color: var(--text-primary);
   font-size: 14px;
+}
+
+.stat-icon :deep(.el-icon) {
+  color: #ffffff;
 }
 </style>

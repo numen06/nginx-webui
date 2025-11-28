@@ -6,16 +6,16 @@
           <span>文件管理</span>
           <div class="card-actions">
             <el-select
-              v-model="selectedVersion"
-              placeholder="选择 Nginx 版本"
-              style="width: 200px; margin-right: 8px"
-              @change="handleVersionChange"
+              v-model="selectedDirectory"
+              placeholder="选择 Nginx 目录/版本"
+              style="width: 240px; margin-right: 8px"
+              @change="handleDirectoryChange"
             >
               <el-option
                 v-for="version in versions"
-                :key="version.version"
-                :label="`${version.version}${version.running ? ' (运行中)' : ''}`"
-                :value="version.version"
+                :key="version.directory"
+                :label="formatOptionLabel(version)"
+                :value="version.directory"
               />
             </el-select>
             <el-switch
@@ -25,7 +25,6 @@
               style="margin-right: 8px"
               @change="handleRootOnlyChange"
             />
-            <span class="current-path">当前路径：/{{ currentPath || '' }}</span>
             <el-button size="small" type="info" @click="handleGoRoot">根目录</el-button>
             <el-button size="small" type="info" @click="handleGoParent" :disabled="!currentPath">上一级</el-button>
             <el-button size="small" type="primary" @click="handleUpload">上传文件</el-button>
@@ -34,59 +33,132 @@
           </div>
         </div>
       </template>
-      <div class="version-info" v-if="selectedVersion">
+      <div class="path-info" v-if="displayRootPath || currentPath">
+        <div class="path-line">
+          <span class="path-label">根路径：</span>
+          <span class="path-value">{{ displayRootPath || '-' }}</span>
+        </div>
+        <div class="path-line">
+          <span class="path-label">相对路径：</span>
+          <span class="path-value">/{{ currentPath || '' }}</span>
+        </div>
+      </div>
+      <div class="version-info" v-if="selectedDirectory">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="当前 Nginx 版本">
-            <el-tag :type="currentVersionInfo?.running ? 'success' : 'info'">
-              {{ selectedVersion }}
-            </el-tag>
-            <span v-if="currentVersionInfo?.running" class="running-badge">运行中</span>
+          <el-descriptions-item label="当前 Nginx 目录">
+            <el-text type="info" size="small">{{ selectedDirectory || '-' }}</el-text>
           </el-descriptions-item>
-          <el-descriptions-item label="安装路径">
-            <el-text type="info" size="small">{{ currentVersionInfo?.install_path || '-' }}</el-text>
+          <el-descriptions-item label="当前 Nginx 版本">
+            <el-tag v-if="formatVersionLabel(currentVersionInfo)" type="info" size="small">
+              {{ formatVersionLabel(currentVersionInfo) }}
+            </el-tag>
+            <span v-else class="text-muted">未知</span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="currentVersionInfo?.running" label="运行状态" :span="2">
+            <el-tag type="success" size="small">运行中</el-tag>
           </el-descriptions-item>
         </el-descriptions>
       </div>
-      <el-table :data="fileList" style="width: 100%" :loading="loading">
-        <el-table-column prop="name" label="文件名">
-          <template #default="scope">
+      <el-table
+        :data="fileList"
+        style="width: 100%"
+        :loading="loading"
+        border
+        table-layout="auto"
+        :row-key="getRowKey"
+        empty-text="暂无文件，请先选择目录或上传文件"
+      >
+        <el-table-column prop="name" label="文件名" min-width="260" show-overflow-tooltip>
+          <template #default="{ row }">
             <span
               class="file-name"
-              :class="{ 'is-dir': scope.row.is_dir }"
-              @dblclick="handleRowDblClick(scope.row)"
+              :class="{ 'is-dir': row.is_dir }"
+              @dblclick="handleRowDblClick(row)"
             >
-              <el-icon v-if="scope.row.is_dir" class="file-icon">
+              <el-icon v-if="row.is_dir" class="file-icon">
                 <folder />
               </el-icon>
               <el-icon v-else class="file-icon">
                 <document />
               </el-icon>
-              {{ scope.row.name }}
+              <span class="file-name-text">{{ row.name }}</span>
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="大小" width="120">
-          <template #default="scope">
-            <span v-if="!scope.row.is_dir">{{ formatSize(scope.row.size) }}</span>
+        <el-table-column label="大小" width="140" align="center">
+          <template #default="{ row }">
+            <span v-if="!row.is_dir">{{ formatSize(row.size) }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="修改时间" width="180">
-          <template #default="scope">
-            {{ scope.row.modified_time || '-' }}
+        <el-table-column label="修改时间" width="200" align="center" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.modified_time || '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
-          <template #default="scope">
-            <template v-if="scope.row.is_dir">
-              <el-button size="small" type="success" @click="enterDirectory(scope.row)">进入</el-button>
-            </template>
-            <template v-else>
-              <el-button size="small" type="info" @click="handleEdit(scope.row)">编辑</el-button>
-              <el-button size="small" type="cyan" @click="handleDownload(scope.row)">下载</el-button>
-            </template>
-            <el-button size="small" type="warning" @click="handleRename(scope.row)">重命名</el-button>
-            <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
+        <el-table-column label="操作" width="320" fixed="right" align="center" class-name="file-ops-column">
+          <template #default="{ row }">
+            <div class="file-actions" :class="{ 'is-dir': row.is_dir }">
+              <template v-if="row.is_dir">
+                <el-tooltip content="进入" placement="top">
+                  <el-button
+                    size="small"
+                    type="success"
+                    circle
+                    aria-label="进入目录"
+                    @click="enterDirectory(row)"
+                  >
+                    <el-icon><ArrowRightBold /></el-icon>
+                  </el-button>
+                </el-tooltip>
+              </template>
+              <template v-else>
+                <el-tooltip content="编辑" placement="top">
+                  <el-button
+                    size="small"
+                    type="info"
+                    circle
+                    aria-label="编辑文件"
+                    @click="handleEdit(row)"
+                  >
+                    <el-icon><Edit /></el-icon>
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip content="下载" placement="top">
+                  <el-button
+                    size="small"
+                    type="cyan"
+                    circle
+                    aria-label="下载文件"
+                    @click="handleDownload(row)"
+                  >
+                    <el-icon><Download /></el-icon>
+                  </el-button>
+                </el-tooltip>
+              </template>
+              <el-tooltip content="重命名" placement="top">
+                <el-button
+                  size="small"
+                  type="warning"
+                  circle
+                  aria-label="重命名"
+                  @click="handleRename(row)"
+                >
+                  <el-icon><EditPen /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="删除" placement="top">
+                <el-button
+                  size="small"
+                  type="danger"
+                  circle
+                  aria-label="删除"
+                  @click="handleDelete(row)"
+                >
+                  <el-icon><DeleteIcon /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -129,7 +201,7 @@ import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Folder, Document } from '@element-plus/icons-vue'
+import { Folder, Document, ArrowRightBold, Edit, Download, EditPen, Delete as DeleteIcon } from '@element-plus/icons-vue'
 import MonacoEditor from '../components/MonacoEditor.vue'
 
 const fileList = ref([])
@@ -137,7 +209,7 @@ const currentPath = ref('')
 const loading = ref(false)
 const uploadInput = ref(null)
 const versions = ref([])
-const selectedVersion = ref(null)
+const selectedDirectory = ref(null)
 const rootOnly = ref(false)
 
 const editDialogVisible = ref(false)
@@ -148,33 +220,70 @@ const editForm = ref({
 const editLanguage = ref('plaintext')
 
 const currentVersionInfo = computed(() => {
-  return versions.value.find(v => v.version === selectedVersion.value)
+  return versions.value.find(v => v.directory === selectedDirectory.value)
 })
+
+const formatVersionLabel = (info) => {
+  if (!info || typeof info !== 'object') return '未知'
+  return info.version || '未知'
+}
+
+const formatOptionLabel = (info) => {
+  if (!info) return '-'
+  const versionLabel = formatVersionLabel(info)
+  const directory = info.directory || ''
+  const runningSuffix = info.running ? '（运行中）' : ''
+  if (versionLabel && versionLabel !== directory) {
+    return `${directory}（版本 ${versionLabel}）${runningSuffix}`
+  }
+  return `${directory || versionLabel || '未知'}${runningSuffix}`
+}
+
+const getRowKey = (row) => row.path || row.name
+const rootBasePath = ref('')
+
+const displayRootPath = computed(() => {
+  return (rootBasePath.value || '').replace(/\/+$/, '')
+})
+
 
 const loadVersions = async () => {
   try {
     const data = await nginxApi.listVersions()
     versions.value = data || []
-    // 默认选择运行中的版本，如果没有则选择第一个已编译的版本
-    if (versions.value.length > 0) {
-      const running = versions.value.find(v => v.running && v.compiled)
-      if (running) {
-        selectedVersion.value = running.version
-      } else {
-        const compiled = versions.value.find(v => v.compiled)
-        if (compiled) {
-          selectedVersion.value = compiled.version
-        } else {
-          selectedVersion.value = versions.value[0].version
-        }
+    if (versions.value.length === 0) {
+      selectedDirectory.value = null
+      return
+    }
+
+    // 若当前选择仍然存在，则保留
+    if (selectedDirectory.value) {
+      const stillExists = versions.value.some(v => v.directory === selectedDirectory.value)
+      if (stillExists) {
+        return
       }
     }
+
+    // 默认优先运行中目录，其次任一已编译，否则第一个
+    const running = versions.value.find(v => v.running)
+    if (running) {
+      selectedDirectory.value = running.directory
+      return
+    }
+
+    const compiled = versions.value.find(v => v.compiled)
+    if (compiled) {
+      selectedDirectory.value = compiled.directory
+      return
+    }
+
+    selectedDirectory.value = versions.value[0].directory
   } catch (error) {
     console.error('加载版本列表失败:', error)
   }
 }
 
-const handleVersionChange = () => {
+const handleDirectoryChange = () => {
   currentPath.value = ''
   loadFiles()
 }
@@ -185,13 +294,15 @@ const handleRootOnlyChange = () => {
 }
 
 const loadFiles = async () => {
-  if (!selectedVersion.value) {
+  if (!selectedDirectory.value) {
     return
   }
   try {
     loading.value = true
-    const response = await filesApi.listFiles(currentPath.value || undefined, selectedVersion.value, rootOnly.value)
+    rootBasePath.value = ''
+    const response = await filesApi.listFiles(currentPath.value || undefined, selectedDirectory.value, rootOnly.value)
     fileList.value = response.files || []
+    rootBasePath.value = response.root_path || ''
   } catch (error) {
     ElMessage.error(error.detail || '加载文件列表失败')
   } finally {
@@ -209,12 +320,17 @@ const handleUpload = () => {
 const handleFileChange = async (event) => {
   const files = Array.from(event.target.files || [])
   if (!files.length) return
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
-    const res = await filesApi.uploadFile(currentPath.value || undefined, files, selectedVersion.value)
+    const res = await filesApi.uploadFile(
+      currentPath.value || undefined,
+      files,
+      selectedDirectory.value,
+      rootOnly.value
+    )
     ElMessage.success(res.message || '上传成功')
     loadFiles()
   } catch (error) {
@@ -227,8 +343,8 @@ const handleFileChange = async (event) => {
 }
 
 const handleCreateDir = async () => {
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
@@ -238,7 +354,12 @@ const handleCreateDir = async () => {
       confirmButtonText: '确 定',
       cancelButtonText: '取 消'
     })
-    await filesApi.createDirectory(currentPath.value || undefined, value, selectedVersion.value)
+    await filesApi.createDirectory(
+      currentPath.value || undefined,
+      value,
+      selectedDirectory.value,
+      rootOnly.value
+    )
     ElMessage.success('创建文件夹成功')
     loadFiles()
   } catch (error) {
@@ -256,12 +377,12 @@ const handleEdit = async (file) => {
     enterDirectory(file)
     return
   }
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
-    const res = await filesApi.getFile(file.path, selectedVersion.value)
+    const res = await filesApi.getFile(file.path, selectedDirectory.value, rootOnly.value)
     editForm.value.path = res.path
     editForm.value.content = res.content
     editLanguage.value = detectLanguageByFilename(file.name)
@@ -272,12 +393,17 @@ const handleEdit = async (file) => {
 }
 
 const submitEdit = async () => {
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
-    await filesApi.updateFile(editForm.value.path, editForm.value.content, selectedVersion.value)
+    await filesApi.updateFile(
+      editForm.value.path,
+      editForm.value.content,
+      selectedDirectory.value,
+      rootOnly.value
+    )
     ElMessage.success('保存成功')
     editDialogVisible.value = false
     loadFiles()
@@ -287,13 +413,13 @@ const submitEdit = async () => {
 }
 
 const handleDelete = async (file) => {
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
     await ElMessageBox.confirm('确定要删除吗？', '提示', { type: 'warning' })
-    await filesApi.deleteFile(file.path, selectedVersion.value)
+    await filesApi.deleteFile(file.path, selectedDirectory.value, rootOnly.value)
     ElMessage.success('删除成功')
     loadFiles()
   } catch (error) {
@@ -303,8 +429,8 @@ const handleDelete = async (file) => {
 }
 
 const handleRename = async (file) => {
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
@@ -315,7 +441,7 @@ const handleRename = async (file) => {
       confirmButtonText: '确 定',
       cancelButtonText: '取 消'
     })
-    await filesApi.renameFile(file.path, value, selectedVersion.value)
+    await filesApi.renameFile(file.path, value, selectedDirectory.value, rootOnly.value)
     ElMessage.success('重命名成功')
     loadFiles()
   } catch (error) {
@@ -329,12 +455,12 @@ const handleDownload = async (file) => {
     ElMessage.warning('暂不支持下载文件夹')
     return
   }
-  if (!selectedVersion.value) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!selectedDirectory.value) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
   try {
-    const blob = await filesApi.downloadFile(file.path, selectedVersion.value)
+    const blob = await filesApi.downloadFile(file.path, selectedDirectory.value, rootOnly.value)
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -402,7 +528,7 @@ const detectLanguageByFilename = (filename) => {
 
 onMounted(async () => {
   await loadVersions()
-  if (selectedVersion.value) {
+  if (selectedDirectory.value) {
     loadFiles()
   }
 })
@@ -426,16 +552,44 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
-.current-path {
+.path-info {
+  margin: 12px 0;
+  padding: 12px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.path-line {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   font-size: 13px;
+  line-height: 1.5;
+}
+
+.path-label {
   color: var(--text-secondary);
-  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.path-value {
+  color: var(--text-primary);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  word-break: break-all;
+  flex: 1;
 }
 
 .file-name {
   cursor: default;
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
+  gap: 6px;
 }
 
 .file-name.is-dir {
@@ -443,8 +597,27 @@ onMounted(async () => {
   color: var(--nginx-green);
 }
 
+.file-name-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .file-icon {
-  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.file-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.file-ops-column .cell {
+  padding-right: 12px;
 }
 
 .edit-file-path {

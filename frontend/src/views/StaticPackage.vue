@@ -7,16 +7,21 @@
         </div>
       </template>
 
-      <div class="version-info" v-if="selectedVersion">
+      <div class="version-info" v-if="selectedDirectory">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="当前 Nginx 版本">
-            <el-tag :type="currentVersionInfo?.running ? 'success' : 'info'">
-              {{ selectedVersion }}
-            </el-tag>
-            <span v-if="currentVersionInfo?.running" class="running-badge">运行中</span>
+          <el-descriptions-item label="当前 Nginx 目录">
+            <el-text type="info" size="small">{{ selectedDirectory || '-' }}</el-text>
           </el-descriptions-item>
-          <el-descriptions-item label="HTML 目录">
-            <el-text type="info" size="small">{{ htmlDirPath }}</el-text>
+          <el-descriptions-item label="当前 Nginx 版本">
+            <template v-if="formatVersionLabel(currentVersionInfo)">
+              <el-tag type="info" size="small">
+                {{ formatVersionLabel(currentVersionInfo) }}
+              </el-tag>
+            </template>
+            <span v-else style="color: var(--text-secondary)">未知</span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="currentVersionInfo?.running" label="运行状态">
+            <el-tag type="success" size="small">运行中</el-tag>
           </el-descriptions-item>
         </el-descriptions>
       </div>
@@ -156,17 +161,17 @@
         <el-form-item label="资源包">
           <el-text>{{ deployForm.filename }}</el-text>
         </el-form-item>
-        <el-form-item label="选择 Nginx 版本">
+        <el-form-item label="选择 Nginx 目录/版本">
           <el-select
-            v-model="deployForm.version"
-            placeholder="选择 Nginx 版本"
+            v-model="deployForm.directory"
+            placeholder="选择 Nginx 目录/版本"
             style="width: 100%"
           >
             <el-option
               v-for="version in versions"
-              :key="version.version"
-              :label="`${version.version}${version.running ? ' (运行中)' : ''}`"
-              :value="version.version"
+              :key="version.directory"
+              :label="formatOptionLabel(version)"
+              :value="version.directory"
             />
           </el-select>
         </el-form-item>
@@ -202,13 +207,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload, Document, Promotion, Delete } from '@element-plus/icons-vue'
 
 const versions = ref([])
-const selectedVersion = ref(null)
+const selectedDirectory = ref(null)
 const uploadDialogVisible = ref(false)
 const deployDialogVisible = ref(false)
 const uploadForm = ref({})
 const deployForm = ref({
   filename: null,
-  version: null,
+  directory: null,
   extractToSubdir: false
 })
 const selectedFile = ref(null)
@@ -220,11 +225,27 @@ const packages = ref([])
 const loadingPackages = ref(false)
 
 const currentVersionInfo = computed(() => {
-  return versions.value.find(v => v.version === selectedVersion.value)
+  return versions.value.find(v => v.directory === selectedDirectory.value)
 })
 
+const formatVersionLabel = (info) => {
+  if (!info || typeof info !== 'object') return ''
+  return info.version || ''
+}
+
+const formatOptionLabel = (info) => {
+  if (!info) return '-'
+  const versionLabel = formatVersionLabel(info)
+  const directory = info.directory || ''
+  const runningSuffix = info.running ? '（运行中）' : ''
+  if (versionLabel && versionLabel !== directory) {
+    return `${directory}（版本 ${versionLabel}）${runningSuffix}`
+  }
+  return `${directory || versionLabel || '未知'}${runningSuffix}`
+}
+
 const htmlDirPath = computed(() => {
-  if (currentVersionInfo.value) {
+  if (currentVersionInfo.value?.install_path) {
     return `${currentVersionInfo.value.install_path}/html`
   }
   return '-'
@@ -234,23 +255,36 @@ const loadVersions = async () => {
   try {
     const data = await nginxApi.listVersions()
     versions.value = data || []
-    // 默认选择运行中的版本，如果没有则选择第一个已编译的版本
-    if (versions.value.length > 0) {
-      const running = versions.value.find(v => v.running && v.compiled)
-      if (running) {
-        selectedVersion.value = running.version
-        deployForm.value.version = running.version
-      } else {
-        const compiled = versions.value.find(v => v.compiled)
-        if (compiled) {
-          selectedVersion.value = compiled.version
-          deployForm.value.version = compiled.version
-        } else {
-          selectedVersion.value = versions.value[0].version
-          deployForm.value.version = versions.value[0].version
-        }
+    if (versions.value.length === 0) {
+      selectedDirectory.value = null
+      deployForm.value.directory = null
+      return
+    }
+
+    if (selectedDirectory.value) {
+      const stillExists = versions.value.some(v => v.directory === selectedDirectory.value)
+      if (stillExists) {
+        deployForm.value.directory = selectedDirectory.value
+        return
       }
     }
+
+    const running = versions.value.find(v => v.running)
+    if (running) {
+      selectedDirectory.value = running.directory
+      deployForm.value.directory = running.directory
+      return
+    }
+
+    const compiled = versions.value.find(v => v.compiled)
+    if (compiled) {
+      selectedDirectory.value = compiled.directory
+      deployForm.value.directory = compiled.directory
+      return
+    }
+
+    selectedDirectory.value = versions.value[0].directory
+    deployForm.value.directory = versions.value[0].directory
   } catch (error) {
     console.error('加载版本列表失败:', error)
   }
@@ -299,7 +333,7 @@ const handleUpload = async () => {
 
 const handleDeployPackage = (filename) => {
   deployForm.value.filename = filename
-  deployForm.value.version = selectedVersion.value
+  deployForm.value.directory = selectedDirectory.value
   deployForm.value.extractToSubdir = false
   deployDialogVisible.value = true
 }
@@ -309,8 +343,8 @@ const handleDeployConfirm = async () => {
     ElMessage.warning('请选择资源包')
     return
   }
-  if (!deployForm.value.version) {
-    ElMessage.warning('请先选择 Nginx 版本')
+  if (!deployForm.value.directory) {
+    ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
 
@@ -319,7 +353,7 @@ const handleDeployConfirm = async () => {
     const res = await filesApi.deployPackage(
       deployForm.value.filename,
       null,
-      deployForm.value.version,
+      deployForm.value.directory,
       deployForm.value.extractToSubdir
     )
     ElMessage.success(res.message || '部署成功')

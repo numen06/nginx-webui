@@ -94,7 +94,7 @@ async def get_config(
             "nginx_version": nginx_version,
             "nginx_version_detail": nginx_version_detail,
             "active_version": active["version"] if active else None,
-            "install_path": str(active["install_path"]) if active else None,
+            "install_path": active["directory"] if active else None,  # 使用目录简称
             "binary": str(nginx_executable) if nginx_executable else None
         }
     except FileNotFoundError as e:
