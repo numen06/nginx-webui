@@ -54,7 +54,7 @@
         </el-menu-item>
       </el-menu>
     </el-aside>
-    <el-container>
+    <el-container class="content-container">
       <el-header class="header">
         <div class="header-left">
           <span>Nginx WebUI 管理系统</span>
@@ -70,6 +70,16 @@
       <el-main class="main-content">
         <router-view />
       </el-main>
+      <el-footer class="footer" height="auto">
+        <span>Power by numen06 · 项目地址：</span>
+        <a
+          href="https://gitee.com/numen06"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          https://gitee.com/numen06
+        </a>
+      </el-footer>
     </el-container>
   </el-container>
 </template>
@@ -99,6 +109,12 @@ const handleLogout = () => {
 .layout-container {
   height: 100vh;
   background-color: var(--bg-primary);
+}
+
+.content-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar {
@@ -154,6 +170,17 @@ const handleLogout = () => {
   background-color: var(--bg-primary);
   padding: 20px;
   overflow-y: auto;
+  flex: 1;
+}
+
+.footer {
+  background-color: var(--bg-card);
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+  padding: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
 }
 </style>
 

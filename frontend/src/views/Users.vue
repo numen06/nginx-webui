@@ -16,18 +16,55 @@
           </div>
         </div>
       </template>
-      <el-table :data="userList" style="width: 100%" v-loading="loading">
-        <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="username" label="用户名" />
-        <el-table-column prop="is_active" label="状态" width="100">
+      <div class="table-toolbar">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索用户名"
+          clearable
+          class="toolbar-field"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-select v-model="statusFilter" class="toolbar-field status-filter">
+          <el-option label="全部状态" value="all" />
+          <el-option label="激活" value="active" />
+          <el-option label="禁用" value="inactive" />
+        </el-select>
+        <div class="toolbar-actions">
+          <el-button @click="handleRefresh">
+            <el-icon><Refresh /></el-icon>
+            <span class="btn-label">刷新</span>
+          </el-button>
+        </div>
+      </div>
+      <el-table :data="filteredUsers" style="width: 100%" v-loading="loading">
+        <el-table-column prop="id" label="ID" width="100" align="center" />
+        <el-table-column
+          prop="username"
+          label="用户名"
+          min-width="220"
+          show-overflow-tooltip
+        />
+        <el-table-column prop="is_active" label="状态" width="120" align="center">
           <template #default="scope">
             <el-tag :type="scope.row.is_active ? 'success' : 'danger'">
               {{ scope.row.is_active ? '激活' : '禁用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180" />
-        <el-table-column label="操作" width="300">
+        <el-table-column
+          prop="created_at"
+          label="创建时间"
+          min-width="180"
+          align="center"
+        >
+          <template #default="scope">
+            {{ formatDateTime(scope.row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="320" align="center">
           <template #default="scope">
             <el-button size="small" type="info" @click="handleEdit(scope.row)">
               <el-icon><Edit /></el-icon>
@@ -151,11 +188,14 @@ import { ref, onMounted, computed } from 'vue'
 import { usersApi } from '../api/users'
 import { useAuthStore } from '../store/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Lock, CirclePlus, Edit, Key, Delete, CloseBold, Check } from '@element-plus/icons-vue'
+import { Lock, CirclePlus, Edit, Key, Delete, CloseBold, Check, Search, Refresh } from '@element-plus/icons-vue'
+import { formatDateTime } from '../utils/date'
 
 const authStore = useAuthStore()
 const userList = ref([])
 const loading = ref(false)
+const keyword = ref('')
+const statusFilter = ref('all')
 const dialogVisible = ref(false)
 const passwordDialogVisible = ref(false)
 const changePasswordDialogVisible = ref(false)
@@ -168,6 +208,22 @@ const currentResetPasswordUserId = ref(null)
 
 const currentUserId = computed(() => {
   return authStore.user?.id
+})
+
+const filteredUsers = computed(() => {
+  const keywordValue = keyword.value.trim().toLowerCase()
+  return userList.value.filter((user) => {
+    const matchKeyword = keywordValue
+      ? user.username.toLowerCase().includes(keywordValue)
+      : true
+    const matchStatus =
+      statusFilter.value === 'all'
+        ? true
+        : statusFilter.value === 'active'
+          ? user.is_active
+          : !user.is_active
+    return matchKeyword && matchStatus
+  })
 })
 
 const dialogTitle = computed(() => {
@@ -266,6 +322,10 @@ const handleCreate = () => {
     is_active: true
   }
   dialogVisible.value = true
+}
+
+const handleRefresh = () => {
+  loadUsers()
 }
 
 const handleEdit = (user) => {
@@ -394,6 +454,33 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.table-toolbar {
+  margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.toolbar-field {
+  flex: 1 1 220px;
+}
+
+.status-filter {
+  max-width: 160px;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+}
+
+.toolbar-actions .el-button {
+  margin-left: auto;
 }
 
 .dialog-footer {

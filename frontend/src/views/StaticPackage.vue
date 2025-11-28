@@ -216,6 +216,7 @@ import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload, Document, Promotion, Delete, FolderOpened, CloseBold, UploadFilled, CircleCheck } from '@element-plus/icons-vue'
+import { formatDateTime } from '../utils/date'
 
 const versions = ref([])
 const selectedDirectory = ref(null)
@@ -412,9 +413,7 @@ const formatFileSize = (bytes) => {
 }
 
 const formatTime = (timeStr) => {
-  if (!timeStr) return '-'
-  const date = new Date(timeStr)
-  return date.toLocaleString('zh-CN')
+  return formatDateTime(timeStr)
 }
 
 onMounted(() => {

@@ -2,8 +2,11 @@
 证书管理路由
 """
 import shutil
+import tarfile
+import zipfile
 from pathlib import Path
-from typing import Optional, List
+from tempfile import TemporaryDirectory
+from typing import Optional, List, Tuple
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Request
 from sqlalchemy.orm import Session
@@ -31,6 +34,183 @@ class CertificateRequest(BaseModel):
 class CertificateUpdateRequest(BaseModel):
     """证书更新请求"""
     auto_renew: Optional[bool] = None
+
+
+CERT_EXTENSIONS = {".crt", ".cer", ".pem"}
+KEY_EXTENSIONS = {".key", ".pem"}
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _persist_certificate_record(
+    *,
+    domain: str,
+    cert_bytes: bytes,
+    key_bytes: bytes,
+    auto_renew: bool,
+    current_user: User,
+    db: Session,
+    request: Request,
+    audit_action: str,
+    success_message: str = "证书上传成功"
+):
+    if not cert_bytes or not key_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="证书或私钥内容为空"
+        )
+
+    config = get_config()
+    ssl_dir = Path(config.nginx.ssl_dir)
+    ssl_dir.mkdir(parents=True, exist_ok=True)
+
+    cert_path = ssl_dir / f"{domain}.crt"
+    key_path = ssl_dir / f"{domain}.key"
+
+    cert_path.write_bytes(cert_bytes)
+    key_path.write_bytes(key_bytes)
+
+    cert_info = get_certificate_info(str(cert_path)) or {}
+    valid_from = _parse_iso_datetime(cert_info.get("valid_from"))
+    valid_to = _parse_iso_datetime(cert_info.get("valid_to"))
+
+    cert = Certificate(
+        domain=domain,
+        cert_path=str(cert_path),
+        key_path=str(key_path),
+        issuer=cert_info.get("issuer"),
+        valid_from=valid_from,
+        valid_to=valid_to,
+        auto_renew=auto_renew,
+        created_by_id=current_user.id
+    )
+    db.add(cert)
+    db.commit()
+    db.refresh(cert)
+
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action=audit_action,
+        target=domain,
+        details={"cert_path": str(cert_path), "key_path": str(key_path)},
+        ip_address=get_client_ip(request)
+    )
+
+    return {
+        "success": True,
+        "message": success_message,
+        "certificate": {
+            "id": cert.id,
+            "domain": cert.domain,
+            "cert_path": cert.cert_path,
+            "key_path": cert.key_path
+        }
+    }
+
+
+def _classify_pem_file(file_path: Path) -> Optional[str]:
+    try:
+        content = file_path.read_text(errors="ignore")
+    except Exception:
+        return None
+    if "PRIVATE KEY" in content:
+        return "key"
+    if "BEGIN CERTIFICATE" in content:
+        return "cert"
+    return None
+
+
+def _discover_cert_and_key(root_dir: Path, domain: str) -> Tuple[Optional[Path], Optional[Path]]:
+    cert_candidates: List[Path] = []
+    key_candidates: List[Path] = []
+
+    for file in root_dir.rglob("*"):
+        if not file.is_file():
+            continue
+        suffix = file.suffix.lower()
+        role = None
+        if suffix in (CERT_EXTENSIONS - {".pem"}):
+            role = "cert"
+        elif suffix in (KEY_EXTENSIONS - {".pem"}):
+            role = "key"
+        elif suffix == ".pem":
+            role = _classify_pem_file(file)
+
+        if role == "cert":
+            cert_candidates.append(file)
+        elif role == "key":
+            key_candidates.append(file)
+
+    def pick_candidate(candidates: List[Path]) -> Optional[Path]:
+        if not candidates:
+            return None
+        domain_matches = [c for c in candidates if domain and domain in c.stem]
+        if domain_matches:
+            return domain_matches[0]
+        return candidates[0]
+
+    return pick_candidate(cert_candidates), pick_candidate(key_candidates)
+
+
+def _ensure_within_dir(path: Path, target_dir: Path):
+    resolved_target = target_dir.resolve()
+    resolved_path = path.resolve()
+    if not str(resolved_path).startswith(str(resolved_target)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="压缩包包含非法路径，已拒绝处理"
+        )
+
+
+def _safe_extract_zip(archive_path: Path, target_dir: Path):
+    with zipfile.ZipFile(archive_path) as zf:
+        for member in zf.infolist():
+            if member.is_dir():
+                continue
+            member_path = Path(target_dir, member.filename)
+            _ensure_within_dir(member_path, target_dir)
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member) as source, open(member_path, "wb") as dest:
+                shutil.copyfileobj(source, dest)
+
+
+def _safe_extract_tar(archive_path: Path, target_dir: Path):
+    with tarfile.open(archive_path) as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue
+            member_path = Path(target_dir, member.name)
+            _ensure_within_dir(member_path, target_dir)
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                continue
+            with open(member_path, "wb") as dest:
+                shutil.copyfileobj(extracted, dest)
+
+
+def _extract_archive(archive_path: Path, target_dir: Path):
+    if zipfile.is_zipfile(archive_path):
+        _safe_extract_zip(archive_path, target_dir)
+        return
+
+    if tarfile.is_tarfile(archive_path):
+        _safe_extract_tar(archive_path, target_dir)
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="仅支持 zip 或 tar 格式的压缩包"
+    )
 
 
 @router.get("", summary="获取证书列表")
@@ -112,82 +292,84 @@ async def upload_certificate(
     db: Session = Depends(get_db)
 ):
     """手动上传证书"""
-    config = get_config()
-    ssl_dir = Path(config.nginx.ssl_dir)
-    ssl_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 保存证书文件
-    cert_path = ssl_dir / f"{domain}.crt"
-    key_path = ssl_dir / f"{domain}.key"
-    
     try:
-        # 保存证书文件
-        with open(cert_path, 'wb') as f:
-            content = await cert_file.read()
-            f.write(content)
-        
-        # 保存私钥文件
-        with open(key_path, 'wb') as f:
-            content = await key_file.read()
-            f.write(content)
-        
-        # 获取证书信息
-        cert_info = get_certificate_info(str(cert_path))
-        
-        # 解析有效期
-        valid_from = None
-        valid_to = None
-        if cert_info.get("valid_from"):
-            try:
-                valid_from = datetime.fromisoformat(cert_info["valid_from"].replace('Z', '+00:00'))
-            except:
-                pass
-        if cert_info.get("valid_to"):
-            try:
-                valid_to = datetime.fromisoformat(cert_info["valid_to"].replace('Z', '+00:00'))
-            except:
-                pass
-        
-        # 创建证书记录
-        cert = Certificate(
+        cert_bytes = await cert_file.read()
+        key_bytes = await key_file.read()
+        return _persist_certificate_record(
             domain=domain,
-            cert_path=str(cert_path),
-            key_path=str(key_path),
-            issuer=cert_info.get("issuer"),
-            valid_from=valid_from,
-            valid_to=valid_to,
+            cert_bytes=cert_bytes,
+            key_bytes=key_bytes,
             auto_renew=auto_renew,
-            created_by_id=current_user.id
-        )
-        db.add(cert)
-        db.commit()
-        db.refresh(cert)
-        
-        # 记录操作日志
-        create_audit_log(
+            current_user=current_user,
             db=db,
-            user_id=current_user.id,
-            username=current_user.username,
-            action="cert_upload",
-            target=domain,
-            details={"cert_path": str(cert_path), "key_path": str(key_path)},
-            ip_address=get_client_ip(request)
+            request=request,
+            audit_action="cert_upload",
+            success_message="证书上传成功"
         )
-        
-        return {
-            "success": True,
-            "message": "证书上传成功",
-            "certificate": {
-                "id": cert.id,
-                "domain": cert.domain,
-                "cert_path": cert.cert_path,
-                "key_path": cert.key_path
-            }
-        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"上传证书失败: {str(e)}"
+        )
+
+
+@router.post("/upload-archive", summary="上传压缩包并自动解析证书")
+async def upload_certificate_archive(
+    request: Request,
+    domain: str = Form(...),
+    archive_file: UploadFile = File(...),
+    auto_renew: bool = Form(False),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """上传包含证书与私钥的压缩包"""
+    if not archive_file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请上传有效的压缩包文件"
+        )
+
+    try:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_dir_path = Path(tmp_dir)
+            archive_path = tmp_dir_path / (archive_file.filename or "archive")
+            archive_bytes = await archive_file.read()
+            archive_path.write_bytes(archive_bytes)
+
+            extracted_dir = tmp_dir_path / "extracted"
+            extracted_dir.mkdir(parents=True, exist_ok=True)
+            _extract_archive(archive_path, extracted_dir)
+
+            cert_path, key_path = _discover_cert_and_key(extracted_dir, domain)
+
+            if not cert_path or not key_path:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="压缩包中未找到有效的证书或私钥文件"
+                )
+
+            cert_bytes = cert_path.read_bytes()
+            key_bytes = key_path.read_bytes()
+
+        return _persist_certificate_record(
+            domain=domain,
+            cert_bytes=cert_bytes,
+            key_bytes=key_bytes,
+            auto_renew=auto_renew,
+            current_user=current_user,
+            db=db,
+            request=request,
+            audit_action="cert_upload_archive",
+            success_message="证书压缩包上传成功"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"解析压缩包失败: {str(e)}"
         )
 
 

@@ -131,6 +131,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { configApi } from '../api/config'
 import MonacoEditor from '../components/MonacoEditor.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatDateTime } from '../utils/date'
 import {
   MagicStick,
   Finished,
@@ -333,7 +334,7 @@ const handleLoadBackups = async () => {
     const list = res?.backups || []
     backupOptions.value = list.map((item) => {
       const timeText = item.created_at
-        ? new Date(item.created_at).toLocaleString()
+        ? formatDateTime(item.created_at)
         : '未知时间'
       return {
         id: item.id,

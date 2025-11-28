@@ -25,6 +25,19 @@ export const certificatesApi = {
     })
   },
 
+  // 上传压缩包并自动解析证书
+  uploadCertificateArchive(domain, archiveFile, autoRenew) {
+    const formData = new FormData()
+    formData.append('domain', domain)
+    formData.append('archive_file', archiveFile)
+    formData.append('auto_renew', autoRenew)
+    return api.post('/certificates/upload-archive', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
   // 申请证书
   requestCertificate(domains, email, validationMethod) {
     return api.post('/certificates/request', {

@@ -88,6 +88,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { gitApi } from '../api/git'
 import { ElMessage } from 'element-plus'
+import { formatDateTime } from '../utils/date'
 
 const gitConfig = ref({
   project_name: '',
@@ -145,7 +146,7 @@ const syncStatusText = computed(() => {
     return '尚未同步过 Git 仓库'
   }
   const timeText = gitStatus.value.time
-    ? new Date(gitStatus.value.time).toLocaleString()
+    ? formatDateTime(gitStatus.value.time)
     : '未知时间'
   const statusMap = {
     success: '最近一次同步成功',

@@ -61,7 +61,11 @@
         <el-table-column prop="action" label="操作" width="150" />
         <el-table-column prop="target" label="目标" min-width="200" show-overflow-tooltip />
         <el-table-column prop="ip_address" label="IP地址" width="150" />
-        <el-table-column prop="timestamp" label="时间" width="200" />
+        <el-table-column prop="timestamp" label="时间" width="200">
+          <template #default="scope">
+            {{ formatDateTime(scope.row.timestamp) }}
+          </template>
+        </el-table-column>
       </el-table>
 
       <div class="pagination">
@@ -114,6 +118,7 @@ import { ref, onMounted } from 'vue'
 import { auditApi } from '../api/audit'
 import { ElMessage } from 'element-plus'
 import { Search, RefreshRight } from '@element-plus/icons-vue'
+import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
 const auditLogs = ref([])
