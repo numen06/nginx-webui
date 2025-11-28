@@ -405,7 +405,9 @@ def test_config(use_working_copy: bool = True) -> Dict[str, Any]:
         {
             "success": bool,
             "message": str,
-            "output": str
+            "output": str,
+            "errors": List[str],
+            "warnings": List[str]
         }
     """
     try:
@@ -415,6 +417,8 @@ def test_config(use_working_copy: bool = True) -> Dict[str, Any]:
             "success": False,
             "message": str(e),
             "output": "",
+            "errors": [str(e)],
+            "warnings": [],
         }
 
     try:
@@ -436,17 +440,127 @@ def test_config(use_working_copy: bool = True) -> Dict[str, Any]:
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 
+        output = result.stdout + result.stderr
         success = result.returncode == 0
+
+        # 解析错误信息，提取详细信息
+        errors = []
+        warnings = []
+        import re
+
+        # Nginx 错误格式通常为：
+        # nginx: [emerg] unexpected end of file, expecting ";" or "}" in /path/to/file.conf:10
+        # nginx: [warn] conflicting server name "example.com" on 0.0.0.0:80, ignored in /path/to/file.conf:5
+        # nginx: configuration file /path/to/file.conf test failed
+        
+        error_pattern = re.compile(
+            r'nginx:\s*\[(emerg|alert|crit|error)\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
+            re.IGNORECASE
+        )
+        warn_pattern = re.compile(
+            r'nginx:\s*\[warn\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
+            re.IGNORECASE
+        )
+        test_failed_pattern = re.compile(
+            r'nginx:\s*configuration\s+file\s+(.+?)\s+test\s+failed',
+            re.IGNORECASE
+        )
+
+        lines = output.split("\n")
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 检查是否是错误行
+            error_match = error_pattern.search(line)
+            if error_match:
+                error_level = error_match.group(1).upper()
+                error_msg = error_match.group(2).strip()
+                file_path = error_match.group(3) if error_match.group(3) else None
+                line_num = error_match.group(4) if error_match.group(4) else None
+                
+                # 构建详细的错误信息
+                error_detail = f"[{error_level}] {error_msg}"
+                if file_path and line_num:
+                    error_detail += f"\n  位置: {file_path} 第 {line_num} 行"
+                elif file_path:
+                    error_detail += f"\n  文件: {file_path}"
+                
+                errors.append(error_detail)
+                continue
+            
+            # 检查是否是警告行
+            warn_match = warn_pattern.search(line)
+            if warn_match:
+                warn_msg = warn_match.group(1).strip()
+                file_path = warn_match.group(2) if warn_match.group(2) else None
+                line_num = warn_match.group(3) if warn_match.group(3) else None
+                
+                # 构建详细的警告信息
+                warn_detail = f"警告: {warn_msg}"
+                if file_path and line_num:
+                    warn_detail += f"\n  位置: {file_path} 第 {line_num} 行"
+                elif file_path:
+                    warn_detail += f"\n  文件: {file_path}"
+                
+                warnings.append(warn_detail)
+                continue
+            
+            # 检查是否是测试失败总结
+            failed_match = test_failed_pattern.search(line)
+            if failed_match:
+                file_path = failed_match.group(1)
+                errors.append(f"配置文件测试失败: {file_path}")
+                continue
+            
+            # 如果没有匹配到特定格式，但包含错误关键词，也加入错误列表
+            if "error" in line.lower() or "failed" in line.lower():
+                if line not in errors:  # 避免重复
+                    errors.append(line)
+            elif "warn" in line.lower() or "warning" in line.lower():
+                if line not in warnings:  # 避免重复
+                    warnings.append(line)
+
+        # 构建详细的消息
+        if success:
+            message = "配置测试成功"
+            if warnings:
+                message += f"，但有 {len(warnings)} 个警告"
+        else:
+            if errors:
+                error_count = len(errors)
+                message = f"配置测试失败，发现 {error_count} 个错误"
+                if error_count == 1:
+                    # 如果是单个错误，在消息中包含简要信息
+                    first_error = errors[0].split("\n")[0]
+                    message += f": {first_error[:100]}"
+            else:
+                message = "配置测试失败"
 
         return {
             "success": success,
-            "message": "配置测试成功" if success else "配置测试失败",
-            "output": result.stdout + result.stderr,
+            "message": message,
+            "output": output,
+            "errors": errors,
+            "warnings": warnings,
         }
     except subprocess.TimeoutExpired:
-        return {"success": False, "message": "配置测试超时", "output": ""}
+        return {
+            "success": False,
+            "message": "配置测试超时（超过 10 秒）",
+            "output": "",
+            "errors": ["配置测试超时：测试过程超过 10 秒，可能配置文件过大或系统负载过高"],
+            "warnings": [],
+        }
     except Exception as e:
-        return {"success": False, "message": f"配置测试出错: {str(e)}", "output": ""}
+        return {
+            "success": False,
+            "message": f"配置测试出错: {str(e)}",
+            "output": "",
+            "errors": [f"配置测试过程出错: {str(e)}"],
+            "warnings": [],
+        }
 
 
 def reload_nginx() -> Dict[str, Any]:
@@ -872,22 +986,104 @@ def validate_config(content: str) -> Dict[str, Any]:
         output = result.stdout + result.stderr
         success = result.returncode == 0
 
-        # 解析错误和警告
+        # 解析错误和警告，提取详细信息
         errors = []
         warnings = []
+        import re
 
-        for line in output.split("\n"):
+        # Nginx 错误格式通常为：
+        # nginx: [emerg] unexpected end of file, expecting ";" or "}" in /path/to/file.conf:10
+        # nginx: [warn] conflicting server name "example.com" on 0.0.0.0:80, ignored in /path/to/file.conf:5
+        # nginx: configuration file /path/to/file.conf test failed
+        
+        error_pattern = re.compile(
+            r'nginx:\s*\[(emerg|alert|crit|error)\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
+            re.IGNORECASE
+        )
+        warn_pattern = re.compile(
+            r'nginx:\s*\[warn\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
+            re.IGNORECASE
+        )
+        test_failed_pattern = re.compile(
+            r'nginx:\s*configuration\s+file\s+(.+?)\s+test\s+failed',
+            re.IGNORECASE
+        )
+
+        lines = output.split("\n")
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
+            
+            # 检查是否是错误行
+            error_match = error_pattern.search(line)
+            if error_match:
+                error_level = error_match.group(1).upper()
+                error_msg = error_match.group(2).strip()
+                file_path = error_match.group(3) if error_match.group(3) else None
+                line_num = error_match.group(4) if error_match.group(4) else None
+                
+                # 构建详细的错误信息
+                error_detail = f"[{error_level}] {error_msg}"
+                if file_path and line_num:
+                    error_detail += f"\n  位置: {file_path} 第 {line_num} 行"
+                elif file_path:
+                    error_detail += f"\n  文件: {file_path}"
+                
+                errors.append(error_detail)
+                continue
+            
+            # 检查是否是警告行
+            warn_match = warn_pattern.search(line)
+            if warn_match:
+                warn_msg = warn_match.group(1).strip()
+                file_path = warn_match.group(2) if warn_match.group(2) else None
+                line_num = warn_match.group(3) if warn_match.group(3) else None
+                
+                # 构建详细的警告信息
+                warn_detail = f"警告: {warn_msg}"
+                if file_path and line_num:
+                    warn_detail += f"\n  位置: {file_path} 第 {line_num} 行"
+                elif file_path:
+                    warn_detail += f"\n  文件: {file_path}"
+                
+                warnings.append(warn_detail)
+                continue
+            
+            # 检查是否是测试失败总结
+            failed_match = test_failed_pattern.search(line)
+            if failed_match:
+                file_path = failed_match.group(1)
+                errors.append(f"配置文件测试失败: {file_path}")
+                continue
+            
+            # 如果没有匹配到特定格式，但包含错误关键词，也加入错误列表
             if "error" in line.lower() or "failed" in line.lower():
-                errors.append(line)
+                if line not in errors:  # 避免重复
+                    errors.append(line)
             elif "warn" in line.lower() or "warning" in line.lower():
-                warnings.append(line)
+                if line not in warnings:  # 避免重复
+                    warnings.append(line)
+
+        # 构建详细的消息
+        if success:
+            message = "配置校验成功"
+            if warnings:
+                message += f"，但有 {len(warnings)} 个警告"
+        else:
+            if errors:
+                error_count = len(errors)
+                message = f"配置校验失败，发现 {error_count} 个错误"
+                if error_count == 1:
+                    # 如果是单个错误，在消息中包含简要信息
+                    first_error = errors[0].split("\n")[0]
+                    message += f": {first_error[:100]}"
+            else:
+                message = "配置校验失败"
 
         return {
             "success": success,
-            "message": "配置校验成功" if success else "配置校验失败",
+            "message": message,
             "output": output,
             "errors": errors,
             "warnings": warnings,

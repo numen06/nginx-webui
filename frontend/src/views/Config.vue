@@ -239,27 +239,55 @@ const handleValidate = async () => {
       
       // 如果有警告或错误，显示详细信息
       if (response.errors && response.errors.length > 0) {
+        const errorDetails = response.errors.map((err, idx) => {
+          return `错误 ${idx + 1}:\n${err}`
+        }).join('\n\n')
         ElMessageBox.alert(
-          `发现 ${response.errors.length} 个错误：\n\n${response.errors.join('\n')}`,
+          `发现 ${response.errors.length} 个错误：\n\n${errorDetails}`,
           '配置校验错误',
-          { type: 'error' }
+          { 
+            type: 'error',
+            confirmButtonText: '确定',
+            customClass: 'error-dialog'
+          }
         )
       } else if (response.warnings && response.warnings.length > 0) {
+        const warnDetails = response.warnings.map((warn, idx) => {
+          return `警告 ${idx + 1}:\n${warn}`
+        }).join('\n\n')
         ElMessageBox.alert(
-          `发现 ${response.warnings.length} 个警告：\n\n${response.warnings.join('\n')}`,
+          `发现 ${response.warnings.length} 个警告：\n\n${warnDetails}`,
           '配置校验警告',
-          { type: 'warning' }
+          { 
+            type: 'warning',
+            confirmButtonText: '确定'
+          }
         )
       }
     } else {
       let errorMsg = response.message || '配置校验失败'
       if (response.errors && response.errors.length > 0) {
-        errorMsg += '\n\n错误详情：\n' + response.errors.join('\n')
+        const errorDetails = response.errors.map((err, idx) => {
+          return `错误 ${idx + 1}:\n${err}`
+        }).join('\n\n')
+        errorMsg += '\n\n详细错误信息：\n\n' + errorDetails
       }
-      ElMessageBox.alert(errorMsg, '配置校验失败', { type: 'error' })
+      // 如果有完整输出，也显示
+      if (response.output && response.output.trim()) {
+        errorMsg += '\n\n完整输出：\n' + response.output
+      }
+      ElMessageBox.alert(
+        errorMsg, 
+        '配置校验失败', 
+        { 
+          type: 'error',
+          confirmButtonText: '确定',
+          customClass: 'error-dialog'
+        }
+      )
     }
   } catch (error) {
-    ElMessage.error('校验配置失败')
+    ElMessage.error('校验配置失败: ' + (error?.message || '未知错误'))
   }
 }
 
@@ -267,15 +295,54 @@ const handleTest = async () => {
   try {
     const response = await configApi.testConfig()
     if (response.success) {
-      ElMessage.success('配置测试成功')
-    } else {
-      ElMessage.error('配置测试失败: ' + response.message)
-      if (response.output) {
-        ElMessageBox.alert(response.output, '测试输出', { type: 'error' })
+      let message = '配置测试成功'
+      if (response.warnings && response.warnings.length > 0) {
+        message += `，但有 ${response.warnings.length} 个警告`
       }
+      ElMessage.success(message)
+      
+      // 如果有警告，显示详细信息
+      if (response.warnings && response.warnings.length > 0) {
+        const warnDetails = response.warnings.map((warn, idx) => {
+          return `警告 ${idx + 1}:\n${warn}`
+        }).join('\n\n')
+        ElMessageBox.alert(
+          `发现 ${response.warnings.length} 个警告：\n\n${warnDetails}`,
+          '配置测试警告',
+          { 
+            type: 'warning',
+            confirmButtonText: '确定'
+          }
+        )
+      }
+    } else {
+      let errorMsg = response.message || '配置测试失败'
+      
+      // 如果有错误列表，显示详细错误
+      if (response.errors && response.errors.length > 0) {
+        const errorDetails = response.errors.map((err, idx) => {
+          return `错误 ${idx + 1}:\n${err}`
+        }).join('\n\n')
+        errorMsg += '\n\n详细错误信息：\n\n' + errorDetails
+      }
+      
+      // 如果有完整输出，也显示
+      if (response.output && response.output.trim()) {
+        errorMsg += '\n\n完整输出：\n' + response.output
+      }
+      
+      ElMessageBox.alert(
+        errorMsg,
+        '配置测试失败',
+        { 
+          type: 'error',
+          confirmButtonText: '确定',
+          customClass: 'error-dialog'
+        }
+      )
     }
   } catch (error) {
-    ElMessage.error('测试配置失败')
+    ElMessage.error('测试配置失败: ' + (error?.message || '未知错误'))
   }
 }
 
