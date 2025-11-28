@@ -3,6 +3,7 @@ Nginx 多版本管理路由
 """
 
 import os
+import platform
 import tarfile
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ from fastapi import (
     UploadFile,
     File,
     Form,
+    Body,
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -65,6 +67,8 @@ class NginxDownloadRequest(BaseModel):
 
     version: str
     url: Optional[str] = None
+
+
 
 
 class NginxBuildResult(BaseModel):
@@ -307,12 +311,7 @@ def _update_nginx_config_for_unified_dirs(install_path: Path, version: str) -> N
     static_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     
-    # 读取原始配置
-    original_content = nginx_conf_path.read_text(encoding="utf-8")
-    
     # 生成新的配置内容
-    # 保留基本的worker_processes、events等配置
-    # 但修改http块中的配置，使其指向统一的目录
     new_config = f"""#user  nobody;
 worker_processes  auto;
 
@@ -358,6 +357,286 @@ http {{
     nginx_conf_path.write_text(new_config, encoding="utf-8")
 
 
+def _update_nginx_config_for_version(install_path: Path, version: str) -> None:
+    """
+    更新编译后的nginx.conf，使其使用版本目录下的配置目录和静态文件目录
+    
+    每个版本都有自己独立的配置目录（conf/conf.d）和静态文件目录（html），
+    通过切换nginx版本来管理和使用不同的配置。
+    """
+    config = get_config()
+    nginx_conf_path = install_path / "conf" / "nginx.conf"
+    
+    if not nginx_conf_path.exists():
+        return
+    
+    # 使用版本目录下的 conf.d 配置目录
+    conf_d_dir = install_path / "conf" / "conf.d"
+    conf_d_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 使用版本目录下的 html 静态文件目录
+    html_dir = install_path / "html"
+    html_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 解析日志目录路径（日志可以统一放在一个地方）
+    log_dir = Path(config.nginx.log_dir)
+    if not log_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        log_dir = (backend_dir / log_dir).resolve()
+    
+    access_log = Path(config.nginx.access_log)
+    if not access_log.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        access_log = (backend_dir / access_log).resolve()
+    
+    error_log = Path(config.nginx.error_log)
+    if not error_log.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        error_log = (backend_dir / error_log).resolve()
+    
+    # 确保日志目录存在
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 读取原始配置（可能包含一些自定义设置）
+    original_content = nginx_conf_path.read_text(encoding="utf-8")
+    
+    # 生成新的配置内容
+    # 保留基本的worker_processes、events等配置
+    # 但修改http块中的配置，使其指向版本目录下的配置
+    new_config = f"""#user  nobody;
+worker_processes  auto;
+
+pid        logs/nginx.pid;
+
+events {{
+    worker_connections  1024;
+}}
+
+http {{
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    access_log  {access_log};
+    error_log   {error_log};
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    gzip  on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss;
+
+    # 使用版本目录下的配置目录（每个版本独立）
+    include conf.d/*.conf;
+}}
+"""
+    
+    # 写入新配置
+    nginx_conf_path.write_text(new_config, encoding="utf-8")
+    
+    # 如果 conf.d 目录下没有 default.conf，创建一个默认配置
+    default_conf_path = conf_d_dir / "default.conf"
+    if not default_conf_path.exists():
+        default_server_conf = f"""server {{
+    listen 80;
+    server_name _;
+
+    root html;
+    index index.html;
+
+    # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
+    location ~* \\.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)$ {{
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+        try_files $uri =404;
+    }}
+
+    # 前端静态文件
+    location / {{
+        # 先尝试直接访问文件，再尝试作为目录，最后回退到 index.html
+        try_files $uri $uri/ /index.html;
+    }}
+
+    # API 代理
+    location /api/ {{
+        proxy_pass http://127.0.0.1:{config.app.port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    # 健康检查
+    location /health {{
+        access_log off;
+        return 200 "healthy\\n";
+        add_header Content-Type text/plain;
+    }}
+}}
+"""
+        default_conf_path.write_text(default_server_conf, encoding="utf-8")
+
+
+def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
+    """
+    备份需要保护的目录（静态文件、配置文件等）
+    
+    Returns:
+        dict: {
+            "html": Path,  # 备份的html目录路径
+            "conf": Path,   # 备份的conf目录路径
+            "logs": Path,   # 备份的logs目录路径
+        }
+    """
+    backup_dir = install_path.parent / f"{install_path.name}_backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
+    backups = {}
+    
+    # 备份 html 目录（静态文件）
+    html_dir = install_path / "html"
+    if html_dir.exists() and any(html_dir.iterdir()):
+        html_backup = backup_dir / "html"
+        if html_backup.exists():
+            shutil.rmtree(html_backup, ignore_errors=True)
+        shutil.copytree(html_dir, html_backup, dirs_exist_ok=True)
+        backups["html"] = html_backup
+    
+    # 备份 conf 目录（配置文件，但排除nginx.conf，因为会重新生成）
+    conf_dir = install_path / "conf"
+    if conf_dir.exists():
+        conf_backup = backup_dir / "conf"
+        if conf_backup.exists():
+            shutil.rmtree(conf_backup, ignore_errors=True)
+        conf_backup.mkdir(parents=True, exist_ok=True)
+        # 只备份非nginx.conf的配置文件
+        for item in conf_dir.iterdir():
+            if item.name != "nginx.conf":
+                if item.is_dir():
+                    shutil.copytree(item, conf_backup / item.name, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, conf_backup / item.name)
+        if any(conf_backup.iterdir()):
+            backups["conf"] = conf_backup
+    
+    # 备份 logs 目录（日志文件）
+    logs_dir = install_path / "logs"
+    if logs_dir.exists() and any(logs_dir.iterdir()):
+        logs_backup = backup_dir / "logs"
+        if logs_backup.exists():
+            shutil.rmtree(logs_backup, ignore_errors=True)
+        shutil.copytree(logs_dir, logs_backup, dirs_exist_ok=True)
+        backups["logs"] = logs_backup
+    
+    return backups
+
+
+def _upgrade_to_production_version(version: str) -> Dict[str, any]:
+    """
+    将指定版本升级到运行版（复制到 last 目录）
+    
+    升级过程：
+    1. 检查版本是否已编译
+    2. 备份 last 目录中的静态文件和配置文件
+    3. 从版本目录复制到 last 目录
+    4. 恢复备份的静态文件和配置文件
+    
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,
+            "version": str
+        }
+    """
+    source_install_path = _get_install_path(version)
+    target_install_path = _get_versions_root() / "last"
+    
+    # 检查源版本是否存在且已编译
+    executable = _get_nginx_executable(source_install_path)
+    if not source_install_path.exists() or not executable.exists():
+        return {
+            "success": False,
+            "message": f"Nginx 版本 {version} 未编译，请先编译该版本",
+            "version": version,
+        }
+    
+    try:
+        # 如果目标目录已存在，备份需要保护的文件
+        backups = {}
+        if target_install_path.exists() and any(target_install_path.iterdir()):
+            backups = _backup_protected_dirs(target_install_path)
+        
+        # 删除目标目录（如果存在）
+        if target_install_path.exists():
+            shutil.rmtree(target_install_path, ignore_errors=True)
+        
+        # 复制整个版本目录到 last 目录
+        shutil.copytree(source_install_path, target_install_path, dirs_exist_ok=True)
+        
+        # 如果有备份，恢复备份的文件
+        if backups:
+            _restore_protected_dirs(target_install_path, backups)
+            
+            # 清理备份目录
+            backup_dir = target_install_path.parent / f"{target_install_path.name}_backup"
+            if backup_dir.exists():
+                try:
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                except Exception:
+                    pass
+        
+        # 更新 last 目录的 nginx.conf
+        _update_nginx_config_for_version(target_install_path, version)
+        
+        return {
+            "success": True,
+            "message": f"版本 {version} 已成功升级到运行版",
+            "version": version,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"升级到运行版失败: {str(e)}",
+            "version": version,
+        }
+
+
+def _restore_protected_dirs(install_path: Path, backups: Dict[str, Path]) -> None:
+    """
+    恢复备份的目录到安装路径
+    """
+    for key, backup_path in backups.items():
+        target_dir = install_path / key
+        if backup_path.exists():
+            if target_dir.exists():
+                # 合并目录内容，不覆盖已存在的文件
+                for item in backup_path.iterdir():
+                    target_item = target_dir / item.name
+                    if item.is_dir():
+                        if target_item.exists():
+                            # 递归合并目录
+                            for subitem in item.rglob("*"):
+                                rel_path = subitem.relative_to(item)
+                                target_subitem = target_item / rel_path
+                                if subitem.is_dir():
+                                    target_subitem.mkdir(parents=True, exist_ok=True)
+                                else:
+                                    target_subitem.parent.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(subitem, target_subitem)
+                        else:
+                            shutil.copytree(item, target_item, dirs_exist_ok=True)
+                    else:
+                        # 只复制不存在的文件
+                        if not target_item.exists():
+                            shutil.copy2(item, target_item)
+            else:
+                # 目标目录不存在，直接复制整个目录
+                shutil.copytree(backup_path, target_dir, dirs_exist_ok=True)
+
+
 def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResult:
     """
     从源码编译安装 Nginx
@@ -368,9 +647,10 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
     """
     _ensure_nginx_dirs()
     build_root = _get_build_root()
-    install_path = _get_install_path(
-        version
-    )  # 最终对外暴露的安装目录：<versions_root>/<version>
+    
+    logs: list[str] = []
+    
+    install_path = _get_install_path(version)  # 最终对外暴露的安装目录：<versions_root>/<version>
     build_dir = build_root / version  # 源码解压与编译目录：<build_root>/<version>
     tmp_install_path = build_root / f"{version}_install_tmp"  # 编译安装使用的临时目录
 
@@ -393,8 +673,6 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
     # 确保临时安装目录干净
     if tmp_install_path.exists():
         shutil.rmtree(tmp_install_path, ignore_errors=True)
-
-    logs: list[str] = []
 
     try:
         logs.append(f"使用源码包: {source_tar}")
@@ -472,9 +750,9 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
         # 使用最终路径重新计算可执行文件路径，便于日志与后续校验
         executable = _get_nginx_executable(install_path)
 
-        # 修改编译后的nginx.conf，使其使用统一的配置目录和静态文件目录
-        _update_nginx_config_for_unified_dirs(install_path, version)
-        logs.append("已更新nginx.conf以使用统一的配置目录和静态文件目录")
+        # 修改编译后的nginx.conf，使其使用版本目录下的配置目录和静态文件目录
+        _update_nginx_config_for_version(install_path, version)
+        logs.append("已更新nginx.conf以使用版本目录下的配置目录和静态文件目录")
 
         full_log = "\n".join(logs)
         log_path = _write_build_log(version, full_log)
@@ -617,78 +895,22 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
                 # 忽略错误，继续执行
                 pass
 
-    # 确保必要目录存在（logs、conf 等）
+    # 确保必要目录存在（logs、conf、html 等）
     (install_path / "logs").mkdir(parents=True, exist_ok=True)
-
-    # 确保统一的配置目录和静态文件目录存在，并创建默认配置
-    conf_dir = Path(config.nginx.conf_dir)
-    if not conf_dir.is_absolute():
-        backend_dir = Path(__file__).resolve().parents[2]
-        conf_dir = (backend_dir / conf_dir).resolve()
-    conf_dir.mkdir(parents=True, exist_ok=True)
-    
-    static_dir = Path(config.nginx.static_dir)
-    if not static_dir.is_absolute():
-        backend_dir = Path(__file__).resolve().parents[2]
-        static_dir = (backend_dir / static_dir).resolve()
-    static_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 如果统一的配置目录中没有default.conf，创建默认配置
-    default_conf_path = conf_dir / "default.conf"
-    if not default_conf_path.exists():
-        default_server_conf = f"""server {{
-    listen 80;
-    server_name _;
-
-    root {static_dir};
-    index index.html;
-
-    # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
-    location ~* \\.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)$ {{
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-        try_files $uri =404;
-    }}
-
-    # 前端静态文件
-    location / {{
-        # 先尝试直接访问文件，再尝试作为目录，最后回退到 index.html
-        try_files $uri $uri/ /index.html;
-    }}
-
-    # API 代理
-    location /api/ {{
-        proxy_pass http://127.0.0.1:{config.app.port};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-
-    # 健康检查
-    location /health {{
-        access_log off;
-        return 200 "healthy\\n";
-        add_header Content-Type text/plain;
-    }}
-}}
-"""
-        default_conf_path.write_text(default_server_conf, encoding="utf-8")
+    (install_path / "conf" / "conf.d").mkdir(parents=True, exist_ok=True)
+    (install_path / "html").mkdir(parents=True, exist_ok=True)
 
     # 使用编译版本自带的配置文件（conf/nginx.conf）
     version_config_path = install_path / "conf" / "nginx.conf"
     if not version_config_path.exists():
-        return {
-            "success": False,
-            "message": f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
-            "version": None,
-        }
-    
-    # 确保nginx.conf已更新为使用统一的配置目录和静态文件目录
-    config_content = version_config_path.read_text(encoding="utf-8")
-    if str(conf_dir) not in config_content:
-        _update_nginx_config_for_unified_dirs(install_path, version)
+        # 如果配置文件不存在，创建默认配置
+        _update_nginx_config_for_version(install_path, version)
+    else:
+        # 如果配置文件存在，检查是否需要更新（检查是否使用版本目录下的配置）
+        config_content = version_config_path.read_text(encoding="utf-8")
+        # 检查是否包含版本目录下的 conf.d 引用，如果没有则更新
+        if "conf.d/*.conf" not in config_content or "include conf.d/*.conf" not in config_content:
+            _update_nginx_config_for_version(install_path, version)
 
     # 先测试配置
     try:
@@ -1305,6 +1527,7 @@ async def compile_nginx_version(
     要求：
     - build_root 中存在 nginx-<version>.tar.gz 或等价源码包
     - 编译成功后会在 versions_root/<version> 下生成完整安装目录
+    - 编译完成后，可以通过 /versions/{version}/upgrade-to-production 接口升级到运行版
     """
     _ensure_nginx_dirs()
     source_tar = _get_source_tar_path(version)
@@ -1337,6 +1560,60 @@ async def compile_nginx_version(
             detail=result.message,
         )
 
+    return result
+
+
+@router.post(
+    "/versions/{version}/upgrade-to-production",
+    summary="将指定版本升级到运行版",
+)
+async def upgrade_to_production_version(
+    version: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    将指定版本升级到运行版（复制到 last 目录）。
+    
+    要求：
+    - 版本必须已编译完成
+    - 升级过程会保留运行版（last 目录）中的静态文件和配置文件
+    - 升级后需要手动重启 nginx 才能使用新版本
+    """
+    # 检查版本是否已编译
+    install_path = _get_install_path(version)
+    executable = _get_nginx_executable(install_path)
+    
+    if not install_path.exists() or not executable.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nginx 版本 {version} 未编译，请先编译该版本",
+        )
+    
+    # 执行升级
+    result = _upgrade_to_production_version(version)
+    
+    # 记录审计日志
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_version_upgrade_to_production",
+        target=version,
+        details={
+            "success": result["success"],
+            "message": result["message"],
+        },
+        ip_address=get_client_ip(request),
+    )
+    
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result["message"],
+        )
+    
     return result
 
 
@@ -1460,64 +1737,10 @@ async def start_nginx_version(
                 # 记录错误但继续执行
                 pass
 
-    # 确保必要目录存在（logs、conf 等）
+    # 确保必要目录存在（logs、conf、html 等）
     (install_path / "logs").mkdir(parents=True, exist_ok=True)
-
-    # 确保统一的配置目录和静态文件目录存在，并创建默认配置
-    conf_dir = Path(config.nginx.conf_dir)
-    if not conf_dir.is_absolute():
-        backend_dir = Path(__file__).resolve().parents[2]
-        conf_dir = (backend_dir / conf_dir).resolve()
-    conf_dir.mkdir(parents=True, exist_ok=True)
-    
-    static_dir = Path(config.nginx.static_dir)
-    if not static_dir.is_absolute():
-        backend_dir = Path(__file__).resolve().parents[2]
-        static_dir = (backend_dir / static_dir).resolve()
-    static_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 如果统一的配置目录中没有default.conf，创建默认配置
-    default_conf_path = conf_dir / "default.conf"
-    if not default_conf_path.exists():
-        default_server_conf = f"""server {{
-    listen 80;
-    server_name _;
-
-    root {static_dir};
-    index index.html;
-
-    # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
-    location ~* \\.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)$ {{
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-        try_files $uri =404;
-    }}
-
-    # 前端静态文件
-    location / {{
-        # 先尝试直接访问文件，再尝试作为目录，最后回退到 index.html
-        try_files $uri $uri/ /index.html;
-    }}
-
-    # API 代理
-    location /api/ {{
-        proxy_pass http://127.0.0.1:{config.app.port};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-
-    # 健康检查
-    location /health {{
-        access_log off;
-        return 200 "healthy\\n";
-        add_header Content-Type text/plain;
-    }}
-}}
-"""
-        default_conf_path.write_text(default_server_conf, encoding="utf-8")
+    (install_path / "conf" / "conf.d").mkdir(parents=True, exist_ok=True)
+    (install_path / "html").mkdir(parents=True, exist_ok=True)
 
     # 使用编译版本自带的配置文件（conf/nginx.conf）
     # 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 路径
@@ -1528,11 +1751,11 @@ async def start_nginx_version(
             detail=f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
         )
     
-    # 确保nginx.conf已更新为使用统一的配置目录和静态文件目录
-    # 检查配置文件中是否包含统一的配置目录路径，如果没有则更新
+    # 确保nginx.conf已更新为使用版本目录下的配置
+    # 检查配置文件中是否包含版本目录下的 conf.d，如果没有则更新
     config_content = version_config_path.read_text(encoding="utf-8")
-    if str(conf_dir) not in config_content:
-        _update_nginx_config_for_unified_dirs(install_path, version)
+    if "conf.d/*.conf" not in config_content or "include conf.d/*.conf" not in config_content:
+        _update_nginx_config_for_version(install_path, version)
 
     # 先测试配置
     try:
@@ -1813,39 +2036,82 @@ async def force_release_http_port(
     强制释放指定 HTTP 端口（默认 80）。
 
     实现方式：
-    - 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
     - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
     注意：该能力较强，仅应授予有权限的用户使用。
     """
+    system = platform.system().lower()
+    pids: List[int] = []
+    
     try:
-        cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        if system == "windows":
+            # Windows 使用 netstat 命令
+            cmd = ["netstat", "-ano"]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            
+            if result.returncode != 0:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"netstat 调用错误: {result.stderr.strip() or result.stdout.strip()}",
+                )
+            
+            # 解析 netstat 输出，查找监听指定端口的进程
+            # 格式示例: TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       1234
+            # 或者: TCP    [::]:80                 [::]:0                 LISTENING       1234
+            lines = result.stdout.splitlines()
+            for line in lines:
+                # 检查是否包含端口号和 LISTENING 状态
+                if f":{port}" in line and "LISTENING" in line.upper():
+                    # 分割行，PID 通常在最后一列
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        try:
+                            # 尝试从最后一列获取 PID
+                            pid = int(parts[-1])
+                            if pid > 0:  # 确保 PID 有效
+                                pids.append(pid)
+                        except (ValueError, IndexError):
+                            continue
+        else:
+            # Linux/macOS 使用 lsof 命令
+            cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            
+            if result.returncode not in (0, 1):
+                # 1 表示没有匹配记录，也视为正常
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
+                )
+            
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            for line in lines:
+                try:
+                    pids.append(int(line))
+                except ValueError:
+                    continue
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"执行 lsof 失败: {e}",
+            detail=f"执行端口查询失败 ({system}): {e}",
         )
 
-    if result.returncode not in (0, 1):
-        # 1 表示没有匹配记录，也视为正常
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
-        )
-
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    pids: List[int] = []
-    for line in lines:
-        try:
-            pids.append(int(line))
-        except ValueError:
-            continue
-
+    # 去重 PID 列表
+    pids = list(set(pids))
+    
     if not pids:
         return {
             "success": True,

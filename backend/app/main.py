@@ -64,8 +64,23 @@ async def startup_event():
     print("\n" + "=" * 60)
     print("Nginx WebUI 核心配置路径")
     print("=" * 60)
-    print(f"NGINX 配置目录:     {cfg.nginx.conf_dir}")
-    print(f"Nginx 配置文件:     {cfg.nginx.config_path}")
+    # 尝试获取活动版本的配置路径
+    try:
+        from app.utils.nginx import get_config_path
+        from app.utils.nginx_versions import get_active_version
+        config_path = get_config_path()
+        active = get_active_version()
+        if active:
+            print(f"Nginx 活动版本:     {active['version']}")
+            print(f"Nginx 安装路径:     {active['install_path']}")
+            print(f"Nginx 配置文件:     {config_path}")
+            print(f"Nginx 配置目录:     {active['install_path'] / 'conf' / 'conf.d'}")
+        else:
+            print(f"Nginx 配置文件:     {config_path}")
+            print(f"注意: 未找到活动版本，配置文件路径为备用路径")
+    except FileNotFoundError:
+        print(f"Nginx 配置文件:     未找到（需要先下载并编译一个 Nginx 版本）")
+        print(f"备用配置路径:       {cfg.nginx.config_path} (已弃用)")
     print(f"Nginx 可执行文件:   {cfg.nginx.executable}")
     print(f"Nginx 状态:         {'✓ 可用' if nginx_available else '✗ 未安装或不可用'}")
     if not nginx_available:

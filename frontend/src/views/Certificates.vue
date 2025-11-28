@@ -22,6 +22,76 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 上传证书对话框 -->
+    <el-dialog
+      v-model="uploadDialogVisible"
+      title="上传证书"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="uploadForm" :rules="uploadRules" ref="uploadFormRef" label-width="120px">
+        <el-form-item label="域名" prop="domain">
+          <el-input v-model="uploadForm.domain" placeholder="请输入域名，例如：example.com" />
+        </el-form-item>
+        <el-form-item label="证书文件" required>
+          <el-upload
+            ref="certUploadRef"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleCertFileChange"
+            :on-remove="handleCertFileRemove"
+            accept=".crt,.pem,.cer"
+          >
+            <el-button type="primary">选择证书文件</el-button>
+            <template #tip>
+              <div class="el-upload__tip">
+                支持 .crt、.pem、.cer 格式
+              </div>
+            </template>
+          </el-upload>
+          <div v-if="uploadForm.certFile" class="file-name">
+            已选择: {{ uploadForm.certFile.name }}
+          </div>
+        </el-form-item>
+        <el-form-item label="私钥文件" required>
+          <el-upload
+            ref="keyUploadRef"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleKeyFileChange"
+            :on-remove="handleKeyFileRemove"
+            accept=".key,.pem"
+          >
+            <el-button type="primary">选择私钥文件</el-button>
+            <template #tip>
+              <div class="el-upload__tip">
+                支持 .key、.pem 格式
+              </div>
+            </template>
+          </el-upload>
+          <div v-if="uploadForm.keyFile" class="file-name">
+            已选择: {{ uploadForm.keyFile.name }}
+          </div>
+        </el-form-item>
+        <el-form-item label="自动续期">
+          <el-switch v-model="uploadForm.autoRenew" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="info" @click="uploadDialogVisible = false">取消</el-button>
+          <el-button
+            type="primary"
+            :loading="uploading"
+            :disabled="!uploadForm.domain || !uploadForm.certFile || !uploadForm.keyFile"
+            @click="handleUploadSubmit"
+          >
+            上传
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -31,6 +101,25 @@ import { certificatesApi } from '../api/certificates'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const certificateList = ref([])
+const uploadDialogVisible = ref(false)
+const uploading = ref(false)
+const uploadFormRef = ref(null)
+const certUploadRef = ref(null)
+const keyUploadRef = ref(null)
+
+const uploadForm = ref({
+  domain: '',
+  certFile: null,
+  keyFile: null,
+  autoRenew: false
+})
+
+const uploadRules = {
+  domain: [
+    { required: true, message: '请输入域名', trigger: 'blur' },
+    { pattern: /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/, message: '请输入有效的域名', trigger: 'blur' }
+  ]
+}
 
 const loadCertificates = async () => {
   try {
@@ -46,7 +135,67 @@ const handleRequest = () => {
 }
 
 const handleUpload = () => {
-  ElMessage.info('上传证书功能待实现')
+  uploadForm.value = {
+    domain: '',
+    certFile: null,
+    keyFile: null,
+    autoRenew: false
+  }
+  if (certUploadRef.value) {
+    certUploadRef.value.clearFiles()
+  }
+  if (keyUploadRef.value) {
+    keyUploadRef.value.clearFiles()
+  }
+  uploadDialogVisible.value = true
+}
+
+const handleCertFileChange = (file) => {
+  uploadForm.value.certFile = file.raw
+}
+
+const handleCertFileRemove = () => {
+  uploadForm.value.certFile = null
+}
+
+const handleKeyFileChange = (file) => {
+  uploadForm.value.keyFile = file.raw
+}
+
+const handleKeyFileRemove = () => {
+  uploadForm.value.keyFile = null
+}
+
+const handleUploadSubmit = async () => {
+  if (!uploadFormRef.value) return
+  
+  try {
+    await uploadFormRef.value.validate()
+  } catch (error) {
+    return
+  }
+
+  if (!uploadForm.value.certFile || !uploadForm.value.keyFile) {
+    ElMessage.warning('请选择证书文件和私钥文件')
+    return
+  }
+
+  uploading.value = true
+  try {
+    await certificatesApi.uploadCertificate(
+      uploadForm.value.domain,
+      uploadForm.value.certFile,
+      uploadForm.value.keyFile,
+      uploadForm.value.autoRenew
+    )
+    ElMessage.success('证书上传成功')
+    uploadDialogVisible.value = false
+    loadCertificates()
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '证书上传失败')
+  } finally {
+    uploading.value = false
+  }
 }
 
 const handleRenew = async (cert) => {
@@ -86,6 +235,18 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.file-name {
+  margin-top: 8px;
+  color: #606266;
+  font-size: 12px;
+}
+
+.el-upload__tip {
+  color: #909399;
+  font-size: 12px;
+  margin-top: 8px;
 }
 </style>
 

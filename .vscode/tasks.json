@@ -2,50 +2,39 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "npm: dev (frontend)",
-      "type": "npm",
-      "script": "dev",
-      "path": "frontend",
-      "isBackground": true,
-      "problemMatcher": {
-        "owner": "typescript",
-        "pattern": {
-          "regexp": "^([^\\s].*)\\((\\d+),(\\d+)\\):\\s+(error|warning|info)\\s+(TS\\d+)\\s*:\\s*(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "code": 5,
-          "message": 6
-        },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": ".*",
-          "endsPattern": ".*Local:.*"
-        }
+      "label": "npm: install (frontend)",
+      "type": "shell",
+      "command": "npm install",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
       }
     },
     {
-      "label": "Python: 启动后端",
+      "label": "npm: dev (frontend)",
       "type": "shell",
-      "command": "python3",
-      "args": [
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--reload",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8000"
-      ],
+      "command": "npm run dev",
       "options": {
-        "cwd": "${workspaceFolder}/backend"
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false
       },
       "isBackground": true,
       "problemMatcher": {
         "pattern": {
-          "regexp": "^",
+          "regexp": "^$",
           "file": 1,
           "location": 2,
           "message": 3
@@ -53,50 +42,52 @@
         "background": {
           "activeOnStart": true,
           "beginsPattern": ".*",
-          "endsPattern": ".*Application startup complete.*"
+          "endsPattern": "(Local:|Network:|ready in)"
         }
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
       }
     },
     {
-      "label": "初始化数据库",
+      "label": "安装前端依赖（如需要）",
       "type": "shell",
-      "command": "python3",
-      "args": [
-        "-c",
-        "from app.database import init_db; init_db()"
-      ],
+      "command": "npm install",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false,
+        "echo": true,
+        "clear": false
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "安装后端依赖（如需要）",
+      "type": "shell",
+      "command": "python -m pip install -r requirements.txt",
+      "windows": {
+        "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+      },
       "options": {
         "cwd": "${workspaceFolder}/backend"
       },
-      "problemMatcher": []
-    },
-    {
-      "label": "安装后端依赖",
-      "type": "shell",
-      "command": "pip3 install -r requirements.txt",
-      "options": {
-        "cwd": "${workspaceFolder}/backend"
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false,
+        "echo": true,
+        "clear": false
       },
-      "problemMatcher": []
-    },
-    {
-      "label": "安装前端依赖",
-      "type": "npm",
-      "script": "install",
-      "path": "frontend",
-      "problemMatcher": []
-    },
-    {
-      "label": "构建前端",
-      "type": "npm",
-      "script": "build",
-      "path": "frontend",
-      "problemMatcher": []
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
     }
   ]
 }
-

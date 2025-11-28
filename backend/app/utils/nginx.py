@@ -74,32 +74,60 @@ def get_nginx_executable_or_raise() -> Path:
 def get_config_path() -> Path:
     """
     获取当前使用的 Nginx 配置文件路径
+    现在全部使用下载编译版本的配置，不再使用独立的 nginx 目录
 
     Returns:
         配置文件路径
+        
+    Raises:
+        FileNotFoundError: 如果没有活动版本的 Nginx
     """
-    config = get_config()
-
-    # 如果存在通过多版本管理启动的"活动版本"，
-    # 则优先使用该版本下的 conf/nginx.conf 作为配置文件。
+    # 优先使用活动版本的配置
     active = get_active_version()
     if active is not None:
         config_path = active["install_path"] / "conf" / "nginx.conf"
-    else:
-        config_path = Path(config.nginx.config_path)
-        # 如果是相对路径，需要解析为绝对路径
-        if not config_path.is_absolute():
-            # 相对于 backend 目录解析
-            backend_dir = Path(__file__).resolve().parents[2]
-            config_path = (backend_dir / config_path).resolve()
-
-    return config_path
-
-
-def _create_default_config() -> None:
-    """创建默认的 Nginx 配置文件"""
+        if config_path.exists():
+            return config_path
+        # 如果配置文件不存在，尝试创建默认配置
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        _create_default_config_for_version(active["install_path"])
+        return config_path
+    
+    # 如果没有活动版本，尝试查找任何已编译的版本
     config = get_config()
-    config_path = get_config_path()
+    versions_root = Path(config.nginx.versions_root)
+    if not versions_root.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        versions_root = (backend_dir / versions_root).resolve()
+    
+    if versions_root.exists():
+        # 查找最新的已编译版本
+        for version_dir in sorted(versions_root.iterdir(), key=lambda x: x.name, reverse=True):
+            if version_dir.is_dir():
+                config_path = version_dir / "conf" / "nginx.conf"
+                if config_path.exists():
+                    return config_path
+                # 如果有可执行文件，创建默认配置
+                executable = version_dir / "sbin" / "nginx"
+                if executable.exists():
+                    _create_default_config_for_version(version_dir)
+                    return config_path
+    
+    # 如果都没有，抛出异常
+    raise FileNotFoundError(
+        "未找到可用的 Nginx 版本配置。请先下载并编译一个 Nginx 版本，或启动一个 Nginx 实例。"
+    )
+
+
+def _create_default_config_for_version(install_path: Path) -> None:
+    """
+    为指定版本的 Nginx 创建默认配置文件
+    
+    Args:
+        install_path: Nginx 版本的安装目录路径
+    """
+    config = get_config()
+    config_path = install_path / "conf" / "nginx.conf"
     
     # 如果配置文件已存在，不创建
     if config_path.exists():
@@ -107,47 +135,58 @@ def _create_default_config() -> None:
     
     # 确保目录存在
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    conf_dir = Path(config.nginx.conf_dir)
-    conf_dir.mkdir(parents=True, exist_ok=True)
     
-    # 创建默认的 nginx.conf
-    default_nginx_conf = f"""## 在非 root 权限下运行时，禁用 user 指令以避免无意义的告警
-#user www-data;
-worker_processes auto;
-## PID 文件路径
-pid /var/run/nginx.pid;
+    # 使用版本目录下的 conf.d，如果不存在则创建
+    conf_d_dir = install_path / "conf" / "conf.d"
+    conf_d_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 解析日志目录路径
+    log_dir = Path(config.nginx.log_dir)
+    if not log_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        log_dir = (backend_dir / log_dir).resolve()
+    
+    access_log = Path(config.nginx.access_log)
+    if not access_log.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        access_log = (backend_dir / access_log).resolve()
+    
+    error_log = Path(config.nginx.error_log)
+    if not error_log.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        error_log = (backend_dir / error_log).resolve()
+    
+    # 确保日志目录存在
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 创建默认的 nginx.conf，使用版本目录下的 conf.d
+    default_nginx_conf = f"""#user  nobody;
+worker_processes  auto;
 
-## 如果你本机没有 /etc/nginx/modules-enabled，可以先注释掉这行
-#include /etc/nginx/modules-enabled/*.conf;
+pid        logs/nginx.pid;
 
 events {{
-    worker_connections 768;
+    worker_connections  1024;
 }}
 
 http {{
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
+    include       mime.types;
+    default_type  application/octet-stream;
 
-    ## 使用系统自带的 mime.types
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
+    access_log  {access_log};
+    error_log   {error_log};
 
-    ## 将日志输出到配置的目录
-    access_log {config.nginx.access_log};
-    error_log  {config.nginx.error_log};
+    sendfile        on;
+    keepalive_timeout  65;
 
-    gzip on;
+    gzip  on;
     gzip_vary on;
     gzip_proxied any;
     gzip_comp_level 6;
     gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss;
 
-    ## 引用 conf.d 配置
-    include {config.nginx.conf_dir}/*.conf;
-    ## 如果你有额外站点配置，可在上面这行基础上新增 include
+    # 使用版本目录下的 conf.d 配置
+    include conf.d/*.conf;
 }}
 """
     
@@ -155,13 +194,17 @@ http {{
         f.write(default_nginx_conf)
     
     # 创建默认的 conf.d/default.conf
-    default_conf_path = conf_dir / "default.conf"
+    default_conf_path = conf_d_dir / "default.conf"
     if not default_conf_path.exists():
+        # 使用版本目录下的 html 目录作为静态文件目录
+        html_dir = install_path / "html"
+        html_dir.mkdir(parents=True, exist_ok=True)
+        
         default_server_conf = f"""server {{
     listen 80;
     server_name _;
 
-    root {config.nginx.static_dir};
+    root html;
     index index.html;
 
     # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
@@ -197,10 +240,73 @@ http {{
 """
         with open(default_conf_path, "w", encoding="utf-8") as f:
             f.write(default_server_conf)
+        
+        # 如果 html 目录下没有 index.html，创建一个简单的
+        index_html_path = html_dir / "index.html"
+        if not index_html_path.exists():
+            default_index_html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Nginx WebUI</title>
+</head>
+<body>
+    <h1>Nginx is running!</h1>
+    <p>This is the default page. Please configure your site.</p>
+</body>
+</html>
+"""
+            with open(index_html_path, "w", encoding="utf-8") as f:
+                f.write(default_index_html)
+
+
+def _create_default_config() -> None:
+    """
+    创建默认的 Nginx 配置文件（已弃用，改为使用 _create_default_config_for_version）
+    保留此函数以保持向后兼容，但实际会尝试使用版本目录
+    """
+    try:
+        config_path = get_config_path()
+        # 如果配置文件不存在，会在 get_config_path 中自动创建
+        if not config_path.exists():
+            # 尝试获取活动版本
+            active = get_active_version()
+            if active is not None:
+                _create_default_config_for_version(active["install_path"])
+    except FileNotFoundError:
+        # 如果没有版本，抛出更友好的错误
+        raise FileNotFoundError(
+            "未找到可用的 Nginx 版本。请先下载并编译一个 Nginx 版本。"
+        )
+
+
+def get_conf_d_dir() -> Path:
+    """
+    获取当前 Nginx 版本的 conf.d 配置目录路径
     
-    # 确保日志目录存在
-    log_dir = Path(config.nginx.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
+    Returns:
+        conf.d 目录路径
+        
+    Raises:
+        FileNotFoundError: 如果没有活动版本的 Nginx
+    """
+    active = get_active_version()
+    if active is not None:
+        conf_d_dir = active["install_path"] / "conf" / "conf.d"
+        conf_d_dir.mkdir(parents=True, exist_ok=True)
+        return conf_d_dir
+    
+    # 尝试从配置文件路径推断
+    config_path = get_config_path()
+    # config_path 应该是 versions/<version>/conf/nginx.conf
+    # conf.d 应该在 versions/<version>/conf/conf.d
+    if "conf" in str(config_path):
+        conf_d_dir = config_path.parent / "conf.d"
+        conf_d_dir.mkdir(parents=True, exist_ok=True)
+        return conf_d_dir
+    
+    raise FileNotFoundError(
+        "未找到可用的 Nginx 版本配置目录。请先下载并编译一个 Nginx 版本。"
+    )
 
 
 def get_config_content() -> str:
@@ -209,7 +315,16 @@ def get_config_content() -> str:
 
     if not config_path.exists():
         # 自动创建默认配置
-        _create_default_config()
+        try:
+            active = get_active_version()
+            if active is not None:
+                _create_default_config_for_version(active["install_path"])
+            else:
+                _create_default_config()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                "未找到可用的 Nginx 版本配置。请先下载并编译一个 Nginx 版本。"
+            )
 
     with open(config_path, "r", encoding="utf-8") as f:
         return f.read()

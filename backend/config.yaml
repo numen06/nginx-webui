@@ -1,8 +1,10 @@
 nginx:
-  # 默认配置文件放在 nginx 目录下（与 app 同级）
-  config_path: ../nginx/nginx.conf
+  # 注意：现在全部使用下载编译的 nginx 版本的配置，不再使用独立的 nginx 目录
+  # config_path 和 conf_dir 仅在找不到版本配置时作为备用
+  # 实际配置文件位于: versions/<version>/conf/nginx.conf 和 versions/<version>/conf/conf.d/
+  config_path: ../nginx/nginx.conf  # 已弃用，仅作为备用
   executable: /usr/sbin/nginx
-  conf_dir: ../nginx/conf.d
+  conf_dir: ../nginx/conf.d  # 已弃用，仅作为备用
   certbot_path: /usr/bin/certbot
   # 动态数据都放在 data 目录下
   static_dir: ../data/html

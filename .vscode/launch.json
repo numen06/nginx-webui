@@ -24,6 +24,29 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "Python: FastAPI (后端，含环境安装)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--reload",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "jinja": true,
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}/backend",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "SECRET_KEY": "dev-secret-key-change-in-production"
+      },
+      "preLaunchTask": "安装后端依赖（如需要）",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "Python: FastAPI (当前文件)",
       "type": "debugpy",
       "request": "launch",
@@ -50,6 +73,7 @@
       "skipFiles": [
         "<node_internals>/**"
       ],
+      "preLaunchTask": "安装前端依赖（如需要）",
       "serverReadyAction": {
         "pattern": "Local:\\s+(https?://localhost:[0-9]+)",
         "uriFormat": "%s",
