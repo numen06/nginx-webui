@@ -261,6 +261,103 @@ def _detect_source_dir(build_dir: Path) -> Path:
     return subdirs[0]
 
 
+def _update_nginx_config_for_unified_dirs(install_path: Path, version: str) -> None:
+    """
+    更新编译后的nginx.conf，使其使用统一的配置目录和静态文件目录
+    
+    这样所有版本共享同一个配置目录（conf.d）和静态文件目录（html），
+    在版本切换时配置和静态文件保持一致。
+    """
+    config = get_config()
+    nginx_conf_path = install_path / "conf" / "nginx.conf"
+    
+    if not nginx_conf_path.exists():
+        return
+    
+    # 解析配置路径（统一配置目录）
+    conf_dir = Path(config.nginx.conf_dir)
+    if not conf_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        conf_dir = (backend_dir / conf_dir).resolve()
+    
+    # 解析静态文件目录路径
+    static_dir = Path(config.nginx.static_dir)
+    if not static_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        static_dir = (backend_dir / static_dir).resolve()
+    
+    # 解析日志目录路径
+    log_dir = Path(config.nginx.log_dir)
+    if not log_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        log_dir = (backend_dir / log_dir).resolve()
+    
+    access_log = Path(config.nginx.access_log)
+    if not access_log.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        access_log = (backend_dir / access_log).resolve()
+    
+    error_log = Path(config.nginx.error_log)
+    if not error_log.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        error_log = (backend_dir / error_log).resolve()
+    
+    # 确保目录存在
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    static_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 读取原始配置
+    original_content = nginx_conf_path.read_text(encoding="utf-8")
+    
+    # 生成新的配置内容
+    # 保留基本的worker_processes、events等配置
+    # 但修改http块中的配置，使其指向统一的目录
+    new_config = f"""#user  nobody;
+worker_processes  auto;
+
+#error_log  logs/error.log;
+#error_log  logs/error.log  notice;
+#error_log  logs/error.log  info;
+
+pid        logs/nginx.pid;
+
+events {{
+    worker_connections  1024;
+}}
+
+http {{
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    #log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+    #                  '$status $body_bytes_sent "$http_referer" '
+    #                  '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  {access_log};
+    error_log   {error_log};
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    #keepalive_timeout  0;
+    keepalive_timeout  65;
+
+    gzip  on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss;
+
+    # 使用统一的配置目录（所有版本共享）
+    include {conf_dir}/*.conf;
+}}
+"""
+    
+    # 写入新配置
+    nginx_conf_path.write_text(new_config, encoding="utf-8")
+
+
 def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResult:
     """
     从源码编译安装 Nginx
@@ -374,6 +471,10 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
 
         # 使用最终路径重新计算可执行文件路径，便于日志与后续校验
         executable = _get_nginx_executable(install_path)
+
+        # 修改编译后的nginx.conf，使其使用统一的配置目录和静态文件目录
+        _update_nginx_config_for_unified_dirs(install_path, version)
+        logs.append("已更新nginx.conf以使用统一的配置目录和静态文件目录")
 
         full_log = "\n".join(logs)
         log_path = _write_build_log(version, full_log)
@@ -1107,6 +1208,8 @@ async def start_nginx_version(
     - 可执行文件位于 <versions_root>/<version>/sbin/nginx
     - 使用编译版本自带的配置文件 <versions_root>/<version>/conf/nginx.conf
     - 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 等路径
+    - 启动新版本前会自动停止所有其他正在运行的版本，确保系统只有一个nginx在运行
+    - 所有版本共享统一的配置目录（conf.d）和静态文件目录（html），版本切换时配置和静态文件保持一致
     """
     install_path = _get_install_path(version)
     executable = _get_nginx_executable(install_path)
@@ -1127,8 +1230,95 @@ async def start_nginx_version(
             "version": current_info,
         }
 
+    # 确保系统只有一个nginx在运行：先停止所有其他正在运行的版本
+    all_versions = _list_all_versions()
+    stopped_versions = []
+    for v_info in all_versions:
+        if v_info.version != version and v_info.running:
+            # 停止其他正在运行的版本
+            try:
+                other_install_path = _get_install_path(v_info.version)
+                other_executable = _get_nginx_executable(other_install_path)
+                other_config_path = other_install_path / "conf" / "nginx.conf"
+                
+                stop_cmd = [
+                    str(other_executable),
+                    "-c",
+                    str(other_config_path),
+                    "-p",
+                    str(other_install_path),
+                    "-s",
+                    "quit",
+                ]
+                subprocess.run(
+                    stop_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                stopped_versions.append(v_info.version)
+            except Exception as e:
+                # 记录错误但继续执行
+                pass
+
     # 确保必要目录存在（logs、conf 等）
     (install_path / "logs").mkdir(parents=True, exist_ok=True)
+
+    # 确保统一的配置目录和静态文件目录存在，并创建默认配置
+    conf_dir = Path(config.nginx.conf_dir)
+    if not conf_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        conf_dir = (backend_dir / conf_dir).resolve()
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    
+    static_dir = Path(config.nginx.static_dir)
+    if not static_dir.is_absolute():
+        backend_dir = Path(__file__).resolve().parents[2]
+        static_dir = (backend_dir / static_dir).resolve()
+    static_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 如果统一的配置目录中没有default.conf，创建默认配置
+    default_conf_path = conf_dir / "default.conf"
+    if not default_conf_path.exists():
+        default_server_conf = f"""server {{
+    listen 80;
+    server_name _;
+
+    root {static_dir};
+    index index.html;
+
+    # 防止 favicon.ico 等静态资源触发循环（必须在 location / 之前）
+    location ~* \\.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)$ {{
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+        try_files $uri =404;
+    }}
+
+    # 前端静态文件
+    location / {{
+        # 先尝试直接访问文件，再尝试作为目录，最后回退到 index.html
+        try_files $uri $uri/ /index.html;
+    }}
+
+    # API 代理
+    location /api/ {{
+        proxy_pass http://127.0.0.1:{config.app.port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    # 健康检查
+    location /health {{
+        access_log off;
+        return 200 "healthy\\n";
+        add_header Content-Type text/plain;
+    }}
+}}
+"""
+        default_conf_path.write_text(default_server_conf, encoding="utf-8")
 
     # 使用编译版本自带的配置文件（conf/nginx.conf）
     # 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 路径
@@ -1138,6 +1328,12 @@ async def start_nginx_version(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
         )
+    
+    # 确保nginx.conf已更新为使用统一的配置目录和静态文件目录
+    # 检查配置文件中是否包含统一的配置目录路径，如果没有则更新
+    config_content = version_config_path.read_text(encoding="utf-8")
+    if str(conf_dir) not in config_content:
+        _update_nginx_config_for_unified_dirs(install_path, version)
 
     # 先测试配置
     try:
