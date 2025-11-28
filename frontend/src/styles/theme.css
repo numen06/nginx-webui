@@ -7,7 +7,7 @@
   --nginx-green-light: #18e27b;
   --nginx-green-dark: #049048;
   --nginx-green-glow: rgba(8, 196, 97, 0.35);
-  
+
   /* 按钮配色 - 多彩色系 */
   --color-primary: var(--nginx-green);      /* 主色 - Nginx绿 */
   --color-primary-light: var(--nginx-green-light);
@@ -52,7 +52,6 @@
   --shadow-sm: 0 2px 4px rgba(3, 5, 12, 0.6);
   --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 25px 60px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 30px var(--nginx-green-glow);
   
   /* 渐变 */
   --gradient-primary: linear-gradient(145deg, #050711 0%, #141d32 55%, #050711 100%);
@@ -89,16 +88,14 @@
 
 /* 全局深色主题样式 */
 body {
-  background: var(--gradient-primary);
+  background: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
 }
 
 #app {
   min-height: 100vh;
-  background: radial-gradient(circle at 20% 20%, rgba(8, 196, 97, 0.08), transparent 45%),
-              radial-gradient(circle at 80% 0%, rgba(59, 130, 246, 0.08), transparent 40%),
-              var(--gradient-dark);
+  background: var(--bg-primary);
 }
 
 /* Element Plus 组件深色主题覆盖 */
@@ -1071,7 +1068,6 @@ body {
   color: var(--text-primary) !important;
   border-color: var(--nginx-green) !important;
   background-color: var(--bg-hover) !important;
-  transform: translateY(-1px) !important;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2) !important;
 }
 
@@ -1099,7 +1095,6 @@ body {
   border-color: var(--color-primary-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(0, 150, 57, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button--success {
@@ -1114,17 +1109,10 @@ body {
   border-color: var(--color-success-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button:focus {
   color: var(--text-primary);
-}
-
-.el-button.is-disabled {
-  color: var(--text-muted);
-  background-color: var(--bg-secondary);
-  border-color: var(--border-color);
 }
 
 .el-button--text {
@@ -1151,7 +1139,6 @@ body {
   border-color: var(--color-danger-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button--warning {
@@ -1166,7 +1153,6 @@ body {
   border-color: var(--color-warning-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button--info {
@@ -1181,7 +1167,6 @@ body {
   border-color: var(--color-info-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 /* 新增多彩按钮变体 - 使用渐变和阴影效果 */
@@ -1197,7 +1182,6 @@ body {
   border-color: var(--color-purple-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button--cyan {
@@ -1212,7 +1196,6 @@ body {
   border-color: var(--color-cyan-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(6, 182, 212, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button--orange {
@@ -1227,7 +1210,6 @@ body {
   border-color: var(--color-orange-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(249, 115, 22, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 .el-button--pink {
@@ -1242,7 +1224,6 @@ body {
   border-color: var(--color-pink-light) !important;
   color: var(--text-white) !important;
   box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4) !important;
-  transform: translateY(-2px) !important;
 }
 
 /* Tag 标签组件 */
@@ -1282,16 +1263,62 @@ a:hover {
   color: var(--nginx-green-light);
 }
 
-/* 确保所有图标颜色适配深色主题 */
+/* 图标默认跟随主题主文字颜色，可通过工具类单独覆盖 */
 .el-icon {
-  color: var(--text-secondary);
+  color: var(--text-primary);
+  transition: color 0.2s ease, opacity 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 图标语义色辅助类 */
+.icon-muted {
+  color: var(--text-muted) !important;
+}
+
+.icon-accent {
+  color: var(--nginx-green) !important;
+}
+
+.icon-warning {
+  color: var(--color-warning) !important;
+}
+
+.icon-danger {
+  color: var(--color-danger) !important;
+}
+
+/* 按钮、菜单等可交互区域的图标自动继承当前文字色 */
+.el-button .el-icon,
+.el-menu-item .el-icon,
+.el-breadcrumb__item .el-icon {
+  color: inherit;
+}
+
+/* 圆形/彩色按钮里的图标保持高对比度 */
+.el-button.is-circle .el-icon,
+.el-button--primary .el-icon,
+.el-button--success .el-icon,
+.el-button--danger .el-icon,
+.el-button--warning .el-icon,
+.el-button--info .el-icon {
+  color: var(--text-white);
+}
+
+.el-button .btn-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.el-button .el-icon + .btn-label {
+  margin-left: 6px;
 }
 
 /* Card 卡片hover效果 */
 .el-card:hover {
   border-color: var(--border-light);
-  box-shadow: var(--shadow-md), var(--shadow-glow);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
 
 /* 确保所有可点击元素的hover状态都有合适的反馈 */
@@ -1307,17 +1334,20 @@ a:hover {
   color: var(--text-primary) !important;
 }
 
-.el-button.is-disabled {
-  background-color: var(--bg-secondary) !important;
-  border-color: var(--border-color) !important;
-  color: var(--text-muted) !important;
-  opacity: 0.6;
+.el-button.is-disabled,
+.el-button.is-disabled:hover,
+.el-button.is-disabled:focus {
+  color: var(--text-secondary) !important;
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  box-shadow: none !important;
+  opacity: 0.9;
+  cursor: not-allowed;
 }
 
-.el-button.is-disabled:hover {
-  background-color: var(--bg-secondary) !important;
-  border-color: var(--border-color) !important;
-  color: var(--text-muted) !important;
+.el-button.is-disabled .el-icon {
+  color: var(--text-secondary) !important;
+  opacity: 0.8;
 }
 
 /* 表格行hover时的文字颜色 - 确保所有内容都可见 */

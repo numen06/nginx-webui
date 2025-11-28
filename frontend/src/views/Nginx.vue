@@ -63,7 +63,8 @@
             :disabled="buildingVersions.includes(pinnedVersion.directory) || pinnedVersion.compiled || !pinnedVersion.has_source"
             @click="compileVersion(pinnedVersion.directory)"
           >
-            编译
+            <el-icon><Tools /></el-icon>
+            <span class="btn-label">编译</span>
           </el-button>
           <el-button
             size="small"
@@ -72,7 +73,8 @@
             :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
             @click="upgradeToProduction(pinnedVersion.directory)"
           >
-            升级到运行版
+            <el-icon><Promotion /></el-icon>
+            <span class="btn-label">升级到运行版</span>
           </el-button>
           <el-button
             size="small"
@@ -80,7 +82,8 @@
             :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
             @click="startVersion(pinnedVersion.directory)"
           >
-            启动
+            <el-icon><VideoPlay /></el-icon>
+            <span class="btn-label">启动</span>
           </el-button>
           <el-button
             size="small"
@@ -88,7 +91,8 @@
             :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
             @click="stopVersion(pinnedVersion.directory)"
           >
-            停止
+            <el-icon><VideoPause /></el-icon>
+            <span class="btn-label">停止</span>
           </el-button>
           <el-button
             size="small"
@@ -96,7 +100,8 @@
             :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
             @click="forceStopVersion(pinnedVersion.directory)"
           >
-            强制停止
+            <el-icon><Lightning /></el-icon>
+            <span class="btn-label">强制停止</span>
           </el-button>
           <el-button
             size="small"
@@ -104,7 +109,8 @@
             :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
             @click="deleteVersion(pinnedVersion.directory)"
           >
-            删除
+            <el-icon><Delete /></el-icon>
+            <span class="btn-label">删除</span>
           </el-button>
         </div>
       </el-card>
@@ -116,12 +122,17 @@
           <span>Nginx 版本列表</span>
           <div>
             <el-button type="primary" @click="downloadDialogVisible = true">
-              在线下载源码包
+              <el-icon><Download /></el-icon>
+              <span class="btn-label">在线下载源码包</span>
             </el-button>
             <el-button type="cyan" @click="uploadDialogVisible = true">
-              上传源码包
+              <el-icon><UploadFilled /></el-icon>
+              <span class="btn-label">上传源码包</span>
             </el-button>
-            <el-button type="info" text @click="loadVersions">刷新</el-button>
+            <el-button type="info" text @click="loadVersions">
+              <el-icon><RefreshRight /></el-icon>
+              <span class="btn-label">刷新</span>
+            </el-button>
             <el-tooltip content="强制释放 80 端口" placement="bottom">
               <el-button
                 circle
@@ -197,54 +208,78 @@
             </div>
 
             <div class="version-actions">
-              <el-button
-                size="small"
-                type="purple"
-                :disabled="buildingVersions.includes(row.directory) || row.compiled || !row.has_source"
-                @click="compileVersion(row.directory)"
-              >
-                编译
-              </el-button>
-              <el-button
-                size="small"
-                type="primary"
-                :disabled="buildingVersions.includes(row.directory) || !row.compiled"
-                @click="upgradeToProduction(row.directory)"
-              >
-                升级到运行版
-              </el-button>
-              <el-button
-                size="small"
-                type="success"
-                :disabled="row.running || buildingVersions.includes(row.directory) || !row.compiled"
-                @click="startVersion(row.directory)"
-              >
-                启动
-              </el-button>
-              <el-button
-                size="small"
-                type="warning"
-                :disabled="!row.running || buildingVersions.includes(row.directory)"
-                @click="stopVersion(row.directory)"
-              >
-                停止
-              </el-button>
-              <el-button
-                size="small"
-                type="orange"
-                :disabled="!row.running || buildingVersions.includes(row.directory)"
-                @click="forceStopVersion(row.directory)"
-              >
-                强制停止
-              </el-button>
-              <el-button
-                size="small"
-                type="danger"
-                :disabled="row.running || buildingVersions.includes(row.directory)"
-                @click="deleteVersion(row.directory)"
-              >
-                删除
-              </el-button>
+              <el-tooltip class="action-tooltip" content="编译" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="purple"
+                  class="action-icon-btn"
+                  :disabled="buildingVersions.includes(row.directory) || row.compiled || !row.has_source"
+                  @click="compileVersion(row.directory)"
+                >
+                  <el-icon><Tools /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip class="action-tooltip" content="升级到运行版" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="primary"
+                  class="action-icon-btn"
+                  :disabled="buildingVersions.includes(row.directory) || !row.compiled"
+                  @click="upgradeToProduction(row.directory)"
+                >
+                  <el-icon><Promotion /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip class="action-tooltip" content="启动" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="success"
+                  class="action-icon-btn"
+                  :disabled="row.running || buildingVersions.includes(row.directory) || !row.compiled"
+                  @click="startVersion(row.directory)"
+                >
+                  <el-icon><VideoPlay /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip class="action-tooltip" content="停止" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="warning"
+                  class="action-icon-btn"
+                  :disabled="!row.running || buildingVersions.includes(row.directory)"
+                  @click="stopVersion(row.directory)"
+                >
+                  <el-icon><VideoPause /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip class="action-tooltip" content="强制停止" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="orange"
+                  class="action-icon-btn"
+                  :disabled="!row.running || buildingVersions.includes(row.directory)"
+                  @click="forceStopVersion(row.directory)"
+                >
+                  <el-icon><Lightning /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip class="action-tooltip" content="删除" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="danger"
+                  class="action-icon-btn"
+                  :disabled="row.running || buildingVersions.includes(row.directory)"
+                  @click="deleteVersion(row.directory)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </el-tooltip>
             </div>
           </el-card>
         </el-col>
@@ -339,7 +374,8 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button type="info" @click="downloadDialogVisible = false" :disabled="downloadLoading">
-            取消
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
           </el-button>
           <el-button
             type="info"
@@ -347,7 +383,8 @@
             :disabled="downloadLoading"
             @click="checkUrl"
           >
-            检查地址
+            <el-icon><Link /></el-icon>
+            <span class="btn-label">检查地址</span>
           </el-button>
           <el-button
             type="primary"
@@ -355,7 +392,8 @@
             :disabled="urlCheckResult && typeof urlCheckResult === 'object' && urlCheckResult.accessible === false"
             @click="handleDownload"
           >
-            下载源码包
+            <el-icon><Download /></el-icon>
+            <span class="btn-label">下载源码包</span>
           </el-button>
         </span>
       </template>
@@ -377,7 +415,10 @@
             :on-change="handleFileChange"
             :before-remove="() => !uploading"
           >
-            <el-button type="primary">选择文件</el-button>
+            <el-button type="primary">
+              <el-icon><FolderOpened /></el-icon>
+              <span class="btn-label">选择文件</span>
+            </el-button>
             <template #tip>
               <div class="el-upload__tip">
                 仅支持 .tar.gz / .tgz 的 nginx 源码包，示例：nginx-1.28.0.tar.gz
@@ -394,14 +435,18 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="uploadDialogVisible = false">取消</el-button>
+          <el-button type="info" @click="uploadDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
           <el-button
             type="primary"
             :loading="uploading"
             :disabled="!selectedFile"
             @click="handleUpload"
           >
-            上传并编译
+            <el-icon><UploadFilled /></el-icon>
+            <span class="btn-label">上传并编译</span>
           </el-button>
         </span>
       </template>
@@ -414,6 +459,20 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { nginxApi } from '../api/nginx'
+import {
+  Tools,
+  Promotion,
+  VideoPlay,
+  VideoPause,
+  Lightning,
+  Delete,
+  Download,
+  UploadFilled,
+  RefreshRight,
+  CloseBold,
+  Link,
+  FolderOpened
+} from '@element-plus/icons-vue'
 
 const versions = ref([])
 const pinnedVersion = computed(() => versions.value.find((item) => item.directory === 'last'))
@@ -1098,6 +1157,20 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.action-tooltip {
+  display: inline-flex;
+}
+
+.action-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.action-icon-btn .el-icon {
+  font-size: 16px;
 }
 
 .directory-text {

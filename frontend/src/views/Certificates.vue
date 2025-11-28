@@ -5,8 +5,14 @@
         <div class="card-header">
           <span>证书管理</span>
           <div>
-            <el-button type="primary" @click="handleRequest">申请证书</el-button>
-            <el-button type="cyan" @click="handleUpload">上传证书</el-button>
+            <el-button type="primary" @click="handleRequest">
+              <el-icon><DocumentAdd /></el-icon>
+              <span class="btn-label">申请证书</span>
+            </el-button>
+            <el-button type="cyan" @click="handleUpload">
+              <el-icon><UploadFilled /></el-icon>
+              <span class="btn-label">上传证书</span>
+            </el-button>
           </div>
         </div>
       </template>
@@ -16,8 +22,14 @@
         <el-table-column prop="valid_to" label="过期时间" width="180" />
         <el-table-column label="操作" width="200">
           <template #default="scope">
-            <el-button size="small" type="warning" @click="handleRenew(scope.row)">续期</el-button>
-            <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
+            <el-button size="small" type="warning" @click="handleRenew(scope.row)">
+              <el-icon><RefreshRight /></el-icon>
+              <span class="btn-label">续期</span>
+            </el-button>
+            <el-button size="small" type="danger" @click="handleDelete(scope.row)">
+              <el-icon><Delete /></el-icon>
+              <span class="btn-label">删除</span>
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -43,7 +55,10 @@
             :on-remove="handleCertFileRemove"
             accept=".crt,.pem,.cer"
           >
-            <el-button type="primary">选择证书文件</el-button>
+            <el-button type="primary">
+              <el-icon><FolderOpened /></el-icon>
+              <span class="btn-label">选择证书文件</span>
+            </el-button>
             <template #tip>
               <div class="el-upload__tip">
                 支持 .crt、.pem、.cer 格式
@@ -63,7 +78,10 @@
             :on-remove="handleKeyFileRemove"
             accept=".key,.pem"
           >
-            <el-button type="primary">选择私钥文件</el-button>
+            <el-button type="primary">
+              <el-icon><FolderOpened /></el-icon>
+              <span class="btn-label">选择私钥文件</span>
+            </el-button>
             <template #tip>
               <div class="el-upload__tip">
                 支持 .key、.pem 格式
@@ -80,14 +98,18 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="uploadDialogVisible = false">取消</el-button>
+          <el-button type="info" @click="uploadDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
           <el-button
             type="primary"
             :loading="uploading"
             :disabled="!uploadForm.domain || !uploadForm.certFile || !uploadForm.keyFile"
             @click="handleUploadSubmit"
           >
-            上传
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">上传</span>
           </el-button>
         </span>
       </template>
@@ -99,6 +121,7 @@
 import { ref, onMounted } from 'vue'
 import { certificatesApi } from '../api/certificates'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check } from '@element-plus/icons-vue'
 
 const certificateList = ref([])
 const uploadDialogVisible = ref(false)

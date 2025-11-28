@@ -2,12 +2,14 @@
 Nginx 操作工具
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 try:
     import psutil
+
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -41,7 +43,7 @@ def _resolve_nginx_executable() -> Optional[Path]:
     executable = Path(config.nginx.executable)
     if executable.exists():
         return executable
-    
+
     return None
 
 
@@ -85,7 +87,7 @@ def get_config_path() -> Path:
 
     Returns:
         配置文件路径
-        
+
     Raises:
         FileNotFoundError: 如果没有活动版本的 Nginx
     """
@@ -99,17 +101,19 @@ def get_config_path() -> Path:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         _create_default_config_for_version(active["install_path"])
         return config_path
-    
+
     # 如果没有活动版本，尝试查找任何已编译的版本
     config = get_config()
     versions_root = Path(config.nginx.versions_root)
     if not versions_root.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         versions_root = (backend_dir / versions_root).resolve()
-    
+
     if versions_root.exists():
         # 查找最新的已编译版本
-        for version_dir in sorted(versions_root.iterdir(), key=lambda x: x.name, reverse=True):
+        for version_dir in sorted(
+            versions_root.iterdir(), key=lambda x: x.name, reverse=True
+        ):
             if version_dir.is_dir():
                 config_path = version_dir / "conf" / "nginx.conf"
                 if config_path.exists():
@@ -119,53 +123,100 @@ def get_config_path() -> Path:
                 if executable.exists():
                     _create_default_config_for_version(version_dir)
                     return config_path
-    
+
     # 如果都没有，抛出异常
     raise FileNotFoundError(
         "未找到可用的 Nginx 版本配置。请先下载并编译一个 Nginx 版本，或启动一个 Nginx 实例。"
     )
 
 
+_WORKING_CONFIG_SUFFIX = ".webui.pending"
+
+
+def _working_config_path_for(config_path: Path) -> Path:
+    return config_path.parent / f"{config_path.name}{_WORKING_CONFIG_SUFFIX}"
+
+
+def get_working_config_path() -> Path:
+    actual = get_config_path()
+    working = _working_config_path_for(actual)
+    working.parent.mkdir(parents=True, exist_ok=True)
+    return working
+
+
+def ensure_working_config(sync_from_actual: bool = False) -> Path:
+    actual = get_config_path()
+    working = get_working_config_path()
+    if sync_from_actual or not working.exists():
+        shutil.copy2(actual, working)
+    return working
+
+
+def sync_working_config_from_actual() -> Path:
+    return ensure_working_config(sync_from_actual=True)
+
+
+def has_pending_config_changes() -> bool:
+    actual = get_config_path()
+    working = ensure_working_config()
+
+    if not actual.exists():
+        return True
+
+    try:
+        return working.read_text(encoding="utf-8") != actual.read_text(encoding="utf-8")
+    except Exception:
+        return True
+
+
+def apply_working_config() -> Path:
+    working = ensure_working_config()
+    actual = get_config_path()
+    actual.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(working, actual)
+    return actual
+
+
 def _create_default_config_for_version(install_path: Path) -> None:
     """
     为指定版本的 Nginx 创建默认配置文件
-    
+
     Args:
         install_path: Nginx 版本的安装目录路径
     """
     config = get_config()
     config_path = install_path / "conf" / "nginx.conf"
-    
+
     # 如果配置文件已存在，不创建
     if config_path.exists():
         return
-    
+
     # 确保目录存在
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # 使用版本目录下的 conf.d，如果不存在则创建
     conf_d_dir = install_path / "conf" / "conf.d"
     conf_d_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 解析日志目录路径
     log_dir = Path(config.nginx.log_dir)
     if not log_dir.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         log_dir = (backend_dir / log_dir).resolve()
-    
+
     access_log = Path(config.nginx.access_log)
     if not access_log.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         access_log = (backend_dir / access_log).resolve()
-    
+
     error_log = Path(config.nginx.error_log)
     if not error_log.is_absolute():
         backend_dir = Path(__file__).resolve().parents[2]
         error_log = (backend_dir / error_log).resolve()
-    
+
     # 确保日志目录存在
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 创建默认的 nginx.conf，使用版本目录下的 conf.d
     default_nginx_conf = f"""#user  nobody;
 worker_processes  auto;
@@ -196,17 +247,17 @@ http {{
     include conf.d/*.conf;
 }}
 """
-    
+
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(default_nginx_conf)
-    
+
     # 创建默认的 conf.d/default.conf
     default_conf_path = conf_d_dir / "default.conf"
     if not default_conf_path.exists():
         # 使用版本目录下的 html 目录作为静态文件目录
         html_dir = install_path / "html"
         html_dir.mkdir(parents=True, exist_ok=True)
-        
+
         default_server_conf = f"""server {{
     listen 80;
     server_name _;
@@ -247,7 +298,7 @@ http {{
 """
         with open(default_conf_path, "w", encoding="utf-8") as f:
             f.write(default_server_conf)
-        
+
         # 如果 html 目录下没有 index.html，创建一个简单的
         index_html_path = html_dir / "index.html"
         if not index_html_path.exists():
@@ -289,10 +340,10 @@ def _create_default_config() -> None:
 def get_conf_d_dir() -> Path:
     """
     获取当前 Nginx 版本的 conf.d 配置目录路径
-    
+
     Returns:
         conf.d 目录路径
-        
+
     Raises:
         FileNotFoundError: 如果没有活动版本的 Nginx
     """
@@ -301,7 +352,7 @@ def get_conf_d_dir() -> Path:
         conf_d_dir = active["install_path"] / "conf" / "conf.d"
         conf_d_dir.mkdir(parents=True, exist_ok=True)
         return conf_d_dir
-    
+
     # 尝试从配置文件路径推断
     config_path = get_config_path()
     # config_path 应该是 versions/<version>/conf/nginx.conf
@@ -310,47 +361,43 @@ def get_conf_d_dir() -> Path:
         conf_d_dir = config_path.parent / "conf.d"
         conf_d_dir.mkdir(parents=True, exist_ok=True)
         return conf_d_dir
-    
+
     raise FileNotFoundError(
         "未找到可用的 Nginx 版本配置目录。请先下载并编译一个 Nginx 版本。"
     )
 
 
-def get_config_content() -> str:
+def get_config_content(use_working_copy: bool = True) -> str:
     """读取 Nginx 配置文件内容，如果不存在则创建默认配置"""
-    config_path = get_config_path()
-
-    if not config_path.exists():
-        # 自动创建默认配置
-        try:
-            active = get_active_version()
-            if active is not None:
-                _create_default_config_for_version(active["install_path"])
-            else:
-                _create_default_config()
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                "未找到可用的 Nginx 版本配置。请先下载并编译一个 Nginx 版本。"
-            )
+    if use_working_copy:
+        config_path = ensure_working_config()
+    else:
+        config_path = get_config_path()
+        if not config_path.exists():
+            # 自动创建默认配置
+            try:
+                active = get_active_version()
+                if active is not None:
+                    _create_default_config_for_version(active["install_path"])
+                else:
+                    _create_default_config()
+            except FileNotFoundError:
+                raise FileNotFoundError(
+                    "未找到可用的 Nginx 版本配置。请先下载并编译一个 Nginx 版本。"
+                )
 
     with open(config_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def save_config_content(content: str) -> bool:
-    """保存 Nginx 配置文件"""
-    config_path = get_config_path()
-
-    # 确保目录存在
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
+    """保存 Nginx 配置文件（写入工作副本）"""
+    working_path = ensure_working_config()
+    working_path.write_text(content, encoding="utf-8")
     return True
 
 
-def test_config() -> Dict[str, Any]:
+def test_config(use_working_copy: bool = True) -> Dict[str, Any]:
     """
     测试 Nginx 配置有效性，如果配置文件不存在则自动创建默认配置
 
@@ -371,24 +418,23 @@ def test_config() -> Dict[str, Any]:
         }
 
     try:
-        config_path = get_config_path()
-        
-        # 如果配置文件不存在，自动创建默认配置
-        if not config_path.exists():
-            _create_default_config()
-        
+        if use_working_copy:
+            config_path = ensure_working_config()
+        else:
+            config_path = get_config_path()
+            if not config_path.exists():
+                _create_default_config()
+
         active = get_active_version()
-        
+
         # 构建测试命令
         cmd = [str(nginx_executable), "-t", "-c", str(config_path)]
-        
+
         # 如果存在活动版本，需要指定 prefix 参数
         if active is not None:
             cmd.extend(["-p", str(active["install_path"])])
-        
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=10
-        )
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 
         success = result.returncode == 0
 
@@ -426,14 +472,14 @@ def reload_nginx() -> Dict[str, Any]:
     try:
         config_path = get_config_path()
         active = get_active_version()
-        
+
         # 构建重载命令
         cmd = [str(nginx_executable), "-s", "reload", "-c", str(config_path)]
-        
+
         # 如果存在活动版本，需要指定 prefix 参数
         if active is not None:
             cmd.extend(["-p", str(active["install_path"])])
-        
+
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -457,10 +503,10 @@ def reload_nginx() -> Dict[str, Any]:
 def _simple_format_config(content: str) -> str:
     """
     简单的配置格式化（回退方案）
-    
+
     Args:
         content: 配置内容
-        
+
     Returns:
         格式化后的配置内容
     """
@@ -521,7 +567,7 @@ def format_config(content: str) -> Dict[str, Any]:
 
     temp_file = None
     formatted_file = None
-    
+
     try:
         # 创建临时输入文件
         with tempfile.NamedTemporaryFile(
@@ -543,7 +589,17 @@ def format_config(content: str) -> Dict[str, Any]:
             python_cmd = shutil.which("python3") or shutil.which("python")
             if python_cmd:
                 crossplane_cmd = python_cmd
-                cmd = [crossplane_cmd, "-m", "crossplane", "format", "-i", "4", "-o", formatted_file, temp_file]
+                cmd = [
+                    crossplane_cmd,
+                    "-m",
+                    "crossplane",
+                    "format",
+                    "-i",
+                    "4",
+                    "-o",
+                    formatted_file,
+                    temp_file,
+                ]
             else:
                 raise Exception("未找到 crossplane 命令或 Python 解释器")
         else:
@@ -568,7 +624,7 @@ def format_config(content: str) -> Dict[str, Any]:
                 # 如果 stdout 也为空，说明格式化可能有问题
                 if not formatted_content or not formatted_content.strip():
                     formatted_content = content
-            
+
             # 确保格式化后的内容不为空
             if not formatted_content or not formatted_content.strip():
                 # 如果格式化后为空，使用简单格式化作为回退
@@ -648,64 +704,64 @@ def format_config(content: str) -> Dict[str, Any]:
 def _resolve_include_paths(content: str, conf_dir: Path) -> str:
     """
     将配置内容中的相对路径 include 指令转换为绝对路径
-    
+
     Args:
         content: 配置内容
         conf_dir: 配置目录（通常是 versions/<version>/conf）
-        
+
     Returns:
         转换后的配置内容
     """
     import re
     import os
-    
-    lines = content.split('\n')
+
+    lines = content.split("\n")
     resolved_lines = []
-    
+
     # include 指令的正则表达式
     # 匹配: include path; 或 include path/*.conf;
-    include_pattern = re.compile(r'^(\s*)include\s+([^;]+);\s*(.*)$')
-    
+    include_pattern = re.compile(r"^(\s*)include\s+([^;]+);\s*(.*)$")
+
     for line in lines:
         match = include_pattern.match(line)
         if match:
             indent = match.group(1)
             include_path = match.group(2).strip().strip('"').strip("'")
             comment = match.group(3)
-            
+
             # 如果是绝对路径，不需要转换
             if os.path.isabs(include_path):
                 resolved_lines.append(line)
                 continue
-            
+
             # 将相对路径转换为绝对路径
             # 如果路径以 conf.d/ 开头，直接拼接
-            if include_path.startswith('conf.d/'):
+            if include_path.startswith("conf.d/"):
                 abs_path = conf_dir / include_path
-            elif include_path.startswith('../'):
+            elif include_path.startswith("../"):
                 # 处理 ../ 的相对路径
                 abs_path = conf_dir.parent / include_path[3:]
-            elif include_path.startswith('./'):
+            elif include_path.startswith("./"):
                 # 处理 ./ 的相对路径
                 abs_path = conf_dir / include_path[2:]
             else:
                 # 其他情况，假设相对于 conf 目录
                 abs_path = conf_dir / include_path
-            
+
             # 转换为绝对路径字符串，并保持引号风格
             abs_path_str = str(abs_path)
             # 如果原路径有引号，保持引号风格
             if '"' in match.group(2) or "'" in match.group(2):
                 abs_path_str = f'"{abs_path_str}"'
-            
+
             resolved_line = f"{indent}include {abs_path_str};"
             if comment:
                 resolved_line += f" {comment}"
             resolved_lines.append(resolved_line)
         else:
             resolved_lines.append(line)
-    
-    return '\n'.join(resolved_lines)
+
+    return "\n".join(resolved_lines)
 
 
 def validate_config(content: str) -> Dict[str, Any]:
@@ -742,7 +798,7 @@ def validate_config(content: str) -> Dict[str, Any]:
     active = get_active_version()
     conf_dir = None
     install_path = None
-    
+
     if active is not None:
         install_path = active["install_path"]
         conf_dir = install_path / "conf"
@@ -762,7 +818,7 @@ def validate_config(content: str) -> Dict[str, Any]:
                 if not versions_root.is_absolute():
                     backend_dir = Path(__file__).resolve().parents[2]
                     versions_root = (backend_dir / versions_root).resolve()
-                
+
                 if versions_root.exists():
                     # 查找所有版本目录，使用第一个找到的
                     for version_dir in sorted(versions_root.iterdir(), reverse=True):
@@ -774,7 +830,7 @@ def validate_config(content: str) -> Dict[str, Any]:
                                 break
         except Exception:
             pass
-    
+
     # 如果无法确定配置目录，使用默认处理
     if conf_dir is None or not conf_dir.exists():
         return {
@@ -784,7 +840,7 @@ def validate_config(content: str) -> Dict[str, Any]:
             "errors": ["无法确定 Nginx 配置目录"],
             "warnings": [],
         }
-    
+
     # 将配置内容中的相对路径转换为绝对路径
     resolved_content = _resolve_include_paths(content, conf_dir)
 
@@ -799,7 +855,7 @@ def validate_config(content: str) -> Dict[str, Any]:
 
         # 构建测试命令
         cmd = [str(nginx_executable), "-t", "-c", temp_file]
-        
+
         # 必须指定 prefix 参数，这样 nginx 才能正确找到 mime.types 等文件
         if install_path is not None:
             # 使用安装路径作为 prefix
@@ -882,12 +938,12 @@ def get_nginx_status() -> Dict[str, Any]:
 
     if nginx_executable is None or not nginx_executable.exists():
         info: Dict[str, Any] = {
-            "running": False, 
-            "pid": None, 
+            "running": False,
+            "pid": None,
             "version": None,
             "uptime": None,
             "available": False,
-            "message": "Nginx 未安装或不可用"
+            "message": "Nginx 未安装或不可用",
         }
         if active is not None:
             info["active_version"] = active["version"]
@@ -899,7 +955,7 @@ def get_nginx_status() -> Dict[str, Any]:
         pid = None
         running = False
         uptime_str = None
-        
+
         # 尝试从 pid 文件读取主进程 PID
         if active is not None:
             pid_file = active["install_path"] / "logs" / "nginx.pid"
@@ -913,13 +969,13 @@ def get_nginx_status() -> Dict[str, Any]:
                 pid_file = install_path / "logs" / "nginx.pid"
             except:
                 pid_file = None
-        
+
         # 如果找到 pid 文件，读取 PID
         if pid_file and pid_file.exists():
             try:
-                with open(pid_file, 'r') as f:
+                with open(pid_file, "r") as f:
                     pid = int(f.read().strip())
-                
+
                 # 使用 psutil 检查进程是否在运行并获取运行时间
                 if PSUTIL_AVAILABLE:
                     try:
@@ -930,12 +986,12 @@ def get_nginx_status() -> Dict[str, Any]:
                             create_time = datetime.fromtimestamp(process.create_time())
                             now = datetime.now()
                             uptime_delta = now - create_time
-                            
+
                             # 格式化运行时间
                             days = uptime_delta.days
                             hours, remainder = divmod(uptime_delta.seconds, 3600)
                             minutes, seconds = divmod(remainder, 60)
-                            
+
                             if days > 0:
                                 uptime_str = f"{days}天{hours}小时{minutes}分钟"
                             elif hours > 0:
@@ -951,6 +1007,7 @@ def get_nginx_status() -> Dict[str, Any]:
                     # 如果没有 psutil，使用 os.kill 简单检查进程是否存在
                     try:
                         import os
+
                         os.kill(pid, 0)  # 发送信号 0 检查进程是否存在
                         running = True
                         uptime_str = "无法获取（需要 psutil）"
@@ -959,30 +1016,40 @@ def get_nginx_status() -> Dict[str, Any]:
                         pid = None
             except (ValueError, IOError):
                 pass
-        
+
         # 如果没有从 pid 文件获取到，尝试查找 nginx 主进程
         if not running and nginx_executable and PSUTIL_AVAILABLE:
             try:
                 # 查找与可执行文件匹配的主进程
                 executable_name = nginx_executable.name
-                for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                for proc in psutil.process_iter(
+                    ["pid", "name", "cmdline", "create_time"]
+                ):
                     try:
-                        if proc.info['name'] == executable_name or (proc.info['cmdline'] and executable_name in ' '.join(proc.info['cmdline'] or [])):
+                        if proc.info["name"] == executable_name or (
+                            proc.info["cmdline"]
+                            and executable_name in " ".join(proc.info["cmdline"] or [])
+                        ):
                             # 检查是否是主进程（通常主进程的 cmdline 包含 master process 或者只有配置文件参数）
-                            cmdline = proc.info['cmdline'] or []
-                            if 'master process' in ' '.join(cmdline).lower() or len([c for c in cmdline if c.endswith('.conf')]) > 0:
-                                pid = proc.info['pid']
+                            cmdline = proc.info["cmdline"] or []
+                            if (
+                                "master process" in " ".join(cmdline).lower()
+                                or len([c for c in cmdline if c.endswith(".conf")]) > 0
+                            ):
+                                pid = proc.info["pid"]
                                 running = True
-                                
+
                                 # 获取运行时间
-                                create_time = datetime.fromtimestamp(proc.info['create_time'])
+                                create_time = datetime.fromtimestamp(
+                                    proc.info["create_time"]
+                                )
                                 now = datetime.now()
                                 uptime_delta = now - create_time
-                                
+
                                 days = uptime_delta.days
                                 hours, remainder = divmod(uptime_delta.seconds, 3600)
                                 minutes, seconds = divmod(remainder, 60)
-                                
+
                                 if days > 0:
                                     uptime_str = f"{days}天{hours}小时{minutes}分钟"
                                 elif hours > 0:
@@ -1000,10 +1067,10 @@ def get_nginx_status() -> Dict[str, Any]:
             # 如果没有 psutil，尝试使用 pgrep 查找进程
             try:
                 result = subprocess.run(
-                    ["pgrep", "-f", str(nginx_executable)], 
-                    capture_output=True, 
-                    text=True, 
-                    timeout=5
+                    ["pgrep", "-f", str(nginx_executable)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     pids = result.stdout.strip().split("\n")
@@ -1025,24 +1092,27 @@ def get_nginx_status() -> Dict[str, Any]:
                 version_detail = version_result.stderr.strip()
                 # 提取版本号（例如：nginx version: nginx/1.28.0）
                 import re
-                match = re.search(r'nginx/([\d.]+)', version_detail)
+
+                match = re.search(r"nginx/([\d.]+)", version_detail)
                 if match:
                     version = match.group(1)
         except Exception:
             pass
 
         info: Dict[str, Any] = {
-            "running": running, 
-            "pid": pid, 
+            "running": running,
+            "pid": pid,
             "version": version,
             "version_detail": version_detail,
             "uptime": uptime_str,
-            "available": True
+            "available": True,
         }
         # 如果是通过多版本管理启动的 Nginx，补充当前活动版本号及目录名称
         if active is not None:
             info["active_version"] = active["version"]
-            info["directory"] = active["directory"]  # 使用目录简称（如：1.28.0 或 last）
+            info["directory"] = active[
+                "directory"
+            ]  # 使用目录简称（如：1.28.0 或 last）
             info["binary"] = str(active["executable"])
             # 如果没有版本信息，使用活动版本号
             if not version:
@@ -1051,10 +1121,10 @@ def get_nginx_status() -> Dict[str, Any]:
         return info
     except Exception as e:
         return {
-            "running": False, 
-            "pid": None, 
+            "running": False,
+            "pid": None,
             "version": None,
             "uptime": None,
             "error": str(e),
-            "available": True
+            "available": True,
         }

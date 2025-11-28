@@ -104,22 +104,7 @@ const handleLogin = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--gradient-dark);
-  position: relative;
-  overflow: hidden;
-}
-
-.login-container::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: 
-    radial-gradient(circle at 20% 50%, rgba(0, 150, 57, 0.1) 0%, transparent 50%),
-    radial-gradient(circle at 80% 80%, rgba(0, 168, 107, 0.1) 0%, transparent 50%);
-  pointer-events: none;
+  background: var(--bg-primary);
 }
 
 .login-box {
@@ -127,10 +112,8 @@ const handleLogin = async () => {
   padding: 40px;
   background: var(--bg-card);
   border-radius: 12px;
-  box-shadow: var(--shadow-lg), var(--shadow-glow);
+  box-shadow: var(--shadow-lg);
   border: 1px solid var(--border-color);
-  position: relative;
-  z-index: 1;
 }
 
 .login-logo {
@@ -154,7 +137,7 @@ const handleLogin = async () => {
 }
 
 .login-button:hover {
-  box-shadow: 0 0 20px var(--nginx-green-glow);
+  box-shadow: none;
 }
 </style>
 

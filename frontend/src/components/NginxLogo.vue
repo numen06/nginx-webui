@@ -60,15 +60,6 @@ defineProps({
 .logo-svg {
   width: 100%;
   height: 100%;
-  filter: drop-shadow(0 0 8px var(--nginx-green-glow));
-}
-
-.logo-letter {
-  animation: logoGlow 2s ease-in-out infinite alternate;
-}
-
-.logo-text {
-  filter: drop-shadow(0 0 4px var(--nginx-green-glow));
 }
 
 .logo-small .logo-svg {
@@ -81,28 +72,5 @@ defineProps({
   height: 65px;
 }
 
-.logo-dot {
-  animation: logoPulse 2s ease-in-out infinite;
-}
-
-@keyframes logoPulse {
-  0%, 100% {
-    opacity: 0.6;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.2);
-  }
-}
-
-@keyframes logoGlow {
-  from {
-    filter: drop-shadow(0 0 4px var(--nginx-green-glow));
-  }
-  to {
-    filter: drop-shadow(0 0 12px var(--nginx-green-glow));
-  }
-}
 </style>
 

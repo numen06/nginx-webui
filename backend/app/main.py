@@ -22,6 +22,7 @@ from app.routers import (
     certificates,
     nginx_manager,
     users,
+    git,
 )
 from app.routers import statistics, system
 
@@ -51,6 +52,7 @@ app.include_router(audit.router)
 app.include_router(certificates.router)
 app.include_router(nginx_manager.router)
 app.include_router(users.router)
+app.include_router(git.router)
 app.include_router(statistics.router)
 app.include_router(system.router)
 

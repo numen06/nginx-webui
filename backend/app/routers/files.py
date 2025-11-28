@@ -796,47 +796,6 @@ async def deploy_package(
         )
 
 
-@router.get("/{file_path:path}", summary="获取文件内容")
-async def get_file(
-    file_path: str,
-    version: Optional[str] = Query(None, description="Nginx 版本号"),
-    root_only: bool = Query(False, description="是否管理整个安装目录（而非仅 html）"),
-    current_user: User = Depends(get_current_user)
-):
-    """获取文件内容"""
-    try:
-        target_path = validate_path(file_path, version, root_only)
-        
-        if not target_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="文件不存在"
-            )
-        
-        if target_path.is_dir():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="指定路径是目录，不是文件"
-            )
-        
-        # 读取文件内容
-        with open(target_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        
-        return {
-            "success": True,
-            "content": content,
-            "path": file_path
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"读取文件失败: {str(e)}"
-        )
-
-
 @router.put("/{file_path:path}", summary="修改文件内容")
 async def update_file(
     file_path: str,
@@ -1094,5 +1053,45 @@ async def download_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"下载文件失败: {str(e)}"
+        )
+
+
+@router.get("/{file_path:path}", summary="获取文件内容")
+async def get_file(
+    file_path: str,
+    version: Optional[str] = Query(None, description="Nginx 版本号"),
+    root_only: bool = Query(False, description="是否管理整个安装目录（而非仅 html）"),
+    current_user: User = Depends(get_current_user)
+):
+    """获取文件内容"""
+    try:
+        target_path = validate_path(file_path, version, root_only)
+        
+        if not target_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="文件不存在"
+            )
+        
+        if target_path.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="指定路径是目录，不是文件"
+            )
+        
+        with open(target_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        return {
+            "success": True,
+            "content": content,
+            "path": file_path
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取文件失败: {str(e)}"
         )
 

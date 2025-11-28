@@ -126,7 +126,10 @@
             :before-remove="() => !uploading"
             accept=".zip,.tar.gz,.tgz,.tar"
           >
-            <el-button type="primary">选择文件</el-button>
+            <el-button type="primary">
+              <el-icon><FolderOpened /></el-icon>
+              <span class="btn-label">选择文件</span>
+            </el-button>
             <template #tip>
               <div class="el-upload__tip">
                 支持 .zip、.tar.gz、.tgz、.tar 格式
@@ -137,14 +140,18 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="uploadDialogVisible = false">取消</el-button>
+          <el-button type="info" @click="uploadDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
           <el-button
             type="primary"
             :loading="uploading"
             :disabled="!selectedFile"
             @click="handleUpload"
           >
-            上传
+            <el-icon><UploadFilled /></el-icon>
+            <span class="btn-label">上传</span>
           </el-button>
         </span>
       </template>
@@ -184,14 +191,18 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="deployDialogVisible = false">取消</el-button>
+          <el-button type="info" @click="deployDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
           <el-button
             type="success"
             :loading="deploying"
-            :disabled="!deployForm.version"
+            :disabled="!deployForm.directory"
             @click="handleDeployConfirm"
           >
-            确认部署
+            <el-icon><CircleCheck /></el-icon>
+            <span class="btn-label">确认部署</span>
           </el-button>
         </span>
       </template>
@@ -204,7 +215,7 @@ import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Upload, Document, Promotion, Delete } from '@element-plus/icons-vue'
+import { Refresh, Upload, Document, Promotion, Delete, FolderOpened, CloseBold, UploadFilled, CircleCheck } from '@element-plus/icons-vue'
 
 const versions = ref([])
 const selectedDirectory = ref(null)

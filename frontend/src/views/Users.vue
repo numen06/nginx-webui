@@ -5,8 +5,14 @@
         <div class="card-header">
           <span>用户管理</span>
           <div>
-            <el-button type="info" @click="handleChangePassword">修改我的密码</el-button>
-            <el-button type="primary" @click="handleCreate">新增用户</el-button>
+            <el-button type="info" @click="handleChangePassword">
+              <el-icon><Lock /></el-icon>
+              <span class="btn-label">修改我的密码</span>
+            </el-button>
+            <el-button type="primary" @click="handleCreate">
+              <el-icon><CirclePlus /></el-icon>
+              <span class="btn-label">新增用户</span>
+            </el-button>
           </div>
         </div>
       </template>
@@ -23,15 +29,22 @@
         <el-table-column prop="created_at" label="创建时间" width="180" />
         <el-table-column label="操作" width="300">
           <template #default="scope">
-            <el-button size="small" type="info" @click="handleEdit(scope.row)">编辑</el-button>
-            <el-button size="small" type="warning" @click="handleResetPassword(scope.row)">重置密码</el-button>
+            <el-button size="small" type="info" @click="handleEdit(scope.row)">
+              <el-icon><Edit /></el-icon>
+              <span class="btn-label">编辑</span>
+            </el-button>
+            <el-button size="small" type="warning" @click="handleResetPassword(scope.row)">
+              <el-icon><Key /></el-icon>
+              <span class="btn-label">重置密码</span>
+            </el-button>
             <el-button 
               size="small" 
               type="danger" 
               @click="handleDelete(scope.row)"
               :disabled="scope.row.id === currentUserId"
             >
-              删除
+              <el-icon><Delete /></el-icon>
+              <span class="btn-label">删除</span>
             </el-button>
           </template>
         </el-table-column>
@@ -58,8 +71,14 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="handleSubmit">确定</el-button>
+          <el-button type="info" @click="dialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
+          <el-button type="primary" @click="handleSubmit">
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">确定</span>
+          </el-button>
         </span>
       </template>
     </el-dialog>
@@ -81,8 +100,14 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="passwordDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="handlePasswordSubmit">确定</el-button>
+          <el-button type="info" @click="passwordDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
+          <el-button type="primary" @click="handlePasswordSubmit">
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">确定</span>
+          </el-button>
         </span>
       </template>
     </el-dialog>
@@ -107,8 +132,14 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="changePasswordDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="handleChangePasswordSubmit">确定</el-button>
+          <el-button type="info" @click="changePasswordDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
+          <el-button type="primary" @click="handleChangePasswordSubmit">
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">确定</span>
+          </el-button>
         </span>
       </template>
     </el-dialog>
@@ -120,6 +151,7 @@ import { ref, onMounted, computed } from 'vue'
 import { usersApi } from '../api/users'
 import { useAuthStore } from '../store/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Lock, CirclePlus, Edit, Key, Delete, CloseBold, Check } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const userList = ref([])

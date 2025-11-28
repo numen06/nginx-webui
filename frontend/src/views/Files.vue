@@ -25,11 +25,26 @@
               style="margin-right: 8px"
               @change="handleRootOnlyChange"
             />
-            <el-button size="small" type="info" @click="handleGoRoot">根目录</el-button>
-            <el-button size="small" type="info" @click="handleGoParent" :disabled="!currentPath">上一级</el-button>
-            <el-button size="small" type="primary" @click="handleUpload">上传文件</el-button>
-            <el-button size="small" type="cyan" @click="handleCreateDir">新建文件夹</el-button>
-            <el-button size="small" type="info" text @click="handleRefresh">刷新</el-button>
+            <el-button size="small" type="info" @click="handleGoRoot">
+              <el-icon><HomeFilled /></el-icon>
+              <span class="btn-label">根目录</span>
+            </el-button>
+            <el-button size="small" type="info" @click="handleGoParent" :disabled="!currentPath">
+              <el-icon><ArrowUpBold /></el-icon>
+              <span class="btn-label">上一级</span>
+            </el-button>
+            <el-button size="small" type="primary" @click="handleUpload">
+              <el-icon><UploadFilled /></el-icon>
+              <span class="btn-label">上传文件</span>
+            </el-button>
+            <el-button size="small" type="cyan" @click="handleCreateDir">
+              <el-icon><FolderAdd /></el-icon>
+              <span class="btn-label">新建文件夹</span>
+            </el-button>
+            <el-button size="small" type="info" text @click="handleRefresh">
+              <el-icon><RefreshRight /></el-icon>
+              <span class="btn-label">刷新</span>
+            </el-button>
           </div>
         </div>
       </template>
@@ -176,7 +191,10 @@
       <el-dialog 
         v-model="editDialogVisible" 
         title="编辑文件" 
-        width="80%"
+        width="75%"
+        top="4vh"
+        class="edit-dialog"
+        append-to-body
         :close-on-click-modal="false"
       >
         <div class="edit-file-path">路径：/{{ editForm.path }}</div>
@@ -187,8 +205,14 @@
         />
         <template #footer>
           <span class="dialog-footer">
-            <el-button @click="editDialogVisible = false">取 消</el-button>
-            <el-button type="primary" @click="submitEdit">保 存</el-button>
+            <el-button @click="editDialogVisible = false">
+              <el-icon><CloseBold /></el-icon>
+              <span class="btn-label">取 消</span>
+            </el-button>
+            <el-button type="primary" @click="submitEdit">
+              <el-icon><Check /></el-icon>
+              <span class="btn-label">保 存</span>
+            </el-button>
           </span>
         </template>
       </el-dialog>
@@ -201,7 +225,22 @@ import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Folder, Document, ArrowRightBold, Edit, Download, EditPen, Delete as DeleteIcon } from '@element-plus/icons-vue'
+import {
+  Folder,
+  Document,
+  ArrowRightBold,
+  Edit,
+  Download,
+  EditPen,
+  Delete as DeleteIcon,
+  HomeFilled,
+  ArrowUpBold,
+  UploadFilled,
+  FolderAdd,
+  RefreshRight,
+  CloseBold,
+  Check
+} from '@element-plus/icons-vue'
 import MonacoEditor from '../components/MonacoEditor.vue'
 
 const fileList = ref([])
@@ -641,6 +680,15 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 12px;
   width: 100%;
+}
+
+.edit-dialog {
+  max-height: 85vh;
+}
+
+.edit-dialog .el-dialog__body {
+  max-height: 60vh;
+  overflow: auto;
 }
 </style>
 

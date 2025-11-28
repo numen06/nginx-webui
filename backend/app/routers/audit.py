@@ -2,8 +2,9 @@
 操作日志查询路由
 """
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
@@ -12,6 +13,16 @@ from app.auth import get_current_user, User
 from app.models import OperationLog
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
+
+
+class CleanupLogsRequest(BaseModel):
+    """日志清理请求模型"""
+    retain_days: int = Field(
+        default=90,
+        ge=1,
+        le=3650,
+        description="需要保留的天数，默认 90 天"
+    )
 
 
 @router.get("/logs", summary="查询操作日志")
@@ -90,5 +101,31 @@ async def get_audit_logs(
             "total": total,
             "total_pages": total_pages
         }
+    }
+
+
+@router.post("/logs/cleanup", summary="清理操作日志", status_code=status.HTTP_200_OK)
+async def cleanup_audit_logs(
+    payload: CleanupLogsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """清理早于指定天数的操作日志"""
+    retain_days = payload.retain_days
+    cutoff_time = datetime.utcnow() - timedelta(days=retain_days)
+    
+    deleted_count = (
+        db.query(OperationLog)
+        .filter(OperationLog.timestamp < cutoff_time)
+        .delete(synchronize_session=False)
+    )
+    
+    db.commit()
+    
+    return {
+        "success": True,
+        "message": f"已清理 {deleted_count} 条日志，保留最近 {retain_days} 天记录",
+        "deleted": deleted_count,
+        "retain_days": retain_days
     }
 

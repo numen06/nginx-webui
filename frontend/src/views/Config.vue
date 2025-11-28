@@ -5,11 +5,26 @@
         <div class="card-header">
           <span>Nginx 配置</span>
           <div>
-            <el-button type="info" @click="handleFormat">格式化</el-button>
-            <el-button type="cyan" @click="handleValidate">校验配置</el-button>
-            <el-button type="purple" @click="handleTest">测试配置</el-button>
-            <el-button type="success" @click="handleSave">保存</el-button>
-            <el-button type="warning" @click="handleReload">重载配置</el-button>
+            <el-button type="info" @click="handleFormat">
+              <el-icon><MagicStick /></el-icon>
+              <span class="btn-label">格式化</span>
+            </el-button>
+            <el-button type="cyan" @click="handleValidate">
+              <el-icon><Finished /></el-icon>
+              <span class="btn-label">校验配置</span>
+            </el-button>
+            <el-button type="purple" @click="handleTest">
+              <el-icon><Cpu /></el-icon>
+              <span class="btn-label">测试配置</span>
+            </el-button>
+            <el-button type="success" @click="handleSave" :loading="saving">
+              <el-icon><DocumentChecked /></el-icon>
+              <span class="btn-label">保存</span>
+            </el-button>
+            <el-button type="warning" @click="handleReload">
+              <el-icon><Refresh /></el-icon>
+              <span class="btn-label">重载配置</span>
+            </el-button>
           </div>
         </div>
       </template>
@@ -36,6 +51,14 @@
           <el-descriptions-item v-if="configInfo.binary" label="可执行文件路径" :span="2">
             <el-text type="info" size="small">{{ configInfo.binary }}</el-text>
           </el-descriptions-item>
+          <el-descriptions-item label="临时配置状态">
+            <el-tag
+              :type="configInfo.pending_changes ? 'warning' : 'success'"
+              size="small"
+            >
+              {{ configInfo.pending_changes ? '存在未应用的修改' : '已与运行版本同步' }}
+            </el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="配置备份版本" :span="2">
             <div class="backup-row">
               <el-select
@@ -57,7 +80,8 @@
                 :loading="backupLoading"
                 link
               >
-                刷新
+                <el-icon><RefreshRight /></el-icon>
+                <span class="btn-label">刷新</span>
               </el-button>
               <el-button
                 type="primary"
@@ -65,7 +89,8 @@
                 @click="handleCreateBackup"
                 :loading="backupLoading"
               >
-                手动备份
+                <el-icon><DocumentAdd /></el-icon>
+                <span class="btn-label">手动备份</span>
               </el-button>
               <el-button
                 type="warning"
@@ -73,7 +98,8 @@
                 :disabled="!selectedBackupId"
                 @click="handleRollback"
               >
-                回滚到所选版本
+                <el-icon><RefreshLeft /></el-icon>
+                <span class="btn-label">回滚到所选版本</span>
               </el-button>
             </div>
           </el-descriptions-item>
@@ -85,15 +111,36 @@
         height="600px"
         @change="handleContentChange"
       />
+      <el-alert
+        class="working-copy-alert"
+        type="info"
+        show-icon
+        :closable="false"
+      >
+        <template #title>临时副本模式</template>
+        <p class="working-copy-text">
+          保存后仅更新工作副本，需先测试/校验，再点击“重载配置”才能覆盖线上 nginx.conf 并自动备份。
+        </p>
+      </el-alert>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { configApi } from '../api/config'
 import MonacoEditor from '../components/MonacoEditor.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  MagicStick,
+  Finished,
+  Cpu,
+  DocumentChecked,
+  Refresh,
+  RefreshRight,
+  DocumentAdd,
+  RefreshLeft
+} from '@element-plus/icons-vue'
 
 const configContent = ref('')
 const isModified = ref(false)
@@ -103,16 +150,23 @@ const configInfo = ref({
   config_path: null,
   active_version: null,
   install_path: null,
-  binary: null
+  binary: null,
+  pending_changes: false
 })
 
 const backupOptions = ref([])
 const selectedBackupId = ref(null)
 const backupLoading = ref(false)
+const saving = ref(false)
 
 onMounted(async () => {
   await loadConfig()
   await handleLoadBackups()
+  window.addEventListener('keydown', handleSaveShortcut)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleSaveShortcut)
 })
 
 const loadConfig = async () => {
@@ -125,7 +179,8 @@ const loadConfig = async () => {
       config_path: response.config_path || null,
       active_version: response.active_version || null,
       install_path: response.install_path || null,
-      binary: response.binary || null
+      binary: response.binary || null,
+      pending_changes: Boolean(response.pending_changes)
     }
     isModified.value = false
   } catch (error) {
@@ -224,14 +279,28 @@ const handleTest = async () => {
 }
 
 const handleSave = async () => {
+  if (saving.value) return
+
   try {
+    saving.value = true
     await configApi.updateConfig(configContent.value)
-    ElMessage.success('配置已保存')
+    ElMessage.success('配置已保存到临时副本')
     isModified.value = false
-    // 保存时会自动创建备份，这里刷新一下备份列表
+    configInfo.value.pending_changes = true
     await handleLoadBackups()
   } catch (error) {
     ElMessage.error('保存配置失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+const handleSaveShortcut = (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    if (!saving.value) {
+      handleSave()
+    }
   }
 }
 
@@ -243,7 +312,10 @@ const handleReload = async () => {
     
     const response = await configApi.reloadConfig()
     if (response.success) {
-      ElMessage.success('配置重载成功')
+      const backupInfo = response.backup_id ? `，已创建备份 #${response.backup_id}` : ''
+      ElMessage.success(`配置重载成功${backupInfo}`)
+      configInfo.value.pending_changes = false
+      await loadConfig()
     } else {
       ElMessage.error('配置重载失败: ' + response.message)
     }
@@ -335,6 +407,7 @@ const handleRollback = async () => {
     backupLoading.value = false
   }
 }
+
 </script>
 
 <style scoped>
@@ -371,6 +444,16 @@ const handleRollback = async () => {
 .text-muted {
   color: var(--text-muted);
   font-style: italic;
+}
+
+.working-copy-alert {
+  margin-top: 12px;
+}
+
+.working-copy-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
 }
 </style>
 

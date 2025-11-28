@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from app.models import Base, User, ConfigBackup, OperationLog, Certificate
+from app.models import Base, User, ConfigBackup, OperationLog, Certificate, GitRepository
 
 
 def _safe_mkdir(path: Path) -> None:

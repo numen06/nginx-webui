@@ -74,3 +74,25 @@ class Certificate(Base):
     # 关联关系
     creator = relationship("User", back_populates="certificates")
 
+
+class GitRepository(Base):
+    """Git 仓库配置"""
+    __tablename__ = "git_repositories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_name = Column(String(255), unique=True, nullable=False, index=True)
+    repo_url = Column(String(500), nullable=False)
+    username = Column(String(255), nullable=True)
+    password = Column(String(255), nullable=True)
+    branch = Column(String(255), nullable=False, default="main")
+    last_synced_at = Column(DateTime, nullable=True)
+    last_sync_status = Column(String(50), nullable=True)
+    last_sync_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+

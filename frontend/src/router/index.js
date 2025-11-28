@@ -27,6 +27,12 @@ const routes = [
         meta: { title: '配置管理' }
       },
       {
+        path: 'git-sync',
+        name: 'GitSync',
+        component: () => import('../views/GitSync.vue'),
+        meta: { title: 'Git 配置同步' }
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('../views/Logs.vue'),

@@ -84,8 +84,14 @@
                 </div>
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" @click="handleAccessSearch">搜索</el-button>
-                <el-button type="info" @click="handleAccessReset">重置</el-button>
+                <el-button type="primary" @click="handleAccessSearch">
+                  <el-icon><Search /></el-icon>
+                  <span class="btn-label">搜索</span>
+                </el-button>
+                <el-button type="info" @click="handleAccessReset">
+                  <el-icon><RefreshRight /></el-icon>
+                  <span class="btn-label">重置</span>
+                </el-button>
               </el-form-item>
             </el-form>
           </div>
@@ -187,8 +193,14 @@
                 </div>
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" @click="handleErrorSearch">搜索</el-button>
-                <el-button type="info" @click="handleErrorReset">重置</el-button>
+                <el-button type="primary" @click="handleErrorSearch">
+                  <el-icon><Search /></el-icon>
+                  <span class="btn-label">搜索</span>
+                </el-button>
+                <el-button type="info" @click="handleErrorReset">
+                  <el-icon><RefreshRight /></el-icon>
+                  <span class="btn-label">重置</span>
+                </el-button>
               </el-form-item>
             </el-form>
           </div>
@@ -215,7 +227,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { logsApi } from '../api/logs'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { Refresh, Search, RefreshRight } from '@element-plus/icons-vue'
 import LogViewer from '../components/LogViewer.vue'
 
 const activeTab = ref('access')

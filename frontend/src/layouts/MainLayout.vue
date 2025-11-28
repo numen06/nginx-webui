@@ -48,6 +48,10 @@
           <el-icon><User /></el-icon>
           <span>用户管理</span>
         </el-menu-item>
+        <el-menu-item index="/git-sync">
+          <el-icon><Share /></el-icon>
+          <span>Git 配置同步</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -57,7 +61,10 @@
         </div>
         <div class="header-right">
           <span class="username">{{ authStore.username }}</span>
-          <el-button type="danger" size="small" @click="handleLogout">退出</el-button>
+          <el-button type="danger" size="small" @click="handleLogout">
+            <el-icon><SwitchButton /></el-icon>
+            <span class="btn-label">退出</span>
+          </el-button>
         </div>
       </el-header>
       <el-main class="main-content">
@@ -73,6 +80,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { ElMessage } from 'element-plus'
 import NginxLogo from '../components/NginxLogo.vue'
+import { SwitchButton } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()

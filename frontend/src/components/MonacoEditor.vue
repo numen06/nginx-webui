@@ -74,7 +74,7 @@ defineExpose({
 })
 </script>
 
-<style scoped>
+<style>
 .monaco-editor-container {
   width: 100%;
   height: v-bind(height);
@@ -82,5 +82,6 @@ defineExpose({
   border-radius: 4px;
   background-color: var(--bg-tertiary);
 }
+
 </style>
 
