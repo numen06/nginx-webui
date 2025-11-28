@@ -1,0 +1,102 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "npm: dev (frontend)",
+      "type": "npm",
+      "script": "dev",
+      "path": "frontend",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "typescript",
+        "pattern": {
+          "regexp": "^([^\\s].*)\\((\\d+),(\\d+)\\):\\s+(error|warning|info)\\s+(TS\\d+)\\s*:\\s*(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": ".*Local:.*"
+        }
+      }
+    },
+    {
+      "label": "Python: 启动后端",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--reload",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^",
+          "file": 1,
+          "location": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": ".*Application startup complete.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "初始化数据库",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "-c",
+        "from app.database import init_db; init_db()"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "安装后端依赖",
+      "type": "shell",
+      "command": "pip3 install -r requirements.txt",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "安装前端依赖",
+      "type": "npm",
+      "script": "install",
+      "path": "frontend",
+      "problemMatcher": []
+    },
+    {
+      "label": "构建前端",
+      "type": "npm",
+      "script": "build",
+      "path": "frontend",
+      "problemMatcher": []
+    }
+  ]
+}
+

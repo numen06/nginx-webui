@@ -33,7 +33,6 @@ dist/
 build/
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -61,4 +60,3 @@ data/
 *.tar
 *.tar.gz
 
-/nginx
