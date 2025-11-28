@@ -36,10 +36,7 @@ WORKDIR /app
 
 # 复制后端代码
 COPY backend/ /app/backend/
-# 复制 Nginx 配置到 /app/nginx，并替换系统目录
-RUN mkdir -p /app/nginx
-COPY nginx/ /app/nginx/
-RUN rm -rf /etc/nginx && ln -s /app/nginx /etc/nginx
+
 
 # 安装 Python 依赖
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
