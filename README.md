@@ -32,13 +32,34 @@
 ```
 nginx-webui/
 ├── backend/          # FastAPI 后端
+│   └── app/          # 应用代码
 ├── frontend/         # Vue 前端
-├── nginx/            # Nginx 配置文件
+├── nginx/            # Nginx 默认配置文件（与 app 同级）
+│   ├── nginx.conf    # 主配置文件
+│   └── conf.d/       # 配置文件目录
+├── data/             # 动态数据目录（运行时生成）
+│   ├── logs/         # 日志文件
+│   ├── ssl/          # SSL 证书
+│   ├── backups/      # 配置备份
+│   └── nginx/        # Nginx 多版本管理数据
+│       ├── versions/ # 下载编译的 Nginx 版本
+│       ├── build/    # 编译临时目录
+│       └── build_logs/ # 编译日志
 ├── scripts/          # 构建和启动脚本
 ├── docker-compose.yml
 ├── Dockerfile
 └── README.md
 ```
+
+### 目录说明
+
+- **nginx/**：存放 Nginx 的默认配置文件（nginx.conf、conf.d 等），这些是程序的默认配置
+- **data/**：存放所有动态生成和下载的数据，包括：
+  - 日志文件（logs/）
+  - SSL 证书（ssl/）
+  - 配置备份（backups/）
+  - 下载编译的 Nginx 版本（nginx/versions/）
+  - 编译临时文件和日志（nginx/build/、nginx/build_logs/）
 
 ## 快速开始
 

@@ -1,16 +1,19 @@
 nginx:
+  # 默认配置文件放在 nginx 目录下（与 app 同级）
   config_path: ../nginx/nginx.conf
   executable: /usr/sbin/nginx
+  conf_dir: ../nginx/conf.d
+  certbot_path: /usr/bin/certbot
+  # 动态数据都放在 data 目录下
   static_dir: ../data/html
   log_dir: ../data/logs
-  conf_dir: ../nginx/conf.d
   access_log: ../data/logs/access.log
   error_log: ../data/logs/error.log
   ssl_dir: ../data/ssl
-  certbot_path: /usr/bin/certbot
-  versions_root: ../nginx/versions
-  build_root: ../nginx/build
-  build_logs_dir: ../nginx/build_logs
+  # Nginx 多版本管理相关目录（动态下载编译运行的数据）
+  versions_root: ../data/nginx/versions
+  build_root: ../data/nginx/build
+  build_logs_dir: ../data/nginx/build_logs
 
 app:
   host: 127.0.0.1
@@ -20,5 +23,6 @@ app:
 
 backup:
   max_backups: 10
-  backup_dir: ./data/backups
+  # 备份目录放在 data 下
+  backup_dir: ../data/backups
 
