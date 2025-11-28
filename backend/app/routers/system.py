@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth import get_current_user, User
+from app.utils.nginx import is_nginx_available, get_nginx_status
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -272,5 +273,24 @@ async def get_system_resources(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取系统资源信息失败: {str(e)}"
+        )
+
+
+@router.get("/nginx-status", summary="获取 Nginx 状态")
+async def get_nginx_status_info(
+    current_user: User = Depends(get_current_user)
+):
+    """获取 Nginx 可用性和运行状态"""
+    try:
+        status_info = get_nginx_status()
+        return {
+            "success": True,
+            "available": is_nginx_available(),
+            **status_info
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取 Nginx 状态失败: {str(e)}"
         )
 

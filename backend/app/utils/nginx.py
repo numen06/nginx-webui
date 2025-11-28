@@ -10,22 +10,65 @@ from app.config import get_config
 from app.utils.nginx_versions import get_active_version
 
 
-def _resolve_nginx_executable() -> Path:
+def _resolve_nginx_executable() -> Optional[Path]:
     """
     解析当前应当使用的 Nginx 可执行文件路径。
 
     优先级：
-    1. 如果通过源码包编译的多版本 Nginx 中存在“正在运行”的版本，
+    1. 如果通过源码包编译的多版本 Nginx 中存在"正在运行"的版本，
        则认为该版本为当前活动版本，使用其 sbin/nginx。
     2. 否则回退到配置文件中的 nginx.executable。
+
+    Returns:
+        Path: Nginx 可执行文件路径，如果不存在则返回 None
     """
     config = get_config()
 
     active = get_active_version()
     if active is not None:
-        return active["executable"]
+        executable = active["executable"]
+        if executable.exists():
+            return executable
+        return None
 
-    return Path(config.nginx.executable)
+    executable = Path(config.nginx.executable)
+    if executable.exists():
+        return executable
+    
+    return None
+
+
+def is_nginx_available() -> bool:
+    """
+    检查 Nginx 是否可用（可执行文件存在）
+
+    Returns:
+        bool: True 表示 Nginx 可用，False 表示不可用
+    """
+    executable = _resolve_nginx_executable()
+    return executable is not None and executable.exists()
+
+
+def get_nginx_executable_or_raise() -> Path:
+    """
+    获取 Nginx 可执行文件路径，如果不存在则抛出异常
+
+    Returns:
+        Path: Nginx 可执行文件路径
+
+    Raises:
+        FileNotFoundError: 当 Nginx 可执行文件不存在时
+    """
+    executable = _resolve_nginx_executable()
+    if executable is None or not executable.exists():
+        config = get_config()
+        raise FileNotFoundError(
+            f"Nginx 可执行文件不存在。请确保：\n"
+            f"1. 系统已安装 Nginx，或\n"
+            f"2. 已通过系统下载编译 Nginx 版本，或\n"
+            f"3. 在配置文件中正确设置了 nginx.executable 路径（当前配置: {config.nginx.executable}）"
+        )
+    return executable
 
 
 def get_config_path() -> Path:
@@ -196,12 +239,12 @@ def test_config() -> Dict[str, Any]:
             "output": str
         }
     """
-    nginx_executable = _resolve_nginx_executable()
-
-    if not nginx_executable.exists():
+    try:
+        nginx_executable = get_nginx_executable_or_raise()
+    except FileNotFoundError as e:
         return {
             "success": False,
-            "message": f"Nginx 可执行文件不存在: {nginx_executable}",
+            "message": str(e),
             "output": "",
         }
 
@@ -249,12 +292,12 @@ def reload_nginx() -> Dict[str, Any]:
             "output": str
         }
     """
-    nginx_executable = _resolve_nginx_executable()
-
-    if not nginx_executable.exists():
+    try:
+        nginx_executable = get_nginx_executable_or_raise()
+    except FileNotFoundError as e:
         return {
             "success": False,
-            "message": f"Nginx 可执行文件不存在: {nginx_executable}",
+            "message": str(e),
             "output": "",
         }
 
@@ -499,12 +542,12 @@ def validate_config(content: str) -> Dict[str, Any]:
     import tempfile
     import os
 
-    nginx_executable = _resolve_nginx_executable()
-
-    if not nginx_executable.exists():
+    try:
+        nginx_executable = get_nginx_executable_or_raise()
+    except FileNotFoundError as e:
         return {
             "success": False,
-            "message": f"Nginx 可执行文件不存在: {nginx_executable}",
+            "message": str(e),
             "output": "",
             "errors": [],
             "warnings": [],
@@ -629,8 +672,14 @@ def get_nginx_status() -> Dict[str, Any]:
     nginx_executable = _resolve_nginx_executable()
     active = get_active_version()
 
-    if not nginx_executable.exists():
-        info: Dict[str, Any] = {"running": False, "pid": None, "version": None}
+    if nginx_executable is None or not nginx_executable.exists():
+        info: Dict[str, Any] = {
+            "running": False, 
+            "pid": None, 
+            "version": None,
+            "available": False,
+            "message": "Nginx 未安装或不可用"
+        }
         if active is not None:
             info["active_version"] = active["version"]
             info["install_path"] = str(active["install_path"])
@@ -655,7 +704,12 @@ def get_nginx_status() -> Dict[str, Any]:
         )
         version = version_result.stderr.strip() if version_result.stderr else None
 
-        info: Dict[str, Any] = {"running": running, "pid": pid, "version": version}
+        info: Dict[str, Any] = {
+            "running": running, 
+            "pid": pid, 
+            "version": version,
+            "available": True
+        }
         # 如果是通过多版本管理启动的 Nginx，可以补充当前活动版本号及安装路径
         if active is not None:
             info["active_version"] = active["version"]

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db, DB_PATH
 from app.config import get_config
+from app.utils.nginx import is_nginx_available
 from app.routers import (
     auth,
     config,
@@ -56,12 +57,18 @@ app.include_router(system.router)
 async def startup_event():
     """应用启动时打印核心配置信息"""
     cfg = get_config()
+    nginx_available = is_nginx_available()
+    
     print("\n" + "=" * 60)
     print("Nginx WebUI 核心配置路径")
     print("=" * 60)
     print(f"NGINX 配置目录:     {cfg.nginx.conf_dir}")
     print(f"Nginx 配置文件:     {cfg.nginx.config_path}")
     print(f"Nginx 可执行文件:   {cfg.nginx.executable}")
+    print(f"Nginx 状态:         {'✓ 可用' if nginx_available else '✗ 未安装或不可用'}")
+    if not nginx_available:
+        print(f"                   提示: 程序可以正常运行，但需要 Nginx 才能使用相关功能")
+        print(f"                   安装 Nginx 后，可通过配置文件指定 nginx.executable 路径")
     print(f"静态文件目录:       {cfg.nginx.static_dir}")
     print(f"日志目录:           {cfg.nginx.log_dir}")
     print(f"SSL 证书目录:       {cfg.nginx.ssl_dir}")

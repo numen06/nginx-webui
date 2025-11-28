@@ -71,11 +71,11 @@ async def get_config(
         else:
             # 使用系统 Nginx
             nginx_executable = _resolve_nginx_executable()
-            nginx_version = "系统安装版本"
+            nginx_version = "系统安装版本" if nginx_executable and nginx_executable.exists() else "未安装"
         
         # 尝试获取详细的版本信息
         try:
-            if nginx_executable and Path(nginx_executable).exists():
+            if nginx_executable and nginx_executable.exists():
                 version_result = subprocess.run(
                     [str(nginx_executable), "-v"],
                     capture_output=True,
