@@ -256,23 +256,17 @@ def _resolve_access_log_path() -> str:
     """
     解析当前应当读取的访问日志路径。
 
-    如果检测到运行中的nginx版本，从该版本的nginx配置文件中解析访问日志路径。
-    如果配置文件中未找到或为off，尝试使用 logs/access.log。
+    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/access.log。
     否则使用配置文件中的路径。
     """
-    # 如果检测到运行中的nginx版本，从nginx配置文件中解析
+    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
     active = get_active_version()
     if active is not None:
-        nginx_conf_path = active["install_path"] / "conf" / "nginx.conf"
-        parsed_path = _parse_log_path_from_nginx_config(nginx_conf_path, "access_log")
-        if parsed_path:
-            return parsed_path
-        
-        # 如果配置文件中未找到或为off，尝试使用默认路径
+        # 优先使用nginx安装目录下的logs/access.log
         default_path = active["install_path"] / "logs" / "access.log"
         if default_path.exists():
             return str(default_path.resolve())
-        # 即使不存在也返回默认路径（让调用者处理错误）
+        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
         return str(default_path.resolve())
     
     # 如果没有运行中的nginx版本，使用配置文件中的路径
@@ -284,23 +278,17 @@ def _resolve_error_log_path() -> str:
     """
     解析当前应当读取的错误日志路径。
 
-    如果检测到运行中的nginx版本，从该版本的nginx配置文件中解析错误日志路径。
-    如果配置文件中未找到，尝试使用 logs/error.log。
+    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/error.log。
     否则使用配置文件中的路径。
     """
-    # 如果检测到运行中的nginx版本，从nginx配置文件中解析
+    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
     active = get_active_version()
     if active is not None:
-        nginx_conf_path = active["install_path"] / "conf" / "nginx.conf"
-        parsed_path = _parse_log_path_from_nginx_config(nginx_conf_path, "error_log")
-        if parsed_path:
-            return parsed_path
-        
-        # 如果配置文件中未找到，尝试使用默认路径
+        # 优先使用nginx安装目录下的logs/error.log
         default_path = active["install_path"] / "logs" / "error.log"
         if default_path.exists():
             return str(default_path.resolve())
-        # 即使不存在也返回默认路径（让调用者处理错误）
+        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
         return str(default_path.resolve())
     
     # 如果没有运行中的nginx版本，使用配置文件中的路径
