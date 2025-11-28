@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <!-- 外圈 -->
+  <circle cx="60" cy="60" r="50" fill="none" stroke="#08c461" stroke-width="3" opacity="0.3"/>
+  <!-- 外层菱形 -->
+  <path d="M 30 60 L 60 30 L 90 60 L 60 90 Z" fill="#08c461" opacity="0.8"/>
+  <!-- 内层菱形 -->
+  <path d="M 40 60 L 60 40 L 80 60 L 60 80 Z" fill="#08c461"/>
+  <!-- 中心圆点 -->
+  <circle cx="60" cy="60" r="8" fill="#18e27b"/>
+</svg>
+
