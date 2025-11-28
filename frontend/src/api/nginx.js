@@ -41,6 +41,11 @@ export const nginxApi = {
     return api.post(`/nginx/versions/${encodeURIComponent(version)}/compile`)
   },
 
+  // 将指定版本升级到运行版（last 目录）
+  upgradeToProduction(version) {
+    return api.post(`/nginx/versions/${encodeURIComponent(version)}/upgrade-to-production`)
+  },
+
   // 启动指定版本
   startVersion(version) {
     return api.post(`/nginx/versions/${encodeURIComponent(version)}/start`)

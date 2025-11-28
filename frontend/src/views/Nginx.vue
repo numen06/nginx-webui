@@ -94,6 +94,14 @@
               </el-button>
               <el-button
                 size="small"
+                type="primary"
+                :disabled="buildingVersions.includes(row.version) || !row.compiled"
+                @click="upgradeToProduction(row.version)"
+              >
+                升级到运行版
+              </el-button>
+              <el-button
+                size="small"
                 type="success"
                 :disabled="row.running || buildingVersions.includes(row.version) || !row.compiled"
                 @click="startVersion(row.version)"
@@ -760,6 +768,33 @@ const compileVersion = async (version) => {
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '编译失败')
+  } finally {
+    setBuilding(version, false)
+  }
+}
+
+const upgradeToProduction = async (version) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认将 Nginx 版本 ${version} 升级到运行目录（last）？升级将覆盖当前运行版本的核心文件，但会保留 html/conf/logs 中的自定义内容。升级后需手动重启 Nginx 生效。`,
+      '升级确认',
+      {
+        confirmButtonText: '升级',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+
+  setBuilding(version, true)
+  try {
+    await nginxApi.upgradeToProduction(version)
+    ElMessage.success(`已将 Nginx ${version} 升级到运行版（last）`)
+    await loadVersions()
+  } catch (error) {
+    ElMessage.error(error.detail || '升级运行版失败')
   } finally {
     setBuilding(version, false)
   }
