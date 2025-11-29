@@ -128,9 +128,10 @@ docker-compose up -d
 ```bash
 docker run -d \
   -p 80:80 \
-  -v $(pwd)/data:/app/backend/data \
+  -p 443:443 \
+  -v $(pwd)/nginx-webui/data:/app/data \
   --name nginx-webui \
-  nginx-webui:latest
+  registry.cn-shanghai.aliyuncs.com/numen/nginx-webui:latest
 ```
 
 ## 配置说明
