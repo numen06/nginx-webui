@@ -806,10 +806,32 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
 
         logs.append(f"临时安装路径: {tmp_install_path}")
 
-        # configure
+        # configure - 添加常用的模块配置
         configure_cmd = [
             "./configure",
             f"--prefix={tmp_install_path}",
+            # HTTP核心模块
+            "--with-http_ssl_module",  # SSL/TLS支持
+            "--with-http_realip_module",  # 真实IP模块
+            "--with-http_addition_module",  # 响应添加模块
+            "--with-http_sub_module",  # 响应替换模块
+            "--with-http_dav_module",  # WebDAV支持
+            "--with-http_flv_module",  # FLV流媒体支持
+            "--with-http_mp4_module",  # MP4流媒体支持
+            "--with-http_gunzip_module",  # Gunzip支持
+            "--with-http_gzip_static_module",  # Gzip静态支持
+            "--with-http_auth_request_module",  # 认证请求模块
+            "--with-http_random_index_module",  # 随机索引模块
+            "--with-http_secure_link_module",  # 安全链接模块
+            "--with-http_degradation_module",  # 降级模块
+            "--with-http_slice_module",  # 切片模块
+            "--with-http_stub_status_module",  # 状态模块
+            "--with-http_v2_module",  # HTTP/2支持
+            # Stream模块（TCP/UDP代理）
+            "--with-stream",
+            "--with-stream_ssl_module",  # Stream SSL支持
+            "--with-stream_realip_module",  # Stream真实IP模块
+            "--with-stream_ssl_preread_module",  # Stream SSL预读模块
         ]
         logs.append(f"执行配置命令: {' '.join(configure_cmd)}")
         result = subprocess.run(
