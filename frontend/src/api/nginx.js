@@ -98,6 +98,11 @@ export const nginxApi = {
   // 获取编译进度
   getCompileProgress(version) {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/compile-progress`)
+  },
+
+  // 获取指定版本的 nginx.conf 配置内容
+  getVersionConfig(version) {
+    return api.get(`/nginx/versions/${encodeURIComponent(version)}/config`)
   }
 }
 

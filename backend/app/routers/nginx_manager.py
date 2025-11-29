@@ -1418,6 +1418,53 @@ async def list_nginx_versions(
     return _list_all_versions()
 
 
+@router.get(
+    "/versions/{version}/config",
+    summary="获取指定版本的 nginx.conf 配置内容",
+)
+async def get_nginx_version_config(
+    version: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    读取指定 Nginx 版本目录下的核心配置文件内容：
+    - 路径约定为 <versions_root>/<version>/conf/nginx.conf
+    - 仅做只读展示，不做任何写入或格式化
+    """
+    install_path = _get_install_path(version)
+    if not install_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nginx 版本未安装: {version}",
+        )
+
+    nginx_conf_path = install_path / "conf" / "nginx.conf"
+    if not nginx_conf_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"配置文件不存在: {nginx_conf_path}",
+        )
+
+    try:
+        content = nginx_conf_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取配置文件失败: {e}",
+        )
+
+    # 对外返回展示路径时，保持与 list 版本接口中的 install_path 风格一致（相对 versions_root）
+    raw_root = _get_versions_root_raw()
+    display_config_path = str(raw_root / version / "conf" / "nginx.conf")
+
+    return {
+        "success": True,
+        "version": version,
+        "config_path": display_config_path,
+        "content": content,
+    }
+
+
 @router.post(
     "/versions/download/check-url",
     response_model=UrlCheckResult,

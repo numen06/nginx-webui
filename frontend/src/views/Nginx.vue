@@ -234,6 +234,16 @@
             </div>
 
             <div class="version-actions">
+              <el-tooltip class="action-tooltip" content="查看配置" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  class="action-icon-btn"
+                  @click="viewConfig(row.directory)"
+                >
+                  <el-icon><Document /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip class="action-tooltip" content="编译" placement="top">
                 <el-button
                   circle
@@ -491,6 +501,34 @@
       </template>
     </el-dialog>
 
+    <!-- 查看指定版本配置的弹窗 -->
+    <el-dialog
+      v-model="configDialogVisible"
+      :title="`配置文件 - ${currentConfigTitle}`"
+      width="800px"
+      destroy-on-close
+    >
+      <div class="config-dialog-meta" v-if="currentConfigPath">
+        <span class="meta-label">配置路径：</span>
+        <span class="meta-value">{{ currentConfigPath }}</span>
+      </div>
+      <el-input
+        v-model="currentConfigContent"
+        type="textarea"
+        :rows="20"
+        readonly
+        class="config-textarea"
+      />
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="primary" @click="configDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">关闭</span>
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -510,7 +548,8 @@ import {
   RefreshRight,
   CloseBold,
   Link,
-  FolderOpened
+  FolderOpened,
+  Document
 } from '@element-plus/icons-vue'
 
 const versions = ref([])
@@ -588,6 +627,12 @@ const selectedFile = ref(null)
 const uploadVersion = ref('')
 const uploading = ref(false)
 const uploadDialogVisible = ref(false)
+
+// 查看配置对话框相关状态
+const configDialogVisible = ref(false)
+const currentConfigContent = ref('')
+const currentConfigPath = ref('')
+const currentConfigVersion = ref('')
 
 const loadVersions = async () => {
   try {
@@ -1130,6 +1175,22 @@ const deleteVersion = async (directory) => {
   }
 }
 
+const viewConfig = async (directory) => {
+  try {
+    const res = await nginxApi.getVersionConfig(directory)
+    if (!res || res.success === false) {
+      ElMessage.error(res?.message || '获取配置失败')
+      return
+    }
+    currentConfigVersion.value = directory
+    currentConfigPath.value = res.config_path || ''
+    currentConfigContent.value = res.content || ''
+    configDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '获取配置失败')
+  }
+}
+
 // 监听下载对话框打开，自动加载最新版本
 watch(downloadDialogVisible, (visible) => {
   if (visible) {
@@ -1270,6 +1331,17 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 12px;
   width: 100%;
+}
+
+.config-dialog-meta {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.config-textarea {
+  font-family: 'Courier New', monospace;
 }
 </style>
 
