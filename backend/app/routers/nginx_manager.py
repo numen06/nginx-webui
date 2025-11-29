@@ -2279,6 +2279,186 @@ async def force_stop_nginx_version(
     }
 
 
+def _get_port_pids(port: int) -> List[int]:
+    """
+    获取占用指定端口的进程PID列表
+    根据不同系统自动选择最合适的命令
+
+    Args:
+        port: 端口号
+
+    Returns:
+        占用该端口的进程PID列表
+    """
+    system = platform.system().lower()
+    pids: List[int] = []
+    error_messages = []
+
+    try:
+        if system == "windows":
+            # Windows 使用 netstat 命令
+            try:
+                cmd = ["netstat", "-ano"]
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"netstat 调用错误: {result.stderr.strip() or result.stdout.strip()}"
+                    )
+
+                # 解析 netstat 输出，查找监听指定端口的进程
+                # 格式示例: TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       1234
+                lines = result.stdout.splitlines()
+                for line in lines:
+                    if f":{port}" in line and "LISTENING" in line.upper():
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            try:
+                                pid = int(parts[-1])
+                                if pid > 0:
+                                    pids.append(pid)
+                            except (ValueError, IndexError):
+                                continue
+            except FileNotFoundError:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Windows 系统未找到 netstat 命令",
+                )
+        else:
+            # Linux/macOS 系统，按优先级尝试不同命令
+
+            # 方法1: Linux 优先使用 ss 命令（CentOS/Ubuntu 等现代Linux系统都有）
+            if system == "linux":
+                try:
+                    # ss 命令格式: ss -tlnp | grep :<port>
+                    cmd = ["ss", "-tlnp"]
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+
+                    if result.returncode == 0:
+                        # 解析 ss 输出，查找监听指定端口的进程
+                        # 格式示例: LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=1234,fd=6))
+                        lines = result.stdout.splitlines()
+                        for line in lines:
+                            if f":{port}" in line and "LISTEN" in line:
+                                # 提取PID，格式如 users:(("nginx",pid=1234,fd=6))
+                                pid_matches = re.findall(r"pid=(\d+)", line)
+                                for pid_str in pid_matches:
+                                    try:
+                                        pid = int(pid_str)
+                                        if pid > 0:
+                                            pids.append(pid)
+                                    except ValueError:
+                                        continue
+                        if pids:
+                            return list(set(pids))  # 成功获取到PID，直接返回
+                    else:
+                        error_messages.append(
+                            f"ss 命令执行失败: {result.stderr.strip()}"
+                        )
+                except FileNotFoundError:
+                    error_messages.append("ss 命令不存在")
+                except Exception as e:
+                    error_messages.append(f"ss 命令执行异常: {str(e)}")
+
+            # 方法2: 尝试 lsof 命令（macOS和部分Linux系统有）
+            try:
+                cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+                if result.returncode in (0, 1):  # 0=找到进程, 1=没找到（正常）
+                    lines = [
+                        line.strip()
+                        for line in result.stdout.splitlines()
+                        if line.strip()
+                    ]
+                    for line in lines:
+                        try:
+                            pid = int(line)
+                            if pid > 0:
+                                pids.append(pid)
+                        except ValueError:
+                            continue
+                    if pids:
+                        return list(set(pids))  # 成功获取到PID，直接返回
+                else:
+                    error_messages.append(
+                        f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}"
+                    )
+            except FileNotFoundError:
+                error_messages.append("lsof 命令不存在")
+            except Exception as e:
+                error_messages.append(f"lsof 命令执行异常: {str(e)}")
+
+            # 方法3: 尝试 netstat 命令（作为最后备选）
+            try:
+                cmd = ["netstat", "-tlnp"]
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+                if result.returncode == 0:
+                    # 解析 netstat 输出（Linux格式）
+                    # 格式示例: tcp  0  0 0.0.0.0:80  0.0.0.0:*  LISTEN  1234/nginx
+                    lines = result.stdout.splitlines()
+                    for line in lines:
+                        if f":{port}" in line and "LISTEN" in line:
+                            parts = line.split()
+                            if len(parts) >= 7:
+                                # PID通常在最后，格式如 "1234/nginx"
+                                pid_part = parts[-1].split("/")[0]
+                                try:
+                                    pid = int(pid_part)
+                                    if pid > 0:
+                                        pids.append(pid)
+                                except (ValueError, IndexError):
+                                    continue
+                    if pids:
+                        return list(set(pids))  # 成功获取到PID，直接返回
+                else:
+                    error_messages.append(f"netstat 调用错误: {result.stderr.strip()}")
+            except FileNotFoundError:
+                error_messages.append("netstat 命令不存在")
+            except Exception as e:
+                error_messages.append(f"netstat 命令执行异常: {str(e)}")
+
+            # 所有方法都失败了
+            if not pids and error_messages:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"无法获取端口 {port} 的进程信息。尝试的命令都失败了：\n"
+                    + "\n".join(error_messages),
+                )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"执行端口查询失败 ({system}): {e}",
+        )
+
+    # 去重 PID 列表
+    return list(set(pids))
+
+
 @router.post(
     "/force_release_http_port",
     summary="强制释放 HTTP 端口（默认 80），终止占用该端口的进程",
@@ -2293,83 +2473,13 @@ async def force_release_http_port(
     强制释放指定 HTTP 端口（默认 80）。
 
     实现方式：
-    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
-    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
+    - Linux (CentOS/Ubuntu等): 优先使用 `ss -tlnp`，其次尝试 `lsof`，最后尝试 `netstat`
+    - macOS: 使用 `lsof -t -iTCP:<port> -sTCP:LISTEN`
+    - Windows: 使用 `netstat -ano`
     - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
     注意：该能力较强，仅应授予有权限的用户使用。
     """
-    system = platform.system().lower()
-    pids: List[int] = []
-
-    try:
-        if system == "windows":
-            # Windows 使用 netstat 命令
-            cmd = ["netstat", "-ano"]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            if result.returncode != 0:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"netstat 调用错误: {result.stderr.strip() or result.stdout.strip()}",
-                )
-
-            # 解析 netstat 输出，查找监听指定端口的进程
-            # 格式示例: TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       1234
-            # 或者: TCP    [::]:80                 [::]:0                 LISTENING       1234
-            lines = result.stdout.splitlines()
-            for line in lines:
-                # 检查是否包含端口号和 LISTENING 状态
-                if f":{port}" in line and "LISTENING" in line.upper():
-                    # 分割行，PID 通常在最后一列
-                    parts = line.split()
-                    if len(parts) >= 5:
-                        try:
-                            # 尝试从最后一列获取 PID
-                            pid = int(parts[-1])
-                            if pid > 0:  # 确保 PID 有效
-                                pids.append(pid)
-                        except (ValueError, IndexError):
-                            continue
-        else:
-            # Linux/macOS 使用 lsof 命令
-            cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            if result.returncode not in (0, 1):
-                # 1 表示没有匹配记录，也视为正常
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
-                )
-
-            lines = [
-                line.strip() for line in result.stdout.splitlines() if line.strip()
-            ]
-            for line in lines:
-                try:
-                    pids.append(int(line))
-                except ValueError:
-                    continue
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"执行端口查询失败 ({system}): {e}",
-        )
-
-    # 去重 PID 列表
-    pids = list(set(pids))
+    pids = _get_port_pids(port)
 
     if not pids:
         return {
