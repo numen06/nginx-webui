@@ -28,7 +28,7 @@ ENV APP_PORT=8000
 # 安装系统依赖（包含编译 Nginx 所需工具链）
 # 合并安装命令并清理缓存以减少镜像大小
 RUN dnf update -y && \
-    dnf install -y ca-certificates curl wget tar \
+    dnf install -y ca-certificates curl wget tar iproute iputils net-tools\
                    gcc gcc-c++ make \
                    pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
     dnf clean all && \
