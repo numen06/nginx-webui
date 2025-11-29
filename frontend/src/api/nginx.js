@@ -43,9 +43,93 @@ export const nginxApi = {
     })
   },
 
-  // 编译指定版本（基于已下载/上传的源码包）
-  compileVersion(version) {
-    return api.post(`/nginx/versions/${encodeURIComponent(version)}/compile`)
+  // 编译指定版本（基于已下载/上传的源码包，支持自定义参数和流式日志）
+  compileVersion(version, customConfigureArgs = null, onLog = null) {
+    return new Promise((resolve, reject) => {
+      const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+      const url = `${baseURL}/nginx/versions/${encodeURIComponent(version)}/compile`
+      const body = JSON.stringify({ custom_configure_args: customConfigureArgs })
+      const token = localStorage.getItem('token')
+      
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: body
+      }).then(response => {
+        if (!response.ok) {
+          return response.text().then(text => {
+            try {
+              const error = JSON.parse(text)
+              throw new Error(error.detail || error.message || `HTTP error! status: ${response.status}`)
+            } catch (e) {
+              throw new Error(text || `HTTP error! status: ${response.status}`)
+            }
+          })
+        }
+        
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let hasSuccess = false
+        let hasError = false
+        
+        function readStream() {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              if (!hasSuccess && !hasError) {
+                resolve({ success: true })
+              }
+              return
+            }
+            
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || '' // 保留最后一个不完整的行
+            
+            for (const line of lines) {
+              if (line.trim() === '') continue
+              
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6) // 移除 'data: ' 前缀
+                const decodedData = data.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\0/g, '')
+                
+                if (onLog) {
+                  onLog(decodedData)
+                }
+                
+                // 检查是否完成
+                if (decodedData.includes('[SUCCESS]')) {
+                  hasSuccess = true
+                  setTimeout(() => {
+                    resolve({ success: true })
+                  }, 100)
+                  reader.cancel()
+                  return
+                } else if (decodedData.includes('[ERROR]')) {
+                  hasError = true
+                  reject(new Error(decodedData))
+                  reader.cancel()
+                  return
+                }
+              }
+            }
+            
+            readStream()
+          }).catch(err => {
+            if (!hasError) {
+              reject(err)
+            }
+          })
+        }
+        
+        readStream()
+      }).catch(err => {
+        reject(err)
+      })
+    })
   },
 
   // 将指定版本升级到运行版（last 目录）

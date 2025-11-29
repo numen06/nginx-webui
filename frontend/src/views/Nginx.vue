@@ -83,7 +83,7 @@
                 size="small"
                 type="purple"
                 class="action-icon-btn"
-                :disabled="buildingVersions.includes(pinnedVersion.directory) || pinnedVersion.compiled || !pinnedVersion.has_source"
+                :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.has_source || pinnedVersion.running"
                 @click="compileVersion(pinnedVersion.directory)"
               >
                 <el-icon><Tools /></el-icon>
@@ -269,7 +269,7 @@
                   size="small"
                   type="purple"
                   class="action-icon-btn"
-                  :disabled="buildingVersions.includes(row.directory) || row.compiled || !row.has_source"
+                  :disabled="buildingVersions.includes(row.directory) || !row.has_source || row.running"
                   @click="compileVersion(row.directory)"
                 >
                   <el-icon><Tools /></el-icon>
@@ -548,11 +548,87 @@
       </template>
     </el-dialog>
 
+    <!-- 编译版本弹窗 -->
+    <el-dialog
+      v-model="compileDialogVisible"
+      :title="`编译 Nginx - ${getDisplayLabelByDirectory(currentCompileVersion)}`"
+      width="900px"
+      top="5vh"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!compiling"
+      :show-close="true"
+      destroy-on-close
+      class="compile-dialog"
+    >
+      <el-tabs v-model="compileActiveTab">
+        <el-tab-pane label="编译参数" name="config">
+          <el-form label-width="140px" style="margin-top: 20px">
+            <el-form-item label="默认参数">
+              <el-tag type="info" size="small" style="margin-right: 8px">--prefix (由系统自动设置)</el-tag>
+              <span style="font-size: 12px; color: var(--el-text-color-secondary)">
+                以下参数将自动添加
+              </span>
+            </el-form-item>
+            <el-form-item label="默认模块">
+              <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                <el-tag v-for="module in defaultModules" :key="module" size="small" type="info">
+                  {{ module }}
+                </el-tag>
+              </div>
+            </el-form-item>
+            <el-form-item label="自定义参数">
+              <el-input
+                v-model="customConfigureArgs"
+                type="textarea"
+                :rows="8"
+                placeholder="每行一个参数，例如：&#10;--with-http_image_filter_module&#10;--with-http_geoip_module&#10;&#10;注意：--prefix 参数由系统自动设置，不能覆盖。"
+              />
+              <div style="margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary)">
+                提示：可添加额外的模块或配置选项，每行一个参数
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="编译日志" name="logs">
+          <div class="compile-log-container">
+            <div ref="logContainerRef" class="compile-log-content">
+              <div
+                v-for="(log, index) in compileLogs"
+                :key="index"
+                :class="['log-line', log.startsWith('[ERROR]') ? 'error' : log.startsWith('[SUCCESS]') ? 'success' : '']"
+              >
+                {{ log }}
+              </div>
+              <div v-if="compileLogs.length === 0" class="log-placeholder">
+                等待开始编译...
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="info" @click="handleCompileCancel">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">{{ compiling ? '编译中...' : '关闭' }}</span>
+          </el-button>
+          <el-button
+            v-if="!compiling"
+            type="primary"
+            @click="handleStartCompile"
+          >
+            <el-icon><Tools /></el-icon>
+            <span class="btn-label">开始编译</span>
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { nginxApi } from '../api/nginx'
 import {
@@ -652,6 +728,40 @@ const configDialogVisible = ref(false)
 const currentConfigContent = ref('')
 const currentConfigPath = ref('')
 const currentConfigVersion = ref('')
+
+// 编译对话框相关状态
+const compileDialogVisible = ref(false)
+const currentCompileVersion = ref('')
+const customConfigureArgs = ref('')
+const compileActiveTab = ref('config')
+const compileLogs = ref([])
+const compiling = ref(false)
+const logContainerRef = ref(null)
+const compileController = ref(null)
+
+// 默认编译模块列表
+const defaultModules = ref([
+  '--with-http_ssl_module',
+  '--with-http_realip_module',
+  '--with-http_addition_module',
+  '--with-http_sub_module',
+  '--with-http_dav_module',
+  '--with-http_flv_module',
+  '--with-http_mp4_module',
+  '--with-http_gunzip_module',
+  '--with-http_gzip_static_module',
+  '--with-http_auth_request_module',
+  '--with-http_random_index_module',
+  '--with-http_secure_link_module',
+  '--with-http_degradation_module',
+  '--with-http_slice_module',
+  '--with-http_stub_status_module',
+  '--with-http_v2_module',
+  '--with-stream',
+  '--with-stream_ssl_module',
+  '--with-stream_realip_module',
+  '--with-stream_ssl_preread_module'
+])
 
 const loadVersions = async () => {
   try {
@@ -1108,16 +1218,82 @@ const forceStopVersion = async (directory) => {
 }
 
 const compileVersion = async (directory) => {
+  const target = versions.value.find((item) => item.directory === directory)
+  
+  // 如果版本正在运行，提示用户需要先停止
+  if (target && target.running) {
+    ElMessage.warning('该版本正在运行中，请先停止后再重新编译')
+    return
+  }
+  
+  // 如果版本已编译，确认是否要重新编译
+  if (target && target.compiled) {
+    try {
+      await ElMessageBox.confirm(
+        '该版本已编译，重新编译将覆盖现有版本。是否继续？',
+        '确认重新编译',
+        {
+          confirmButtonText: '继续编译',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+      )
+    } catch {
+      return
+    }
+  }
+  
+  currentCompileVersion.value = directory
+  customConfigureArgs.value = ''
+  compileActiveTab.value = 'config'
+  compileLogs.value = []
+  compiling.value = false
+  compileDialogVisible.value = true
+}
+
+const handleStartCompile = async () => {
+  const directory = currentCompileVersion.value
   setBuilding(directory, true)
+  compiling.value = true
+  compileActiveTab.value = 'logs'
+  compileLogs.value = []
+  
   try {
-    await nginxApi.compileVersion(directory)
+    await nginxApi.compileVersion(
+      directory,
+      customConfigureArgs.value || null,
+      (log) => {
+        compileLogs.value.push(log)
+        // 自动滚动到底部
+        nextTick(() => {
+          if (logContainerRef.value) {
+            logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+          }
+        })
+      }
+    )
     ElMessage.success(`已编译 Nginx ${getDisplayLabelByDirectory(directory)}`)
     await loadVersions()
+    compiling.value = false
+    // 编译完成，允许用户手动关闭
   } catch (error) {
-    ElMessage.error(error.detail || '编译失败')
+    compiling.value = false
+    const errorMsg = error.message || error.detail || '编译失败'
+    compileLogs.value.push(`[ERROR] ${errorMsg}`)
+    ElMessage.error(errorMsg)
+    // 滚动到底部显示错误
+    nextTick(() => {
+      if (logContainerRef.value) {
+        logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+      }
+    })
   } finally {
     setBuilding(directory, false)
   }
+}
+
+const handleCompileCancel = () => {
+  compileDialogVisible.value = false
 }
 
 const upgradeToProduction = async (directory) => {
@@ -1354,6 +1530,80 @@ onUnmounted(() => {
 
 .config-textarea {
   font-family: 'Courier New', monospace;
+}
+
+.compile-log-container {
+  height: 400px;
+  max-height: 50vh;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  background-color: #1e1e1e;
+  padding: 12px;
+  overflow: auto;
+}
+
+.compile-log-content {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-line {
+  margin-bottom: 2px;
+}
+
+.log-line.error {
+  color: #f48771;
+}
+
+.log-line.success {
+  color: #4ec9b0;
+}
+
+.log-placeholder {
+  color: #858585;
+  font-style: italic;
+}
+
+.compile-dialog {
+  display: flex;
+  flex-direction: column;
+}
+
+.compile-dialog :deep(.el-dialog__body) {
+  max-height: calc(90vh - 120px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.compile-dialog :deep(.el-tabs) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.compile-dialog :deep(.el-tabs__content) {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.compile-dialog :deep(.el-tab-pane) {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.compile-dialog :deep(.el-form) {
+  overflow-y: auto;
+  max-height: calc(90vh - 200px);
 }
 </style>
 
