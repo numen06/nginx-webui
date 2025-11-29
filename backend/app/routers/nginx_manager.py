@@ -2495,24 +2495,15 @@ async def force_stop_nginx_version(
     }
 
 
-@router.post(
-    "/force_release_http_port",
-    summary="强制释放 HTTP 端口（默认 80），终止占用该端口的进程",
-)
-async def force_release_http_port(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    port: int = 80,
-):
+def _get_port_pids(port: int) -> List[int]:
     """
-    强制释放指定 HTTP 端口（默认 80）。
-
-    实现方式：
-    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
-    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
-    - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
-    注意：该能力较强，仅应授予有权限的用户使用。
+    获取占用指定端口的进程PID列表
+    
+    Args:
+        port: 端口号
+        
+    Returns:
+        占用该端口的进程PID列表
     """
     system = platform.system().lower()
     pids: List[int] = []
@@ -2585,7 +2576,29 @@ async def force_release_http_port(
         )
 
     # 去重 PID 列表
-    pids = list(set(pids))
+    return list(set(pids))
+
+
+@router.post(
+    "/force_release_http_port",
+    summary="强制释放 HTTP 端口（默认 80），终止占用该端口的进程",
+)
+async def force_release_http_port(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    port: int = 80,
+):
+    """
+    强制释放指定 HTTP 端口（默认 80）。
+
+    实现方式：
+    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
+    - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
+    注意：该能力较强，仅应授予有权限的用户使用。
+    """
+    pids = _get_port_pids(port)
 
     if not pids:
         return {
@@ -2618,6 +2631,119 @@ async def force_release_http_port(
         "port": port,
         "pids": pids,
         "results": results,
+    }
+
+
+@router.post(
+    "/force_release_nginx_ports",
+    summary="强制释放Nginx端口（80和443），终止占用这些端口的进程",
+)
+async def force_release_nginx_ports(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    强制释放Nginx常用的80和443端口，终止占用这些端口的进程。
+
+    实现方式：
+    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
+    - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
+    
+    注意：该能力较强，仅应授予有权限的用户使用。
+    """
+    ports = [80, 443]
+    all_pids: List[int] = []
+    port_results = {}
+    
+    # 获取所有端口的PID
+    for port in ports:
+        try:
+            pids = _get_port_pids(port)
+            if pids:
+                all_pids.extend(pids)
+                port_results[port] = {
+                    "pids": pids,
+                    "count": len(pids)
+                }
+            else:
+                port_results[port] = {
+                    "pids": [],
+                    "count": 0
+                }
+        except Exception as e:
+            port_results[port] = {
+                "pids": [],
+                "count": 0,
+                "error": str(e)
+            }
+    
+    # 去重所有PID（同一个进程可能占用多个端口）
+    all_pids = list(set(all_pids))
+    
+    if not all_pids:
+        # 审计
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="nginx_force_release_nginx_ports",
+            target="80,443",
+            details={
+                "ports": ports,
+                "port_results": port_results,
+                "pids": [],
+            },
+            ip_address=get_client_ip(request),
+        )
+        
+        return {
+            "success": True,
+            "message": "端口80和443当前没有进程在监听",
+            "ports": ports,
+            "pids": [],
+            "port_results": port_results,
+        }
+    
+    # 终止所有进程
+    kill_results = _kill_pids(all_pids)
+    
+    # 更新端口结果，添加终止结果
+    for port in ports:
+        if port in port_results:
+            port_pids = port_results[port]["pids"]
+            port_results[port]["kill_results"] = {
+                pid: kill_results.get(pid, {}) 
+                for pid in port_pids 
+                if pid in kill_results
+            }
+    
+    # 审计
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_force_release_nginx_ports",
+        target="80,443",
+        details={
+            "ports": ports,
+            "pids": all_pids,
+            "port_results": port_results,
+            "kill_results": kill_results,
+        },
+        ip_address=get_client_ip(request),
+    )
+    
+    port_summary = ", ".join([f"{port}({port_results[port]['count']}个进程)" for port in ports])
+    
+    return {
+        "success": True,
+        "message": f"已尝试终止占用端口{port_summary}的进程",
+        "ports": ports,
+        "pids": all_pids,
+        "port_results": port_results,
+        "kill_results": kill_results,
     }
 
 

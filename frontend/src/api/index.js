@@ -6,12 +6,30 @@ const api = axios.create({
   timeout: 30000
 })
 
-// 请求拦截器 - 添加 token
+// 检查是否是nginx相关的API
+const isNginxApi = (url) => {
+  if (!url) return false
+  return (
+    url.includes('/nginx/') || 
+    url.includes('/config') ||  // 包括 /config 和 /config/
+    url.includes('/logs') ||    // 包括 /logs 和 /logs/
+    url.includes('/files')      // 包括 /files 和 /files/
+  )
+}
+
+// 请求拦截器 - 添加 token 和 Content-Type
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    // 确保 JSON 请求设置正确的 Content-Type（如果还没有设置）
+    if (config.data && !config.headers['Content-Type'] && !config.headers['content-type']) {
+      // 如果是对象或数组，设置为 JSON
+      if (typeof config.data === 'object' && !(config.data instanceof FormData)) {
+        config.headers['Content-Type'] = 'application/json'
+      }
     }
     return config
   },
@@ -22,20 +40,41 @@ api.interceptors.request.use(
 
 // 响应拦截器 - 处理错误
 api.interceptors.response.use(
-  (response) => {
+  async (response) => {
     // 确保返回的是对象，如果后端返回字符串则尝试解析
     const data = response.data
+    let parsedData = data
     if (typeof data === 'string') {
       try {
-        return JSON.parse(data)
+        parsedData = JSON.parse(data)
       } catch (e) {
         // 如果无法解析，返回包装后的对象
-        return { message: data, raw: data }
+        parsedData = { message: data, raw: data }
       }
     }
-    return data
+    
+    // 检查响应中是否包含nginx相关的错误消息
+    const responseText = typeof data === 'string' ? data : JSON.stringify(data)
+    if (responseText && responseText.includes('未找到可用的 Nginx')) {
+      // 如果是nginx相关的API，检查初始化状态
+      const requestUrl = response.config?.url || ''
+      if (isNginxApi(requestUrl) && !requestUrl.includes('/nginx/setup/')) {
+        try {
+          // 动态导入setupStore，避免循环依赖
+          const { useSetupStore } = await import('../store/setup')
+          const setupStore = useSetupStore()
+          
+          // 检查nginx初始化状态（强制检查）
+          await setupStore.checkSetupStatus(true)
+        } catch (setupError) {
+          console.error('[API] 检查nginx设置状态失败:', setupError)
+        }
+      }
+    }
+    
+    return parsedData
   },
-  (error) => {
+  async (error) => {
     console.error('API 请求错误:', error)
     
     if (error.response) {
@@ -45,6 +84,7 @@ api.interceptors.response.use(
         localStorage.removeItem('token')
         window.location.href = '/login'
       }
+      
       // 返回错误信息，包含 detail 字段
       let errorData = error.response.data
       
@@ -70,21 +110,75 @@ api.interceptors.response.use(
       const errorObj = {
         status: error.response.status,
         statusText: error.response.statusText,
-        detail: (errorData.detail && typeof errorData.detail === 'string') 
-          ? errorData.detail 
-          : (errorData.message && typeof errorData.message === 'string')
-            ? errorData.message
-            : `请求失败 (${error.response.status})`
+        detail: null,
+        data: errorData  // 保留原始数据，方便处理 422 等验证错误
+      }
+      
+      // 处理 detail 字段（可能是字符串、对象或数组）
+      if (errorData.detail) {
+        if (typeof errorData.detail === 'string') {
+          errorObj.detail = errorData.detail
+        } else if (Array.isArray(errorData.detail)) {
+          // 422 验证错误通常是数组格式
+          errorObj.detail = errorData.detail
+        } else if (typeof errorData.detail === 'object') {
+          errorObj.detail = errorData.detail
+        }
+      }
+      
+      // 如果没有 detail，尝试使用 message
+      if (!errorObj.detail) {
+        errorObj.detail = (errorData.message && typeof errorData.message === 'string')
+          ? errorData.message
+          : `请求失败 (${error.response.status})`
       }
       
       // 安全地复制其他属性（只复制字符串、数字、布尔值）
       for (const key in errorData) {
-        if (errorData.hasOwnProperty(key) && 
+        if (key !== 'detail' && key !== 'message' && errorData.hasOwnProperty(key) && 
             (typeof errorData[key] === 'string' || 
              typeof errorData[key] === 'number' || 
              typeof errorData[key] === 'boolean' ||
-             errorData[key] === null)) {
+             errorData[key] === null ||
+             Array.isArray(errorData[key]))) {
           errorObj[key] = errorData[key]
+        }
+      }
+      
+      // 如果是nginx相关的API调用失败，检查是否需要初始化
+      const requestUrl = error.config?.url || ''
+      const errorDetail = errorObj.detail || ''
+      const errorText = typeof errorDetail === 'string' ? errorDetail : JSON.stringify(errorDetail)
+      
+      // 检查是否是nginx未初始化的错误（404或包含特定错误消息）
+      const isNginxNotInitialized = (
+        error.response.status === 404 || 
+        errorText.includes('未找到可用的 Nginx') ||
+        errorText.includes('未找到任何 Nginx')
+      )
+      
+      const isNginxRelated = isNginxApi(requestUrl) && !requestUrl.includes('/nginx/setup/')
+      
+      console.log('[API拦截器] 检查nginx初始化:', {
+        requestUrl,
+        isNginxRelated,
+        isNginxNotInitialized,
+        status: error.response.status,
+        errorText: errorText.substring(0, 100)
+      })
+      
+      if (isNginxRelated && isNginxNotInitialized) {
+        try {
+          console.log('[API拦截器] 触发nginx初始化检查')
+          // 动态导入setupStore，避免循环依赖
+          const { useSetupStore } = await import('../store/setup')
+          const setupStore = useSetupStore()
+          
+          // 检查nginx初始化状态（强制检查，因为可能nginx状态已改变）
+          await setupStore.checkSetupStatus(true)
+          console.log('[API拦截器] nginx初始化检查完成, showSetupWizard:', setupStore.showSetupWizard)
+        } catch (setupError) {
+          console.error('[API] 检查nginx设置状态失败:', setupError)
         }
       }
       

@@ -9,6 +9,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi import status
+import logging
 
 from app.database import init_db, DB_PATH
 from app.config import get_config
@@ -221,9 +224,40 @@ async def health_check():
     return {"status": "ok", "config_loaded": config is not None}
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """处理请求验证错误（422）"""
+    errors = exc.errors()
+    error_details = []
+    for error in errors:
+        error_details.append({
+            "loc": error.get("loc"),
+            "msg": error.get("msg"),
+            "type": error.get("type")
+        })
+    
+    # 记录详细的验证错误信息
+    print(f"\n[验证错误] {request.method} {request.url}")
+    print(f"[验证错误] 错误详情: {error_details}")
+    
+    # 尝试读取请求体（如果可能）
+    try:
+        body = await request.body()
+        if body:
+            print(f"[验证错误] 请求体: {body.decode('utf-8', errors='ignore')}")
+    except Exception:
+        pass
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": error_details}
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """全局异常处理"""
+    logging.error(f"未处理的异常: {str(exc)}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={"success": False, "message": "服务器内部错误", "detail": str(exc)},

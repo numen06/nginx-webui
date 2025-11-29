@@ -171,17 +171,14 @@
               <el-icon><RefreshRight /></el-icon>
               <span class="btn-label">刷新</span>
             </el-button>
-            <el-tooltip content="强制释放 80 端口" placement="bottom">
-              <el-button
-                circle
-                type="danger"
-                size="small"
-                class="force-release-btn"
-                @click="forceReleaseHttpPort"
-              >
-                <span class="force-release-icon">⚡</span>
-              </el-button>
-            </el-tooltip>
+            <el-button
+              type="danger"
+              size="small"
+              @click="forceReleaseHttpPort"
+            >
+              <el-icon><Lightning /></el-icon>
+              <span class="btn-label">强制释放Nginx端口</span>
+            </el-button>
           </div>
         </div>
       </template>
@@ -1158,11 +1155,11 @@ const upgradeToProduction = async (directory) => {
 
 const forceReleaseHttpPort = async () => {
   try {
-    await nginxApi.forceReleaseHttpPort(80)
-    ElMessage.success('已尝试强制释放 80 端口')
+    await nginxApi.forceReleaseNginxPorts()
+    ElMessage.success('已尝试强制释放Nginx端口（80和443）')
     await loadVersions()
   } catch (error) {
-    ElMessage.error(error.detail || '强制释放 80 端口失败')
+    ElMessage.error(error.detail || '强制释放Nginx端口失败')
   }
 }
 
@@ -1328,13 +1325,6 @@ onUnmounted(() => {
   color: var(--el-color-primary);
 }
 
-.force-release-icon {
-  font-size: 14px;
-}
-
-.force-release-btn {
-  margin-left: 8px;
-}
 
 .running-version {
   border: 2px solid var(--el-color-success);

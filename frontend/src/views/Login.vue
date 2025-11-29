@@ -119,7 +119,13 @@ const handleLogin = async () => {
       const result = await authStore.login(loginForm.username, loginForm.password)
       if (result.success) {
         ElMessage.success('登录成功')
-        router.push('/')
+        // 如果是默认密码，跳转到用户中心页面
+        if (result.isDefaultPassword) {
+          ElMessage.warning('检测到您使用的是默认密码，请立即修改密码以确保系统安全')
+          router.push('/profile')
+        } else {
+          router.push('/')
+        }
       } else {
         console.error('登录失败:', result)
         ElMessage.error(result.message || '登录失败，请检查用户名和密码')

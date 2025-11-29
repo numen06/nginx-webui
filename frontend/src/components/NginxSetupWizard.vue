@@ -133,16 +133,25 @@ const publishError = ref('')
 const compileProgress = ref(0)
 const compileStatusText = ref('')
 
-// 进度状态（在组件级别定义，确保在函数间共享）
+// 整体进度状态管理
 const progressState = {
-  lastStageProgress: 0,  // 记录上一个阶段的进度值
+  // 阶段进度范围定义
+  stages: {
+    prepare: { min: 0, max: 20, name: '准备源码包' },
+    compile: { min: 20, max: 80, name: '编译' },
+    publish: { min: 80, max: 100, name: '发布到生产' }
+  },
+  // 当前阶段信息
+  currentStage: 'prepare',  // prepare | compile | publish
   stageStartTime: Date.now(),  // 当前阶段开始时间
-  lastRealProgress: 0  // 最后一次从API获取的真实进度
+  lastRealProgress: 0,  // 从API获取的真实进度（编译阶段的0-100%）
+  smoothProgressTimer: null,  // 平滑进度定时器
+  progressCheckTimer: null  // 进度检查定时器
 }
 
 // 监听进度变化，用于调试
 watch(compileProgress, (newVal, oldVal) => {
-  console.log(`[进度条] 进度值变化: ${oldVal} -> ${newVal}`)
+  console.log(`[进度条] 进度值变化: ${oldVal.toFixed(1)}% -> ${newVal.toFixed(1)}%`)
 })
 
 const defaultVersion = '1.29.3'
@@ -151,18 +160,48 @@ const handlePrepare = async () => {
   preparing.value = true
   prepareError.value = ''
   
+  // 初始化准备阶段的进度
+  progressState.currentStage = 'prepare'
+  progressState.stageStartTime = Date.now()
+  compileProgress.value = 0
+  
+  // 启动准备阶段的平滑进度递增
+  const prepareStage = progressState.stages.prepare
+  const prepareTimer = setInterval(() => {
+    if (progressState.currentStage === 'prepare' && compileProgress.value < prepareStage.max) {
+      const elapsed = (Date.now() - progressState.stageStartTime) / 1000 // 秒
+      const minDuration = 3 // 准备阶段最少3秒
+      const targetProgress = Math.min(
+        prepareStage.max,
+        prepareStage.min + ((prepareStage.max - prepareStage.min) * Math.min(1, elapsed / minDuration))
+      )
+      compileProgress.value = Math.min(targetProgress, compileProgress.value + 1) // 每秒最多增长1%
+    } else {
+      clearInterval(prepareTimer)
+    }
+  }, 1000)
+  
   try {
     await nginxApi.prepareDefaultNginx()
+    
+    // 确保进度到达准备阶段的终点
+    compileProgress.value = prepareStage.max
+    
+    clearInterval(prepareTimer)
     ElMessage.success('源码包准备完成')
-    // 准备完成后，进度应该已经到15%（因为解压可能已经完成）
-    compileProgress.value = 15
-    progressState.lastStageProgress = 15
-    progressState.lastRealProgress = 15
+    
+    // 切换到编译阶段
+    progressState.currentStage = 'compile'
     progressState.stageStartTime = Date.now()
+    progressState.lastRealProgress = 0
     currentStep.value = 1
+    
     // 自动开始编译
-    handleCompile()
+    setTimeout(() => {
+      handleCompile()
+    }, 300)
   } catch (error) {
+    clearInterval(prepareTimer)
     prepareError.value = error.response?.data?.detail || error.message || '准备源码包失败'
     ElMessage.error(prepareError.value)
   } finally {
@@ -173,171 +212,101 @@ const handlePrepare = async () => {
 const handleCompile = async () => {
   compiling.value = true
   compileError.value = ''
-  // 如果是从准备阶段过来的，进度已经是15%了
-  if (compileProgress.value < 15) {
-    compileProgress.value = 15
-  }
   compileStatusText.value = '正在启动编译...'
   
-  // 初始化进度状态
-  progressState.lastStageProgress = compileProgress.value
+  // 确保从编译阶段的起点开始
+  const compileStage = progressState.stages.compile
+  compileProgress.value = compileStage.min
+  progressState.currentStage = 'compile'
   progressState.stageStartTime = Date.now()
-  progressState.lastRealProgress = compileProgress.value
+  progressState.lastRealProgress = 0
   
-  let checkInterval = null
-  let progressInterval = null
-  let smoothProgressInterval = null
-  const compileStartTime = Date.now()
+  // 清理之前的定时器
+  if (progressState.smoothProgressTimer) {
+    clearInterval(progressState.smoothProgressTimer)
+  }
+  if (progressState.progressCheckTimer) {
+    clearInterval(progressState.progressCheckTimer)
+  }
   
   try {
     // 编译是异步的，需要轮询检查状态
     await nginxApi.compileVersion(defaultVersion)
     compileStatusText.value = '编译已启动，正在检查进度...'
     
-    // 平滑进度更新（在每个阶段内按时间增长）
-    smoothProgressInterval = setInterval(() => {
-      if (compiling.value && compileProgress.value < 95) {
-        const now = Date.now()
-        const stageElapsed = (now - progressState.stageStartTime) / 1000 // 当前阶段耗时（秒）
+    // 平滑进度更新：在编译阶段（20%-80%）内持续递增
+    progressState.smoothProgressTimer = setInterval(() => {
+      if (compiling.value && progressState.currentStage === 'compile') {
+        const elapsed = (Date.now() - progressState.stageStartTime) / 1000 // 秒
         
-        // 根据当前进度值判断处于哪个阶段，并在该阶段范围内增长
-        let currentStageMin = progressState.lastStageProgress
-        let currentStageMax = 95
-        let stageDuration = 60 // 默认阶段时长（秒）
+        // 编译阶段最少需要60秒，确保进度条有足够时间递增
+        const minCompileDuration = 60
+        const timeBasedProgress = compileStage.min + ((compileStage.max - compileStage.min) * Math.min(1, elapsed / minCompileDuration))
         
-        // 确定当前阶段和阶段范围（调整阶段，因为准备源码包时可能已经解压了）
-        // 准备源码包后，解压可能已完成，所以从15%开始
-        if (compileProgress.value < 30) {
-          // 配置阶段：15% -> 30%，15秒（每1秒增长1%）
-          currentStageMin = 15
-          currentStageMax = 30
-          stageDuration = 15
-        } else if (compileProgress.value < 50) {
-          // 配置完成到编译开始：30% -> 50%，20秒（每1秒增长1%）
-          currentStageMin = 30
-          currentStageMax = 50
-          stageDuration = 20
-        } else if (compileProgress.value < 70) {
-          // 编译阶段：50% -> 70%，20秒（每1秒增长1%）
-          currentStageMin = 50
-          currentStageMax = 70
-          stageDuration = 20
-        } else if (compileProgress.value < 80) {
-          // 编译完成到安装开始：70% -> 80%，10秒（每1秒增长1%）
-          currentStageMin = 70
-          currentStageMax = 80
-          stageDuration = 10
-        } else if (compileProgress.value < 95) {
-          // 安装阶段：80% -> 95%，15秒（每1秒增长1%）
-          currentStageMin = 80
-          currentStageMax = 95
-          stageDuration = 15
-        }
+        // 将API返回的真实进度（0-100%）映射到编译阶段的进度范围（20-80%）
+        const apiBasedProgress = compileStage.min + ((compileStage.max - compileStage.min) * (progressState.lastRealProgress / 100))
         
-        // 在当前阶段范围内按时间线性增长
-        const progressRatio = Math.min(1, stageElapsed / stageDuration)
-        const stageProgress = currentStageMin + ((currentStageMax - currentStageMin) * progressRatio)
+        // 取两者中的较大值，确保进度条持续递增且不落后于真实进度
+        const targetProgress = Math.max(timeBasedProgress, apiBasedProgress)
         
-        // 确保进度只增不减，并且不超过当前阶段的最大值
-        // 每1秒至少增长0.5%，确保进度条持续更新
-        const minIncrement = 0.5 // 每秒最小增长0.5%
-        
-        // 计算目标进度：取阶段进度和最小增长中的较大值
-        const targetProgress = Math.min(
-          currentStageMax,
+        // 确保进度只增不减，每秒最多增长2%
+        const maxIncrement = 2
+        const finalProgress = Math.min(
+          compileStage.max,
           Math.max(
-            compileProgress.value + minIncrement, // 确保每秒至少增长
-            stageProgress // 按时间计算的进度
+            compileProgress.value,
+            Math.min(targetProgress, compileProgress.value + maxIncrement)
           )
         )
         
-        // 更新进度（确保只增不减）
-        if (targetProgress > compileProgress.value) {
-          compileProgress.value = Math.floor(targetProgress * 10) / 10 // 保留一位小数
-          console.log(`[平滑进度] 更新到: ${compileProgress.value.toFixed(1)}% (阶段: ${currentStageMin}-${currentStageMax}%, 耗时: ${stageElapsed.toFixed(1)}s/${stageDuration}s, 比例: ${(progressRatio * 100).toFixed(1)}%)`)
+        if (finalProgress > compileProgress.value) {
+          compileProgress.value = Math.floor(finalProgress * 10) / 10 // 保留一位小数
+          console.log(`[编译进度] 更新到: ${compileProgress.value.toFixed(1)}% (时间进度: ${timeBasedProgress.toFixed(1)}%, API进度: ${apiBasedProgress.toFixed(1)}%, 耗时: ${elapsed.toFixed(1)}s)`)
         }
       }
-    }, 1000) // 每1秒更新一次，确保进度条每秒都有变化
+    }, 1000) // 每1秒更新一次
     
-    // 开始轮询检查编译进度（更频繁）
-    progressInterval = setInterval(async () => {
+    // 轮询检查编译进度
+    progressState.progressCheckTimer = setInterval(async () => {
       try {
         const progressResponse = await nginxApi.getCompileProgress(defaultVersion)
-        console.log('[编译进度] API响应:', progressResponse)
         
         // API拦截器已经返回了data，所以progressResponse就是数据对象
-        // 但如果还有嵌套的data，也兼容处理
         let progressData = progressResponse
         if (progressResponse && typeof progressResponse === 'object' && 'data' in progressResponse && progressResponse.data) {
           progressData = progressResponse.data
         }
         
-        console.log('[编译进度] 解析后的数据:', progressData)
-        console.log('[编译进度] progress值:', progressData.progress)
-        
         if (progressData.completed) {
           // 编译完成
-          if (progressInterval) clearInterval(progressInterval)
-          if (checkInterval) clearInterval(checkInterval)
-          if (smoothProgressInterval) clearInterval(smoothProgressInterval)
-          compileProgress.value = 100
+          if (progressState.smoothProgressTimer) clearInterval(progressState.smoothProgressTimer)
+          if (progressState.progressCheckTimer) clearInterval(progressState.progressCheckTimer)
+          
+          // 确保进度到达编译阶段的终点
+          compileProgress.value = compileStage.max
           compileStatusText.value = '编译完成！'
           ElMessage.success('Nginx 编译完成')
+          
+          // 切换到发布阶段
+          progressState.currentStage = 'publish'
+          progressState.stageStartTime = Date.now()
           currentStep.value = 2
           compiling.value = false
         } else if (progressData.error) {
           // 编译出错
-          if (progressInterval) clearInterval(progressInterval)
-          if (checkInterval) clearInterval(checkInterval)
-          if (smoothProgressInterval) clearInterval(smoothProgressInterval)
+          if (progressState.smoothProgressTimer) clearInterval(progressState.smoothProgressTimer)
+          if (progressState.progressCheckTimer) clearInterval(progressState.progressCheckTimer)
           compileError.value = progressData.message || '编译失败，请查看编译日志'
           compiling.value = false
         } else {
-          // 更新进度 - 确保progress是数字，并且只增不减
+          // 更新真实进度（0-100%）
           const progressValue = Number(progressData.progress) || 0
-          console.log('[编译进度] API返回进度值:', progressValue)
-          
-          // 更新真实进度
-          progressState.lastRealProgress = progressValue
-          
-          // 判断是否进入新阶段（根据进度值判断）
-          let newStage = false
-          if (progressValue >= 15 && progressState.lastStageProgress < 15) {
-            // 进入配置阶段
-            newStage = true
-            progressState.lastStageProgress = 15
-          } else if (progressValue >= 30 && progressState.lastStageProgress < 30) {
-            // 进入编译准备阶段
-            newStage = true
-            progressState.lastStageProgress = 30
-          } else if (progressValue >= 50 && progressState.lastStageProgress < 50) {
-            // 进入编译阶段
-            newStage = true
-            progressState.lastStageProgress = 50
-          } else if (progressValue >= 70 && progressState.lastStageProgress < 70) {
-            // 进入安装准备阶段
-            newStage = true
-            progressState.lastStageProgress = 70
-          } else if (progressValue >= 80 && progressState.lastStageProgress < 80) {
-            // 进入安装阶段
-            newStage = true
-            progressState.lastStageProgress = 80
+          if (progressValue > progressState.lastRealProgress) {
+            progressState.lastRealProgress = progressValue
+            console.log(`[编译进度] API返回真实进度: ${progressValue}%`)
           }
           
-          // 如果进入新阶段，重置阶段开始时间
-          if (newStage) {
-            console.log(`[编译进度] 进入新阶段，重置计时: ${progressState.lastStageProgress}%`)
-            progressState.stageStartTime = Date.now()
-          }
-          
-          // 如果真实进度超过当前显示进度，更新显示进度（但不强制，让平滑进度继续工作）
-          if (progressValue > compileProgress.value + 10) {
-            // 只有当真实进度明显超过时才更新，避免打断平滑进度
-            compileProgress.value = progressValue
-            progressState.lastStageProgress = progressValue
-            progressState.stageStartTime = Date.now()
-            console.log(`[编译进度] 真实进度明显超前，更新到: ${compileProgress.value}%`)
-          }
+          // 更新状态文本
           compileStatusText.value = progressData.message || `${progressData.stage || '编译中'}...`
         }
       } catch (error) {
@@ -346,50 +315,18 @@ const handleCompile = async () => {
       }
     }, 1000) // 每秒检查一次进度
     
-    // 同时检查版本状态（作为备用检查）
-    checkInterval = setInterval(async () => {
-      try {
-        const versions = await nginxApi.listVersions()
-        const version = (versions.data || versions).find(v => v.directory === defaultVersion)
-        
-        if (version && version.compiled) {
-          // 编译完成
-          if (progressInterval) clearInterval(progressInterval)
-          if (checkInterval) clearInterval(checkInterval)
-          if (smoothProgressInterval) clearInterval(smoothProgressInterval)
-          compileProgress.value = 100
-          compileStatusText.value = '编译完成！'
-          ElMessage.success('Nginx 编译完成')
-          currentStep.value = 2
-          compiling.value = false
-        } else if (version && version.error) {
-          // 编译失败
-          if (progressInterval) clearInterval(progressInterval)
-          if (checkInterval) clearInterval(checkInterval)
-          if (smoothProgressInterval) clearInterval(smoothProgressInterval)
-          compileError.value = '编译失败，请查看编译日志'
-          compiling.value = false
-        }
-      } catch (error) {
-        console.error('检查版本状态失败:', error)
-        // 继续尝试，不中断
-      }
-    }, 3000) // 每3秒检查一次版本状态
-    
     // 设置超时
     setTimeout(() => {
-      if (progressInterval) clearInterval(progressInterval)
-      if (checkInterval) clearInterval(checkInterval)
-      if (smoothProgressInterval) clearInterval(smoothProgressInterval)
+      if (progressState.smoothProgressTimer) clearInterval(progressState.smoothProgressTimer)
+      if (progressState.progressCheckTimer) clearInterval(progressState.progressCheckTimer)
       if (compiling.value) {
         compileError.value = '编译超时，请检查编译日志'
         compiling.value = false
       }
     }, 600000) // 10分钟超时
   } catch (error) {
-    if (progressInterval) clearInterval(progressInterval)
-    if (checkInterval) clearInterval(checkInterval)
-    if (smoothProgressInterval) clearInterval(smoothProgressInterval)
+    if (progressState.smoothProgressTimer) clearInterval(progressState.smoothProgressTimer)
+    if (progressState.progressCheckTimer) clearInterval(progressState.progressCheckTimer)
     compileError.value = error.response?.data?.detail || error.message || '编译失败'
     ElMessage.error(compileError.value)
     compiling.value = false
@@ -405,24 +342,57 @@ const handlePublish = async () => {
   publishing.value = true
   publishError.value = ''
   
+  // 初始化发布阶段的进度
+  progressState.currentStage = 'publish'
+  progressState.stageStartTime = Date.now()
+  const publishStage = progressState.stages.publish
+  
+  // 确保从发布阶段的起点开始
+  compileProgress.value = publishStage.min
+  compileStatusText.value = '正在发布到生产环境...'
+  
+  // 启动发布阶段的平滑进度递增
+  const publishTimer = setInterval(() => {
+    if (progressState.currentStage === 'publish' && compileProgress.value < publishStage.max) {
+      const elapsed = (Date.now() - progressState.stageStartTime) / 1000 // 秒
+      const minDuration = 3 // 发布阶段最少3秒
+      const targetProgress = Math.min(
+        publishStage.max,
+        publishStage.min + ((publishStage.max - publishStage.min) * Math.min(1, elapsed / minDuration))
+      )
+      compileProgress.value = Math.min(targetProgress, compileProgress.value + 2) // 每秒最多增长2%
+    } else {
+      clearInterval(publishTimer)
+    }
+  }, 1000)
+  
   try {
     await nginxApi.upgradeToProduction(defaultVersion)
-    ElMessage.success('已发布到生产环境')
     
-    // 发布成功后自动启动nginx
+    // 更新进度到90%
+    compileProgress.value = 90
     compileStatusText.value = '正在启动 Nginx...'
+    
     try {
       await nginxApi.startVersion('last') // 启动发布版（last目录）
-      ElMessage.success('Nginx 已启动')
+      
+      // 确保进度到达100%
+      compileProgress.value = 100
       compileStatusText.value = 'Nginx 已启动并运行'
+      ElMessage.success('已发布到生产环境')
+      ElMessage.success('Nginx 已启动')
     } catch (startError) {
       console.error('启动nginx失败:', startError)
-      // 启动失败不影响完成，只是提示
+      // 启动失败不影响完成，进度仍然到100%
+      compileProgress.value = 100
+      ElMessage.success('已发布到生产环境')
       ElMessage.warning('发布成功，但启动失败，请稍后手动启动')
     }
     
+    clearInterval(publishTimer)
     currentStep.value = 3
   } catch (error) {
+    clearInterval(publishTimer)
     publishError.value = error.response?.data?.detail || error.message || '发布失败'
     ElMessage.error(publishError.value)
   } finally {
@@ -436,8 +406,19 @@ const handleRetryPublish = () => {
 }
 
 const handleComplete = () => {
+  // 清理所有定时器
+  if (progressState.smoothProgressTimer) {
+    clearInterval(progressState.smoothProgressTimer)
+    progressState.smoothProgressTimer = null
+  }
+  if (progressState.progressCheckTimer) {
+    clearInterval(progressState.progressCheckTimer)
+    progressState.progressCheckTimer = null
+  }
+  
   emit('complete')
   visible.value = false
+  
   // 重置状态
   currentStep.value = 0
   preparing.value = false
@@ -448,6 +429,11 @@ const handleComplete = () => {
   publishError.value = ''
   compileProgress.value = 0
   compileStatusText.value = ''
+  
+  // 重置进度状态
+  progressState.currentStage = 'prepare'
+  progressState.stageStartTime = Date.now()
+  progressState.lastRealProgress = 0
 }
 </script>
 

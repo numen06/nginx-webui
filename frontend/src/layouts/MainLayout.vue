@@ -50,10 +50,6 @@
           <el-icon><Odometer /></el-icon>
           <span>Nginx 管理</span>
         </el-menu-item>
-        <el-menu-item index="/users">
-          <el-icon><User /></el-icon>
-          <span>用户管理</span>
-        </el-menu-item>
         <el-menu-item index="/git-sync">
           <el-icon><Share /></el-icon>
           <span>Git 配置同步</span>
@@ -66,11 +62,25 @@
           <span>Nginx WebUI 管理系统</span>
         </div>
         <div class="header-right">
-          <span class="username">{{ authStore.username }}</span>
-          <el-button type="danger" size="small" @click="handleLogout">
-            <el-icon><SwitchButton /></el-icon>
-            <span class="btn-label">退出</span>
-          </el-button>
+          <el-dropdown @command="handleUserCommand" trigger="click">
+            <span class="user-dropdown">
+              <el-icon><User /></el-icon>
+              <span class="username">{{ authStore.username }}</span>
+              <el-icon class="dropdown-icon"><ArrowDown /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="profile">
+                  <el-icon><User /></el-icon>
+                  <span>用户中心</span>
+                </el-dropdown-item>
+                <el-dropdown-item divided command="logout">
+                  <el-icon><SwitchButton /></el-icon>
+                  <span>退出登录</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
       <el-main class="main-content">
@@ -105,7 +115,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { useSetupStore } from '../store/setup'
 import { ElMessage } from 'element-plus'
-import { SwitchButton } from '@element-plus/icons-vue'
+import { SwitchButton, User, ArrowDown } from '@element-plus/icons-vue'
 import NginxSetupWizard from '../components/NginxSetupWizard.vue'
 
 const router = useRouter()
@@ -124,6 +134,14 @@ const showSetupWizard = computed({
 const handleSetupComplete = () => {
   setupStore.setShowSetupWizard(false)
   ElMessage.success('Nginx 设置完成，系统已就绪')
+}
+
+const handleUserCommand = (command) => {
+  if (command === 'profile') {
+    router.push('/profile')
+  } else if (command === 'logout') {
+    handleLogout()
+  }
 }
 
 const handleLogout = () => {
@@ -218,8 +236,29 @@ const handleLogout = () => {
   gap: 15px;
 }
 
+.user-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+  color: var(--text-secondary);
+}
+
+.user-dropdown:hover {
+  background-color: var(--bg-tertiary);
+}
+
 .username {
   color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dropdown-icon {
+  font-size: 12px;
+  transition: transform 0.3s;
 }
 
 .main-content {

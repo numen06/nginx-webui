@@ -7,9 +7,9 @@ export const useSetupStore = defineStore('setup', () => {
   const hasCheckedSetup = ref(false)
   const setupStatus = ref(null)
 
-  const checkSetupStatus = async () => {
-    // 如果已经检查过，不再重复检查
-    if (hasCheckedSetup.value) {
+  const checkSetupStatus = async (force = false) => {
+    // 如果已经检查过且不强制，不再重复检查
+    if (hasCheckedSetup.value && !force) {
       return setupStatus.value
     }
 
@@ -26,22 +26,35 @@ export const useSetupStore = defineStore('setup', () => {
 
       setupStatus.value = data
 
-      // 如果没有已编译的nginx，且有默认压缩包，则显示引导页面
-      if (data && !data.has_compiled_nginx && data.has_default_tar) {
-        console.log('[SetupStore] 需要显示引导页面')
+      // 如果没有已编译的nginx，则显示引导页面
+      // 如果有默认压缩包，可以直接使用；如果没有，用户需要上传或下载
+      if (data && !data.has_compiled_nginx) {
+        console.log('[SetupStore] 需要显示引导页面:', {
+          has_compiled_nginx: data.has_compiled_nginx,
+          has_default_tar: data.has_default_tar
+        })
         showSetupWizard.value = true
       } else {
         console.log('[SetupStore] 不需要显示引导页面:', {
           has_compiled_nginx: data?.has_compiled_nginx,
           has_default_tar: data?.has_default_tar
         })
+        // 如果nginx已经初始化，隐藏向导
+        if (data && data.has_compiled_nginx) {
+          showSetupWizard.value = false
+        }
       }
 
       hasCheckedSetup.value = true
       return data
     } catch (error) {
       console.error('[SetupStore] 检查设置状态失败:', error)
-      // 检查失败时不显示引导页面，让用户正常使用
+      // 如果检查失败（比如404），说明nginx未初始化，显示引导页面
+      // 只有在明确知道nginx已初始化时才不显示
+      if (error.response?.status === 404 || error.detail?.includes('未找到')) {
+        console.log('[SetupStore] 检测到nginx未初始化，显示引导页面')
+        showSetupWizard.value = true
+      }
       hasCheckedSetup.value = true
       return null
     }

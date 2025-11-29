@@ -68,11 +68,9 @@ export const nginxApi = {
     return api.post(`/nginx/versions/${encodeURIComponent(version)}/force_stop`)
   },
 
-  // 强制释放 HTTP 端口（默认 80）
-  forceReleaseHttpPort(port = 80) {
-    return api.post('/nginx/force_release_http_port', null, {
-      params: { port }
-    })
+  // 强制释放Nginx端口（80和443）
+  forceReleaseNginxPorts() {
+    return api.post('/nginx/force_release_nginx_ports')
   },
 
   // 删除指定版本（仅在未运行状态下允许）
