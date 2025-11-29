@@ -1023,20 +1023,14 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
     (install_path / "conf" / "conf.d").mkdir(parents=True, exist_ok=True)
     (install_path / "html").mkdir(parents=True, exist_ok=True)
 
-    # 使用编译版本自带的配置文件（conf/nginx.conf）
+    # 使用版本目录下的配置文件（conf/nginx.conf）
+    # 注意：
+    # - 如果文件不存在，则为该版本创建一个默认模板；
+    # - 如果文件已存在，则视为“用户/配置管理页面”已经写入了期望的内容，不再做任何覆盖，
+    #   以免重启 Nginx 时把已生效的配置还原成模板。
     version_config_path = install_path / "conf" / "nginx.conf"
     if not version_config_path.exists():
-        # 如果配置文件不存在，创建默认配置
         _update_nginx_config_for_version(install_path, version)
-    else:
-        # 如果配置文件存在，检查是否需要更新（检查是否使用版本目录下的配置）
-        config_content = version_config_path.read_text(encoding="utf-8")
-        # 检查是否包含版本目录下的 conf.d 引用，如果没有则更新
-        if (
-            "conf.d/*.conf" not in config_content
-            or "include conf.d/*.conf" not in config_content
-        ):
-            _update_nginx_config_for_version(install_path, version)
 
     # 先测试配置
     try:
@@ -2173,8 +2167,7 @@ async def start_nginx_version(
     (install_path / "conf" / "conf.d").mkdir(parents=True, exist_ok=True)
     (install_path / "html").mkdir(parents=True, exist_ok=True)
 
-    # 使用编译版本自带的配置文件（conf/nginx.conf）
-    # 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 路径
+    # 使用版本目录下的配置文件（conf/nginx.conf）
     version_config_path = install_path / "conf" / "nginx.conf"
     if not version_config_path.exists():
         raise HTTPException(
@@ -2182,14 +2175,10 @@ async def start_nginx_version(
             detail=f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
         )
 
-    # 确保nginx.conf已更新为使用版本目录下的配置
-    # 检查配置文件中是否包含版本目录下的 conf.d，如果没有则更新
-    config_content = version_config_path.read_text(encoding="utf-8")
-    if (
-        "conf.d/*.conf" not in config_content
-        or "include conf.d/*.conf" not in config_content
-    ):
-        _update_nginx_config_for_version(install_path, version)
+    # IMPORTANT:
+    # 为了保证“配置管理”页面写入并重载后的配置在后续重启 Nginx 时不会被还原，
+    # 这里不再对已经存在的 nginx.conf 做任何自动重写或模板覆盖。
+    # 如果需要使用 conf.d/*.conf，可以在初始模板或通过配置管理显式添加。
 
     # 先测试配置
     try:
