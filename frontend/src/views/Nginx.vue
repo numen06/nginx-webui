@@ -57,9 +57,25 @@
           <div class="install-path" :title="pinnedVersion.install_path">
             安装路径：{{ pinnedVersion.install_path }}
           </div>
+          <div
+            class="config-path"
+            :title="pinnedVersion.install_path ? pinnedVersion.install_path + '/conf/nginx.conf' : ''"
+          >
+            配置文件：{{ pinnedVersion.install_path ? pinnedVersion.install_path + '/conf/nginx.conf' : '-' }}
+          </div>
         </div>
 
         <div class="version-actions">
+          <el-tooltip class="action-tooltip" content="查看配置" placement="top">
+            <el-button
+              circle
+              size="small"
+              class="action-icon-btn"
+              @click="viewConfig(pinnedVersion.directory)"
+            >
+              <el-icon><Document /></el-icon>
+            </el-button>
+          </el-tooltip>
           <template v-if="pinnedVersion.directory !== 'last'">
             <el-tooltip class="action-tooltip" content="编译" placement="top">
               <el-button
@@ -230,6 +246,12 @@
             <div class="version-body">
               <div class="install-path" :title="row.install_path">
                 安装路径：{{ row.install_path }}
+              </div>
+              <div
+                class="config-path"
+                :title="row.install_path ? row.install_path + '/conf/nginx.conf' : ''"
+              >
+                配置文件：{{ row.install_path ? row.install_path + '/conf/nginx.conf' : '-' }}
               </div>
             </div>
 
@@ -504,7 +526,7 @@
     <!-- 查看指定版本配置的弹窗 -->
     <el-dialog
       v-model="configDialogVisible"
-      :title="`配置文件 - ${currentConfigTitle}`"
+      :title="`配置文件 - ${getDisplayLabelByDirectory(currentConfigVersion)}`"
       width="800px"
       destroy-on-close
     >
