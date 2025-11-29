@@ -151,11 +151,12 @@ def analyze_logs(time_range_hours: int = 24) -> Dict:
     
     # 解析日志
     log_entries = []
-    ip_stats = defaultdict(int)
-    status_stats = defaultdict(int)
-    path_stats = defaultdict(int)
-    method_stats = defaultdict(int)
-    hourly_stats = defaultdict(int)
+    ip_stats: Dict[str, int] = defaultdict(int)
+    status_stats: Dict[int, int] = defaultdict(int)
+    path_stats: Dict[str, int] = defaultdict(int)
+    method_stats: Dict[str, int] = defaultdict(int)
+    # 通用时间桶统计（根据 time_range_hours 决定粒度）
+    bucket_stats: Dict[str, int] = defaultdict(int)
     attack_count = 0
     attack_details = []
     
@@ -183,9 +184,24 @@ def analyze_logs(time_range_hours: int = 24) -> Dict:
         # 统计HTTP方法
         method_stats[entry['method']] += 1
         
-        # 按小时统计
-        hour_key = entry['date'].strftime('%Y-%m-%d %H:00')
-        hourly_stats[hour_key] += 1
+        # 按时间桶统计
+        # - 当 time_range_hours <= 1 小时时，按 5 分钟粒度统计
+        # - 当 time_range_hours >= 7 天（168 小时）时，按天统计
+        # - 其他情况（例如 24 小时）按小时统计
+        dt = entry['date']
+        if time_range_hours <= 1:
+            # 5 分钟对齐：00,05,10,...,55
+            rounded_minute = (dt.minute // 5) * 5
+            bucket_dt = dt.replace(minute=rounded_minute, second=0, microsecond=0)
+            bucket_key = bucket_dt.strftime('%Y-%m-%d %H:%M')
+        elif time_range_hours >= 24 * 7:
+            # 按天聚合
+            bucket_key = dt.strftime('%Y-%m-%d')
+        else:
+            # 按小时聚合
+            bucket_key = dt.strftime('%Y-%m-%d %H:00')
+
+        bucket_stats[bucket_key] += 1
         
         # 检测攻击
         attacks = detect_attack(entry)
@@ -212,10 +228,10 @@ def analyze_logs(time_range_hours: int = 24) -> Dict:
     # 获取访问量前10的路径
     top_paths = sorted(path_stats.items(), key=lambda x: x[1], reverse=True)[:10]
     
-    # 按时间排序小时统计数据
-    sorted_hours = sorted(hourly_stats.items())
-    hours = [item[0] for item in sorted_hours]
-    hour_counts = [item[1] for item in sorted_hours]
+    # 按时间排序统计数据
+    sorted_buckets = sorted(bucket_stats.items())
+    bucket_labels = [item[0] for item in sorted_buckets]
+    bucket_counts = [item[1] for item in sorted_buckets]
     
     # 读取错误日志统计
     error_log_count = 0
@@ -248,9 +264,11 @@ def analyze_logs(time_range_hours: int = 24) -> Dict:
         "method_distribution": dict(method_stats),
         "top_ips": [{"ip": ip, "count": count} for ip, count in top_ips],
         "top_paths": [{"path": path, "count": count} for path, count in top_paths],
+        # 为了兼容前端，仍然沿用 hourly_trend 字段名称，
+        # 其中 hours 为时间桶标签（可能是 5 分钟 / 小时 / 天）
         "hourly_trend": {
-            "hours": hours,
-            "counts": hour_counts
+            "hours": bucket_labels,
+            "counts": bucket_counts,
         },
         "attacks": attack_details[:50]  # 最多返回50条攻击记录
     }

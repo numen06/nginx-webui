@@ -324,7 +324,11 @@ const systemResources = ref({
   system: {}
 })
 
-const timeRange = ref(24)
+// 访问趋势时间范围（单位：小时）
+// 1 小时：后端按 5 分钟粒度聚合
+// 24 小时：按小时聚合
+// 168 小时（7 天）：按天聚合
+const timeRange = ref(1)
 const loading = ref(false)
 let refreshTimer = null
 
