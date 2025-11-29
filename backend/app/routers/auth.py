@@ -122,16 +122,26 @@ async def login_basic(
 
 @router.get("/me", summary="获取当前用户信息")
 async def get_current_user_info(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """获取当前登录用户的信息"""
+    from app.auth import verify_password
+    
+    # 检查是否是默认密码（admin/admin）
+    is_default_password = False
+    if current_user.username == "admin":
+        # 验证密码是否是默认密码 "admin"
+        is_default_password = verify_password("admin", current_user.password_hash)
+    
     return {
         "success": True,
         "user": {
             "id": current_user.id,
             "username": current_user.username,
             "is_active": current_user.is_active,
-            "created_at": current_user.created_at.isoformat() if current_user.created_at else None
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+            "is_default_password": is_default_password
         }
     }
 

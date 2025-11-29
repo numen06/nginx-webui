@@ -80,12 +80,6 @@ docker-compose.yml
 # 脚本（不需要在镜像中）
 scripts/
 
-# 前端源码（构建产物已复制）
-frontend/src/
-frontend/public/
-frontend/vite.config.js
-frontend/index.html
-
 # 后端测试和开发文件
 backend/*.pyc
 backend/**/__pycache__/

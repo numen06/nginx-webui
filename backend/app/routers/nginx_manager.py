@@ -806,32 +806,10 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
 
         logs.append(f"临时安装路径: {tmp_install_path}")
 
-        # configure - 添加常用的模块配置
+        # configure
         configure_cmd = [
             "./configure",
             f"--prefix={tmp_install_path}",
-            # HTTP核心模块
-            "--with-http_ssl_module",  # SSL/TLS支持
-            "--with-http_realip_module",  # 真实IP模块
-            "--with-http_addition_module",  # 响应添加模块
-            "--with-http_sub_module",  # 响应替换模块
-            "--with-http_dav_module",  # WebDAV支持
-            "--with-http_flv_module",  # FLV流媒体支持
-            "--with-http_mp4_module",  # MP4流媒体支持
-            "--with-http_gunzip_module",  # Gunzip支持
-            "--with-http_gzip_static_module",  # Gzip静态支持
-            "--with-http_auth_request_module",  # 认证请求模块
-            "--with-http_random_index_module",  # 随机索引模块
-            "--with-http_secure_link_module",  # 安全链接模块
-            "--with-http_degradation_module",  # 降级模块
-            "--with-http_slice_module",  # 切片模块
-            "--with-http_stub_status_module",  # 状态模块
-            "--with-http_v2_module",  # HTTP/2支持
-            # Stream模块（TCP/UDP代理）
-            "--with-stream",
-            "--with-stream_ssl_module",  # Stream SSL支持
-            "--with-stream_realip_module",  # Stream真实IP模块
-            "--with-stream_ssl_preread_module",  # Stream SSL预读模块
         ]
         logs.append(f"执行配置命令: {' '.join(configure_cmd)}")
         result = subprocess.run(
@@ -1045,20 +1023,14 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
     (install_path / "conf" / "conf.d").mkdir(parents=True, exist_ok=True)
     (install_path / "html").mkdir(parents=True, exist_ok=True)
 
-    # 使用编译版本自带的配置文件（conf/nginx.conf）
+    # 使用版本目录下的配置文件（conf/nginx.conf）
+    # 注意：
+    # - 如果文件不存在，则为该版本创建一个默认模板；
+    # - 如果文件已存在，则视为“用户/配置管理页面”已经写入了期望的内容，不再做任何覆盖，
+    #   以免重启 Nginx 时把已生效的配置还原成模板。
     version_config_path = install_path / "conf" / "nginx.conf"
     if not version_config_path.exists():
-        # 如果配置文件不存在，创建默认配置
         _update_nginx_config_for_version(install_path, version)
-    else:
-        # 如果配置文件存在，检查是否需要更新（检查是否使用版本目录下的配置）
-        config_content = version_config_path.read_text(encoding="utf-8")
-        # 检查是否包含版本目录下的 conf.d 引用，如果没有则更新
-        if (
-            "conf.d/*.conf" not in config_content
-            or "include conf.d/*.conf" not in config_content
-        ):
-            _update_nginx_config_for_version(install_path, version)
 
     # 先测试配置
     try:
@@ -1444,6 +1416,53 @@ async def list_nginx_versions(
     - build_root 目录中的源码包（仅下载未编译）
     """
     return _list_all_versions()
+
+
+@router.get(
+    "/versions/{version}/config",
+    summary="获取指定版本的 nginx.conf 配置内容",
+)
+async def get_nginx_version_config(
+    version: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    读取指定 Nginx 版本目录下的核心配置文件内容：
+    - 路径约定为 <versions_root>/<version>/conf/nginx.conf
+    - 仅做只读展示，不做任何写入或格式化
+    """
+    install_path = _get_install_path(version)
+    if not install_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Nginx 版本未安装: {version}",
+        )
+
+    nginx_conf_path = install_path / "conf" / "nginx.conf"
+    if not nginx_conf_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"配置文件不存在: {nginx_conf_path}",
+        )
+
+    try:
+        content = nginx_conf_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取配置文件失败: {e}",
+        )
+
+    # 对外返回展示路径时，保持与 list 版本接口中的 install_path 风格一致（相对 versions_root）
+    raw_root = _get_versions_root_raw()
+    display_config_path = str(raw_root / version / "conf" / "nginx.conf")
+
+    return {
+        "success": True,
+        "version": version,
+        "config_path": display_config_path,
+        "content": content,
+    }
 
 
 @router.post(
@@ -1922,6 +1941,186 @@ async def get_nginx_build_log(
 
 
 @router.get(
+    "/versions/{version}/compile-progress",
+    summary="获取编译进度",
+)
+async def get_compile_progress(
+    version: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    获取指定版本的编译进度
+    
+    通过检查编译日志和文件系统状态来判断编译进度
+    """
+    log_path = _get_build_log_path(version)
+    build_root = _get_build_root()
+    build_dir = build_root / version
+    install_path = _get_install_path(version)
+    executable = _get_nginx_executable(install_path)
+    
+    progress = 0
+    stage = "等待开始"
+    message = ""
+    
+    # 检查是否已编译完成
+    if install_path.exists() and executable.exists():
+        progress = 100
+        stage = "编译完成"
+        message = "Nginx 已成功编译"
+        return {
+            "progress": progress,
+            "stage": stage,
+            "message": message,
+            "completed": True
+        }
+    
+    # 检查编译日志
+    log_size = 0
+    if log_path.exists():
+        try:
+            log_size = log_path.stat().st_size
+            log_content = log_path.read_text(encoding="utf-8", errors="ignore")
+            
+            # 先检查错误情况
+            if "configure 失败" in log_content:
+                progress = 20
+                stage = "配置失败"
+                message = "配置阶段失败，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            if "make 失败" in log_content:
+                progress = 50
+                stage = "编译失败"
+                message = "编译阶段失败，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            if "make install 失败" in log_content:
+                progress = 80
+                stage = "安装失败"
+                message = "安装阶段失败，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            if "编译过程出错" in log_content:
+                progress = max(progress, 10)
+                stage = "编译出错"
+                message = "编译过程中出现错误，请查看日志"
+                return {
+                    "progress": progress,
+                    "stage": stage,
+                    "message": message,
+                    "completed": False,
+                    "error": True
+                }
+            
+            # 根据日志内容判断进度（按顺序检查，确保进度递增）
+            # 检查是否已完成安装
+            if "已将临时安装目录移动到正式路径" in log_content or "已更新nginx.conf" in log_content:
+                progress = 95
+                stage = "完成安装"
+                message = "正在完成最后的配置..."
+            # 检查是否在执行安装
+            elif "执行安装命令" in log_content or "make install" in log_content:
+                progress = 80
+                stage = "安装中"
+                message = "正在安装到目标目录..."
+            # 检查是否在编译中
+            elif "执行编译命令" in log_content:
+                # 编译阶段，根据日志大小和内容估算进度
+                # make阶段通常比较长，根据日志增长来估算
+                base_progress = 50
+                # 如果日志中有make的输出，说明正在编译
+                if "cc " in log_content or "linking" in log_content.lower():
+                    # 编译正在进行，根据日志行数或大小估算
+                    line_count = len(log_content.splitlines())
+                    # 假设编译过程会产生大量输出，根据行数估算
+                    if line_count > 100:
+                        # 编译进行中，进度在50-70之间
+                        progress = min(70, base_progress + int((line_count - 100) / 10))
+                    else:
+                        progress = base_progress
+                else:
+                    progress = base_progress
+                stage = "编译中"
+                message = f"正在编译 Nginx（已处理 {line_count if 'line_count' in locals() else 0} 行输出）..."
+            # 检查是否在配置
+            elif "执行配置命令" in log_content or "configure" in log_content.lower():
+                progress = 30
+                stage = "配置环境"
+                message = "正在配置编译环境..."
+            # 检查是否已解压
+            elif "已解压到构建目录" in log_content or "检测到源码目录" in log_content:
+                progress = 15
+                stage = "解压源码"
+                message = "源码包已解压，准备配置..."
+        except Exception as e:
+            # 读取日志失败，尝试通过文件系统判断
+            pass
+    
+    # 通过文件系统和日志大小判断进度（用于实时更新）
+    if build_dir.exists():
+        source_dirs = [d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")]
+        if source_dirs:
+            source_dir = source_dirs[0]
+            # 检查是否有编译产物
+            if (source_dir / "objs").exists():
+                # 有编译目录，说明configure已完成
+                progress = max(progress, 35)
+                # 检查编译产物数量来估算编译进度
+                objs_dir = source_dir / "objs"
+                if objs_dir.exists():
+                    obj_files = list(objs_dir.glob("*.o"))
+                    # 假设nginx编译会产生约100-200个目标文件
+                    if len(obj_files) > 0:
+                        # 根据目标文件数量估算编译进度
+                        estimated_progress = min(70, 35 + int(len(obj_files) / 3))
+                        progress = max(progress, estimated_progress)
+                        stage = "编译中"
+                        message = f"正在编译（已生成 {len(obj_files)} 个目标文件）..."
+            
+            # 如果日志文件在增长，说明编译正在进行
+            if log_size > 0 and progress < 50:
+                # 根据日志大小估算进度（粗略估算）
+                # 假设完整编译日志大约50-100KB
+                if log_size > 50000:  # 50KB
+                    progress = max(progress, 60)
+                elif log_size > 20000:  # 20KB
+                    progress = max(progress, 45)
+                elif log_size > 5000:  # 5KB
+                    progress = max(progress, 30)
+    
+    # 通过文件系统判断
+    if build_dir.exists():
+        source_dirs = [d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")]
+        if source_dirs:
+            progress = max(progress, 15)
+            stage = "源码已解压"
+            message = "源码包已解压，准备配置..."
+    
+    return {
+        "progress": progress,
+        "stage": stage,
+        "message": message,
+        "completed": False
+    }
+
+
+@router.get(
     "/versions/{version}/status",
     response_model=NginxVersionInfo,
     summary="获取指定版本 Nginx 运行状态",
@@ -2015,8 +2214,7 @@ async def start_nginx_version(
     (install_path / "conf" / "conf.d").mkdir(parents=True, exist_ok=True)
     (install_path / "html").mkdir(parents=True, exist_ok=True)
 
-    # 使用编译版本自带的配置文件（conf/nginx.conf）
-    # 编译后的 nginx 自带完整的配置文件，包括正确的 mime.types 路径
+    # 使用版本目录下的配置文件（conf/nginx.conf）
     version_config_path = install_path / "conf" / "nginx.conf"
     if not version_config_path.exists():
         raise HTTPException(
@@ -2024,14 +2222,10 @@ async def start_nginx_version(
             detail=f"Nginx 版本 {version} 的配置文件不存在: {version_config_path}",
         )
 
-    # 确保nginx.conf已更新为使用版本目录下的配置
-    # 检查配置文件中是否包含版本目录下的 conf.d，如果没有则更新
-    config_content = version_config_path.read_text(encoding="utf-8")
-    if (
-        "conf.d/*.conf" not in config_content
-        or "include conf.d/*.conf" not in config_content
-    ):
-        _update_nginx_config_for_version(install_path, version)
+    # IMPORTANT:
+    # 为了保证“配置管理”页面写入并重载后的配置在后续重启 Nginx 时不会被还原，
+    # 这里不再对已经存在的 nginx.conf 做任何自动重写或模板覆盖。
+    # 如果需要使用 conf.d/*.conf，可以在初始模板或通过配置管理显式添加。
 
     # 先测试配置
     try:
@@ -2304,171 +2498,75 @@ async def force_stop_nginx_version(
 def _get_port_pids(port: int) -> List[int]:
     """
     获取占用指定端口的进程PID列表
-    根据不同系统自动选择最合适的命令
-
+    
     Args:
         port: 端口号
-
+        
     Returns:
         占用该端口的进程PID列表
     """
     system = platform.system().lower()
     pids: List[int] = []
-    error_messages = []
 
     try:
         if system == "windows":
             # Windows 使用 netstat 命令
-            try:
-                cmd = ["netstat", "-ano"]
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
+            cmd = ["netstat", "-ano"]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
 
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"netstat 调用错误: {result.stderr.strip() or result.stdout.strip()}"
-                    )
-
-                # 解析 netstat 输出，查找监听指定端口的进程
-                # 格式示例: TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       1234
-                lines = result.stdout.splitlines()
-                for line in lines:
-                    if f":{port}" in line and "LISTENING" in line.upper():
-                        parts = line.split()
-                        if len(parts) >= 5:
-                            try:
-                                pid = int(parts[-1])
-                                if pid > 0:
-                                    pids.append(pid)
-                            except (ValueError, IndexError):
-                                continue
-            except FileNotFoundError:
+            if result.returncode != 0:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Windows 系统未找到 netstat 命令",
-                )
-        else:
-            # Linux/macOS 系统，按优先级尝试不同命令
-
-            # 方法1: Linux 优先使用 ss 命令（CentOS/Ubuntu 等现代Linux系统都有）
-            if system == "linux":
-                try:
-                    # ss 命令格式: ss -tlnp | grep :<port>
-                    cmd = ["ss", "-tlnp"]
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-
-                    if result.returncode == 0:
-                        # 解析 ss 输出，查找监听指定端口的进程
-                        # 格式示例: LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=1234,fd=6))
-                        lines = result.stdout.splitlines()
-                        for line in lines:
-                            if f":{port}" in line and "LISTEN" in line:
-                                # 提取PID，格式如 users:(("nginx",pid=1234,fd=6))
-                                pid_matches = re.findall(r"pid=(\d+)", line)
-                                for pid_str in pid_matches:
-                                    try:
-                                        pid = int(pid_str)
-                                        if pid > 0:
-                                            pids.append(pid)
-                                    except ValueError:
-                                        continue
-                        if pids:
-                            return list(set(pids))  # 成功获取到PID，直接返回
-                    else:
-                        error_messages.append(
-                            f"ss 命令执行失败: {result.stderr.strip()}"
-                        )
-                except FileNotFoundError:
-                    error_messages.append("ss 命令不存在")
-                except Exception as e:
-                    error_messages.append(f"ss 命令执行异常: {str(e)}")
-
-            # 方法2: 尝试 lsof 命令（macOS和部分Linux系统有）
-            try:
-                cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
+                    detail=f"netstat 调用错误: {result.stderr.strip() or result.stdout.strip()}",
                 )
 
-                if result.returncode in (0, 1):  # 0=找到进程, 1=没找到（正常）
-                    lines = [
-                        line.strip()
-                        for line in result.stdout.splitlines()
-                        if line.strip()
-                    ]
-                    for line in lines:
+            # 解析 netstat 输出，查找监听指定端口的进程
+            # 格式示例: TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       1234
+            # 或者: TCP    [::]:80                 [::]:0                 LISTENING       1234
+            lines = result.stdout.splitlines()
+            for line in lines:
+                # 检查是否包含端口号和 LISTENING 状态
+                if f":{port}" in line and "LISTENING" in line.upper():
+                    # 分割行，PID 通常在最后一列
+                    parts = line.split()
+                    if len(parts) >= 5:
                         try:
-                            pid = int(line)
-                            if pid > 0:
+                            # 尝试从最后一列获取 PID
+                            pid = int(parts[-1])
+                            if pid > 0:  # 确保 PID 有效
                                 pids.append(pid)
-                        except ValueError:
+                        except (ValueError, IndexError):
                             continue
-                    if pids:
-                        return list(set(pids))  # 成功获取到PID，直接返回
-                else:
-                    error_messages.append(
-                        f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}"
-                    )
-            except FileNotFoundError:
-                error_messages.append("lsof 命令不存在")
-            except Exception as e:
-                error_messages.append(f"lsof 命令执行异常: {str(e)}")
+        else:
+            # Linux/macOS 使用 lsof 命令
+            cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
 
-            # 方法3: 尝试 netstat 命令（作为最后备选）
-            try:
-                cmd = ["netstat", "-tlnp"]
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-
-                if result.returncode == 0:
-                    # 解析 netstat 输出（Linux格式）
-                    # 格式示例: tcp  0  0 0.0.0.0:80  0.0.0.0:*  LISTEN  1234/nginx
-                    lines = result.stdout.splitlines()
-                    for line in lines:
-                        if f":{port}" in line and "LISTEN" in line:
-                            parts = line.split()
-                            if len(parts) >= 7:
-                                # PID通常在最后，格式如 "1234/nginx"
-                                pid_part = parts[-1].split("/")[0]
-                                try:
-                                    pid = int(pid_part)
-                                    if pid > 0:
-                                        pids.append(pid)
-                                except (ValueError, IndexError):
-                                    continue
-                    if pids:
-                        return list(set(pids))  # 成功获取到PID，直接返回
-                else:
-                    error_messages.append(f"netstat 调用错误: {result.stderr.strip()}")
-            except FileNotFoundError:
-                error_messages.append("netstat 命令不存在")
-            except Exception as e:
-                error_messages.append(f"netstat 命令执行异常: {str(e)}")
-
-            # 所有方法都失败了
-            if not pids and error_messages:
+            if result.returncode not in (0, 1):
+                # 1 表示没有匹配记录，也视为正常
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"无法获取端口 {port} 的进程信息。尝试的命令都失败了：\n"
-                    + "\n".join(error_messages),
+                    detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
                 )
 
+            lines = [
+                line.strip() for line in result.stdout.splitlines() if line.strip()
+            ]
+            for line in lines:
+                try:
+                    pids.append(int(line))
+                except ValueError:
+                    continue
     except HTTPException:
         raise
     except Exception as e:
@@ -2495,9 +2593,8 @@ async def force_release_http_port(
     强制释放指定 HTTP 端口（默认 80）。
 
     实现方式：
-    - Linux (CentOS/Ubuntu等): 优先使用 `ss -tlnp`，其次尝试 `lsof`，最后尝试 `netstat`
-    - macOS: 使用 `lsof -t -iTCP:<port> -sTCP:LISTEN`
-    - Windows: 使用 `netstat -ano`
+    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
     - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
     注意：该能力较强，仅应授予有权限的用户使用。
     """
@@ -2534,6 +2631,119 @@ async def force_release_http_port(
         "port": port,
         "pids": pids,
         "results": results,
+    }
+
+
+@router.post(
+    "/force_release_nginx_ports",
+    summary="强制释放Nginx端口（80和443），终止占用这些端口的进程",
+)
+async def force_release_nginx_ports(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    强制释放Nginx常用的80和443端口，终止占用这些端口的进程。
+
+    实现方式：
+    - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
+    - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
+    - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
+    
+    注意：该能力较强，仅应授予有权限的用户使用。
+    """
+    ports = [80, 443]
+    all_pids: List[int] = []
+    port_results = {}
+    
+    # 获取所有端口的PID
+    for port in ports:
+        try:
+            pids = _get_port_pids(port)
+            if pids:
+                all_pids.extend(pids)
+                port_results[port] = {
+                    "pids": pids,
+                    "count": len(pids)
+                }
+            else:
+                port_results[port] = {
+                    "pids": [],
+                    "count": 0
+                }
+        except Exception as e:
+            port_results[port] = {
+                "pids": [],
+                "count": 0,
+                "error": str(e)
+            }
+    
+    # 去重所有PID（同一个进程可能占用多个端口）
+    all_pids = list(set(all_pids))
+    
+    if not all_pids:
+        # 审计
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="nginx_force_release_nginx_ports",
+            target="80,443",
+            details={
+                "ports": ports,
+                "port_results": port_results,
+                "pids": [],
+            },
+            ip_address=get_client_ip(request),
+        )
+        
+        return {
+            "success": True,
+            "message": "端口80和443当前没有进程在监听",
+            "ports": ports,
+            "pids": [],
+            "port_results": port_results,
+        }
+    
+    # 终止所有进程
+    kill_results = _kill_pids(all_pids)
+    
+    # 更新端口结果，添加终止结果
+    for port in ports:
+        if port in port_results:
+            port_pids = port_results[port]["pids"]
+            port_results[port]["kill_results"] = {
+                pid: kill_results.get(pid, {}) 
+                for pid in port_pids 
+                if pid in kill_results
+            }
+    
+    # 审计
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="nginx_force_release_nginx_ports",
+        target="80,443",
+        details={
+            "ports": ports,
+            "pids": all_pids,
+            "port_results": port_results,
+            "kill_results": kill_results,
+        },
+        ip_address=get_client_ip(request),
+    )
+    
+    port_summary = ", ".join([f"{port}({port_results[port]['count']}个进程)" for port in ports])
+    
+    return {
+        "success": True,
+        "message": f"已尝试终止占用端口{port_summary}的进程",
+        "ports": ports,
+        "pids": all_pids,
+        "port_results": port_results,
+        "kill_results": kill_results,
     }
 
 
@@ -2619,3 +2829,93 @@ async def delete_nginx_version(
         "message": f"Nginx 版本 {version} 已删除",
         "version": version,
     }
+
+
+@router.get(
+    "/setup/check",
+    summary="检查初始设置状态",
+)
+async def check_setup_status(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    检查系统初始设置状态：
+    - 是否有已编译的nginx版本
+    - 是否有默认nginx压缩包可用
+    """
+    # 检查是否有已编译的nginx版本
+    all_versions = _list_all_versions()
+    compiled_versions = [v for v in all_versions if v.compiled]
+    has_compiled = len(compiled_versions) > 0
+    
+    # 检查是否有默认nginx压缩包
+    default_tar = _get_default_nginx_tar_path()
+    has_default_tar = default_tar is not None and default_tar.exists()
+    
+    return {
+        "has_compiled_nginx": has_compiled,
+        "has_default_tar": has_default_tar,
+        "default_version": "1.29.3" if has_default_tar else None,
+    }
+
+
+@router.post(
+    "/setup/prepare-default",
+    summary="准备默认nginx压缩包（复制到构建目录）",
+)
+async def prepare_default_nginx(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    将默认nginx压缩包复制到构建目录，准备编译
+    """
+    default_version = "1.29.3"
+    default_tar = _get_default_nginx_tar_path()
+    
+    if not default_tar or not default_tar.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="默认nginx压缩包不存在",
+        )
+    
+    # 检查目标文件是否已存在
+    build_root = _get_build_root()
+    build_root.mkdir(parents=True, exist_ok=True)
+    target_tar = build_root / f"nginx-{default_version}.tar.gz"
+    
+    if target_tar.exists():
+        return {
+            "success": True,
+            "message": f"默认压缩包已存在于构建目录",
+            "version": default_version,
+        }
+    
+    try:
+        shutil.copy2(default_tar, target_tar)
+        
+        # 记录审计日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="nginx_setup_prepare_default",
+            target=default_version,
+            details={
+                "source": str(default_tar),
+                "target": str(target_tar),
+            },
+            ip_address=get_client_ip(request),
+        )
+        
+        return {
+            "success": True,
+            "message": f"默认压缩包已复制到构建目录",
+            "version": default_version,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"复制默认压缩包失败: {str(e)}",
+        )

@@ -57,9 +57,25 @@
           <div class="install-path" :title="pinnedVersion.install_path">
             安装路径：{{ pinnedVersion.install_path }}
           </div>
+          <div
+            class="config-path"
+            :title="pinnedVersion.install_path ? pinnedVersion.install_path + '/conf/nginx.conf' : ''"
+          >
+            配置文件：{{ pinnedVersion.install_path ? pinnedVersion.install_path + '/conf/nginx.conf' : '-' }}
+          </div>
         </div>
 
         <div class="version-actions">
+          <el-tooltip class="action-tooltip" content="查看配置" placement="top">
+            <el-button
+              circle
+              size="small"
+              class="action-icon-btn"
+              @click="viewConfig(pinnedVersion.directory)"
+            >
+              <el-icon><Document /></el-icon>
+            </el-button>
+          </el-tooltip>
           <template v-if="pinnedVersion.directory !== 'last'">
             <el-tooltip class="action-tooltip" content="编译" placement="top">
               <el-button
@@ -155,17 +171,14 @@
               <el-icon><RefreshRight /></el-icon>
               <span class="btn-label">刷新</span>
             </el-button>
-            <el-tooltip content="强制释放 80 端口" placement="bottom">
-              <el-button
-                circle
-                type="danger"
-                size="small"
-                class="force-release-btn"
-                @click="forceReleaseHttpPort"
-              >
-                <span class="force-release-icon">⚡</span>
-              </el-button>
-            </el-tooltip>
+            <el-button
+              type="danger"
+              size="small"
+              @click="forceReleaseHttpPort"
+            >
+              <el-icon><Lightning /></el-icon>
+              <span class="btn-label">强制释放Nginx端口</span>
+            </el-button>
           </div>
         </div>
       </template>
@@ -231,9 +244,25 @@
               <div class="install-path" :title="row.install_path">
                 安装路径：{{ row.install_path }}
               </div>
+              <div
+                class="config-path"
+                :title="row.install_path ? row.install_path + '/conf/nginx.conf' : ''"
+              >
+                配置文件：{{ row.install_path ? row.install_path + '/conf/nginx.conf' : '-' }}
+              </div>
             </div>
 
             <div class="version-actions">
+              <el-tooltip class="action-tooltip" content="查看配置" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  class="action-icon-btn"
+                  @click="viewConfig(row.directory)"
+                >
+                  <el-icon><Document /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip class="action-tooltip" content="编译" placement="top">
                 <el-button
                   circle
@@ -491,6 +520,34 @@
       </template>
     </el-dialog>
 
+    <!-- 查看指定版本配置的弹窗 -->
+    <el-dialog
+      v-model="configDialogVisible"
+      :title="`配置文件 - ${getDisplayLabelByDirectory(currentConfigVersion)}`"
+      width="800px"
+      destroy-on-close
+    >
+      <div class="config-dialog-meta" v-if="currentConfigPath">
+        <span class="meta-label">配置路径：</span>
+        <span class="meta-value">{{ currentConfigPath }}</span>
+      </div>
+      <el-input
+        v-model="currentConfigContent"
+        type="textarea"
+        :rows="20"
+        readonly
+        class="config-textarea"
+      />
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="primary" @click="configDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">关闭</span>
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -510,7 +567,8 @@ import {
   RefreshRight,
   CloseBold,
   Link,
-  FolderOpened
+  FolderOpened,
+  Document
 } from '@element-plus/icons-vue'
 
 const versions = ref([])
@@ -588,6 +646,12 @@ const selectedFile = ref(null)
 const uploadVersion = ref('')
 const uploading = ref(false)
 const uploadDialogVisible = ref(false)
+
+// 查看配置对话框相关状态
+const configDialogVisible = ref(false)
+const currentConfigContent = ref('')
+const currentConfigPath = ref('')
+const currentConfigVersion = ref('')
 
 const loadVersions = async () => {
   try {
@@ -1091,11 +1155,11 @@ const upgradeToProduction = async (directory) => {
 
 const forceReleaseHttpPort = async () => {
   try {
-    await nginxApi.forceReleaseHttpPort(80)
-    ElMessage.success('已尝试强制释放 80 端口')
+    await nginxApi.forceReleaseNginxPorts()
+    ElMessage.success('已尝试强制释放Nginx端口（80和443）')
     await loadVersions()
   } catch (error) {
-    ElMessage.error(error.detail || '强制释放 80 端口失败')
+    ElMessage.error(error.detail || '强制释放Nginx端口失败')
   }
 }
 
@@ -1127,6 +1191,22 @@ const deleteVersion = async (directory) => {
     await loadVersions()
   } catch (error) {
     ElMessage.error(error.detail || '删除失败')
+  }
+}
+
+const viewConfig = async (directory) => {
+  try {
+    const res = await nginxApi.getVersionConfig(directory)
+    if (!res || res.success === false) {
+      ElMessage.error(res?.message || '获取配置失败')
+      return
+    }
+    currentConfigVersion.value = directory
+    currentConfigPath.value = res.config_path || ''
+    currentConfigContent.value = res.content || ''
+    configDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '获取配置失败')
   }
 }
 
@@ -1245,13 +1325,6 @@ onUnmounted(() => {
   color: var(--el-color-primary);
 }
 
-.force-release-icon {
-  font-size: 14px;
-}
-
-.force-release-btn {
-  margin-left: 8px;
-}
 
 .running-version {
   border: 2px solid var(--el-color-success);
@@ -1270,6 +1343,17 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 12px;
   width: 100%;
+}
+
+.config-dialog-meta {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.config-textarea {
+  font-family: 'Courier New', monospace;
 }
 </style>
 

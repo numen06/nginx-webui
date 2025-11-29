@@ -36,7 +36,7 @@ class UserUpdate(BaseModel):
 class PasswordChange(BaseModel):
     """修改密码请求"""
 
-    old_password: str = Field(..., description="旧密码")
+    old_password: str = Field(..., min_length=1, description="旧密码")
     new_password: str = Field(..., min_length=6, max_length=100, description="新密码")
 
 
@@ -277,45 +277,6 @@ async def delete_user(
         )
 
 
-@router.post("/{user_id}/change-password", summary="修改密码（管理员重置）")
-async def reset_password(
-    user_id: int,
-    password_data: PasswordReset,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """管理员重置用户密码"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
-
-    # 更新密码
-    user.password_hash = hash_password(password_data.new_password)
-
-    try:
-        db.commit()
-
-        # 记录操作日志
-        create_audit_log(
-            db=db,
-            user_id=current_user.id,
-            username=current_user.username,
-            action="user_password_reset",
-            target=f"用户: {user.username}",
-            details={"user_id": user_id},
-            ip_address=get_client_ip(request),
-        )
-
-        return {"success": True, "message": "密码重置成功"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"重置密码失败: {str(e)}",
-        )
-
-
 @router.post("/me/change-password", summary="修改当前用户密码")
 async def change_my_password(
     password_data: PasswordChange,
@@ -353,4 +314,43 @@ async def change_my_password(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"修改密码失败: {str(e)}",
+        )
+
+
+@router.post("/{user_id}/change-password", summary="重置用户密码（管理员）")
+async def reset_password(
+    user_id: int,
+    password_data: PasswordReset,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """管理员重置用户密码"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    # 更新密码
+    user.password_hash = hash_password(password_data.new_password)
+
+    try:
+        db.commit()
+
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="user_password_reset",
+            target=f"用户: {user.username}",
+            details={"user_id": user_id},
+            ip_address=get_client_ip(request),
+        )
+
+        return {"success": True, "message": "密码重置成功"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重置密码失败: {str(e)}",
         )

@@ -68,11 +68,9 @@ export const nginxApi = {
     return api.post(`/nginx/versions/${encodeURIComponent(version)}/force_stop`)
   },
 
-  // 强制释放 HTTP 端口（默认 80）
-  forceReleaseHttpPort(port = 80) {
-    return api.post('/nginx/force_release_http_port', null, {
-      params: { port }
-    })
+  // 强制释放Nginx端口（80和443）
+  forceReleaseNginxPorts() {
+    return api.post('/nginx/force_release_nginx_ports')
   },
 
   // 删除指定版本（仅在未运行状态下允许）
@@ -83,6 +81,26 @@ export const nginxApi = {
   // 获取编译日志
   getBuildLog(version) {
     return api.get(`/nginx/versions/${encodeURIComponent(version)}/build_log`)
+  },
+
+  // 检查初始设置状态
+  checkSetupStatus() {
+    return api.get('/nginx/setup/check')
+  },
+
+  // 准备默认nginx压缩包
+  prepareDefaultNginx() {
+    return api.post('/nginx/setup/prepare-default')
+  },
+
+  // 获取编译进度
+  getCompileProgress(version) {
+    return api.get(`/nginx/versions/${encodeURIComponent(version)}/compile-progress`)
+  },
+
+  // 获取指定版本的 nginx.conf 配置内容
+  getVersionConfig(version) {
+    return api.get(`/nginx/versions/${encodeURIComponent(version)}/config`)
   }
 }
 

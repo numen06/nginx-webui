@@ -32,7 +32,10 @@ export const useAuthStore = defineStore('auth', {
           const userInfo = await authApi.getCurrentUser()
           this.setUser(userInfo.user)
           
-          return { success: true }
+          return { 
+            success: true,
+            isDefaultPassword: userInfo.user?.is_default_password || false
+          }
         } else {
           return {
             success: false,
