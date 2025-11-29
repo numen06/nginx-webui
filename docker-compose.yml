@@ -4,12 +4,12 @@ services:
   nginx-webui:
     image: registry.cn-shanghai.aliyuncs.com/numen/nginx-webui
     ports:
-      - "8001:8001"
+      - "800:8000"
       - "443:443"
       - "80:80"
     volumes:
       - /opt/nginx-webui/data:/app/data
     environment:
-      - APP_PORT=8001
+      - APP_PORT=8000
     restart: always
 
