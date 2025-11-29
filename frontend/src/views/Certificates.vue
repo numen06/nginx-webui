@@ -68,16 +68,43 @@
             {{ formatDateTime(scope.row.valid_to) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" align="center">
+        <el-table-column label="操作" width="180" align="center">
           <template #default="scope">
-            <el-button size="small" type="warning" @click="handleRenew(scope.row)">
-              <el-icon><RefreshRight /></el-icon>
-              <span class="btn-label">续期</span>
-            </el-button>
-            <el-button size="small" type="danger" @click="handleDelete(scope.row)">
-              <el-icon><Delete /></el-icon>
-              <span class="btn-label">删除</span>
-            </el-button>
+            <div class="action-buttons">
+              <el-tooltip content="重新上传" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="primary"
+                  class="action-icon-btn"
+                  @click="handleReupload(scope.row)"
+                >
+                  <el-icon><UploadFilled /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="续期" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="warning"
+                  class="action-icon-btn"
+                  @click="handleRenew(scope.row)"
+                >
+                  <el-icon><RefreshRight /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="删除" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="danger"
+                  class="action-icon-btn"
+                  @click="handleDelete(scope.row)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -86,95 +113,105 @@
     <!-- 上传证书对话框 -->
     <el-dialog
       v-model="uploadDialogVisible"
-      title="上传证书"
+      :title="uploadForm.certId ? '重新上传证书' : '上传证书'"
       width="600px"
+      top="8vh"
       :close-on-click-modal="false"
+      class="cert-upload-dialog"
     >
-      <el-form :model="uploadForm" :rules="uploadRules" ref="uploadFormRef" label-width="120px">
+      <el-form :model="uploadForm" :rules="uploadRules" ref="uploadFormRef" label-width="90px" class="compact-form">
         <el-form-item label="域名" prop="domain">
           <el-input 
             v-model="uploadForm.domain" 
-            placeholder="请输入域名，例如：example.com（压缩包上传后将自动识别）"
+            :placeholder="uploadForm.certId ? '重新上传将替换现有证书' : '例如：example.com'"
+            :disabled="!!uploadForm.certId"
           />
-        </el-form-item>
-        <el-tabs v-model="uploadForm.mode" class="upload-tabs">
-          <el-tab-pane label="证书 + 私钥" name="files">
-        <el-form-item label="证书文件" required>
-          <el-upload
-            ref="certUploadRef"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="handleCertFileChange"
-            :on-remove="handleCertFileRemove"
-            accept=".crt,.pem,.cer"
-          >
-            <el-button type="primary">
-              <el-icon><FolderOpened /></el-icon>
-              <span class="btn-label">选择证书文件</span>
-            </el-button>
-            <template #tip>
-              <div class="el-upload__tip">
-                支持 .crt、.pem、.cer 格式
-              </div>
-            </template>
-          </el-upload>
-          <div v-if="uploadForm.certFile" class="file-name">
-            已选择: {{ uploadForm.certFile.name }}
+          <div v-if="uploadForm.certId" class="form-tip">
+            将替换域名 {{ uploadForm.domain }} 的现有证书和私钥
           </div>
         </el-form-item>
-        <el-form-item label="私钥文件" required>
-          <el-upload
-            ref="keyUploadRef"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="handleKeyFileChange"
-            :on-remove="handleKeyFileRemove"
-            accept=".key,.pem"
-          >
-            <el-button type="primary">
-              <el-icon><FolderOpened /></el-icon>
-              <span class="btn-label">选择私钥文件</span>
-            </el-button>
-            <template #tip>
-              <div class="el-upload__tip">
-                支持 .key、.pem 格式
-              </div>
-            </template>
-          </el-upload>
-          <div v-if="uploadForm.keyFile" class="file-name">
-            已选择: {{ uploadForm.keyFile.name }}
-          </div>
+        
+        <el-form-item label="上传方式">
+          <el-radio-group v-model="uploadForm.mode" size="small">
+            <el-radio-button label="files">文件上传</el-radio-button>
+            <el-radio-button label="archive">压缩包</el-radio-button>
+          </el-radio-group>
         </el-form-item>
-          </el-tab-pane>
-          <el-tab-pane label="压缩包自动解析" name="archive">
-            <el-form-item label="压缩包文件" required>
-              <el-upload
-                ref="archiveUploadRef"
-                :auto-upload="false"
-                :limit="1"
-                :on-change="handleArchiveFileChange"
-                :on-remove="handleArchiveFileRemove"
-                accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2"
-              >
-                <el-button type="primary">
-                  <el-icon><FolderOpened /></el-icon>
-                  <span class="btn-label">选择压缩包</span>
-                </el-button>
-                <template #tip>
-                  <div class="el-upload__tip">
-                    支持 zip、tar.gz、tar.bz2 等常见压缩格式，系统将自动识别证书与私钥
-                  </div>
-                </template>
-              </el-upload>
-              <div v-if="uploadForm.archiveFile" class="file-name">
-                已选择: {{ uploadForm.archiveFile.name }}
-              </div>
-            </el-form-item>
-          </el-tab-pane>
-        </el-tabs>
-        <el-form-item label="自动续期">
-          <el-switch v-model="uploadForm.autoRenew" />
-        </el-form-item>
+
+        <!-- 文件上传模式 -->
+        <template v-if="uploadForm.mode === 'files'">
+          <el-form-item label="证书文件" required>
+            <el-upload
+              ref="certUploadRef"
+              :auto-upload="false"
+              :limit="1"
+              :on-change="handleCertFileChange"
+              :on-remove="handleCertFileRemove"
+              accept=".crt,.pem,.cer"
+              :show-file-list="false"
+            >
+              <el-button size="small" type="primary">
+                <el-icon><FolderOpened /></el-icon>
+                选择证书
+              </el-button>
+            </el-upload>
+            <div v-if="uploadForm.certFile" class="file-selected-compact">
+              <span class="file-name-text">{{ uploadForm.certFile?.name || uploadForm.certFile?.raw?.name || '未知文件' }}</span>
+              <el-button size="small" text type="danger" @click="handleCertFileRemove">×</el-button>
+            </div>
+            <div v-if="uploadForm.domain && uploadForm.certFile && !checkFileNameMatch(uploadForm.certFile?.name || uploadForm.certFile?.raw?.name, uploadForm.domain)" class="file-warning-compact">
+              ⚠️ 文件名与域名不匹配
+            </div>
+          </el-form-item>
+          <el-form-item label="私钥文件" required>
+            <el-upload
+              ref="keyUploadRef"
+              :auto-upload="false"
+              :limit="1"
+              :on-change="handleKeyFileChange"
+              :on-remove="handleKeyFileRemove"
+              accept=".key,.pem"
+              :show-file-list="false"
+            >
+              <el-button size="small" type="primary">
+                <el-icon><FolderOpened /></el-icon>
+                选择私钥
+              </el-button>
+            </el-upload>
+            <div v-if="uploadForm.keyFile" class="file-selected-compact">
+              <span class="file-name-text">{{ uploadForm.keyFile?.name || uploadForm.keyFile?.raw?.name || '未知文件' }}</span>
+              <el-button size="small" text type="danger" @click="handleKeyFileRemove">×</el-button>
+            </div>
+            <div v-if="uploadForm.domain && uploadForm.keyFile && !checkFileNameMatch(uploadForm.keyFile?.name || uploadForm.keyFile?.raw?.name, uploadForm.domain)" class="file-warning-compact">
+              ⚠️ 文件名与域名不匹配
+            </div>
+          </el-form-item>
+        </template>
+
+        <!-- 压缩包模式 -->
+        <template v-else>
+          <el-form-item label="压缩包" required>
+            <el-upload
+              ref="archiveUploadRef"
+              :auto-upload="false"
+              :limit="1"
+              :on-change="handleArchiveFileChange"
+              :on-remove="handleArchiveFileRemove"
+              accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2"
+              :show-file-list="false"
+            >
+              <el-button size="small" type="primary">
+                <el-icon><FolderOpened /></el-icon>
+                选择压缩包
+              </el-button>
+            </el-upload>
+            <div v-if="uploadForm.archiveFile" class="file-selected-compact">
+              <span class="file-name-text">{{ uploadForm.archiveFile.name }}</span>
+              <el-button size="small" text type="danger" @click="handleArchiveFileRemove">×</el-button>
+            </div>
+            <div class="upload-tip-small">支持 zip、tar.gz、tar.bz2 格式，自动识别证书与私钥</div>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -182,14 +219,40 @@
             <el-icon><CloseBold /></el-icon>
             <span class="btn-label">取消</span>
           </el-button>
-          <el-button
-            type="primary"
-            :loading="uploading"
-            :disabled="isUploadDisabled"
-            @click="handleUploadSubmit"
-          >
+            <el-button
+              type="primary"
+              :loading="uploading"
+              :disabled="isUploadDisabled"
+              @click="handleUploadSubmit"
+            >
+              <el-icon><Check /></el-icon>
+              <span class="btn-label">{{ uploadForm.certId ? '更新' : '上传' }}</span>
+            </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 手动复制对话框 -->
+    <el-dialog
+      v-model="copyTextDialogVisible"
+      title="手动复制"
+      width="600px"
+    >
+      <div style="margin-bottom: 12px; color: var(--el-text-color-regular);">
+        复制失败，请手动选择并复制以下内容：
+      </div>
+      <el-input
+        v-model="copyTextContent"
+        type="textarea"
+        :rows="4"
+        readonly
+        style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;"
+      />
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="primary" @click="copyTextDialogVisible = false">
             <el-icon><Check /></el-icon>
-            <span class="btn-label">上传</span>
+            <span class="btn-label">已复制</span>
           </el-button>
         </span>
       </template>
@@ -211,6 +274,8 @@ const uploadFormRef = ref(null)
 const certUploadRef = ref(null)
 const keyUploadRef = ref(null)
 const archiveUploadRef = ref(null)
+const copyTextDialogVisible = ref(false)
+const copyTextContent = ref('')
 
 const uploadForm = ref({
   domain: '',
@@ -218,7 +283,7 @@ const uploadForm = ref({
   keyFile: null,
   archiveFile: null,
   mode: 'files',
-  autoRenew: false
+  certId: null // 用于重新上传时标识要更新的证书ID
 })
 
 const isUploadDisabled = computed(() => {
@@ -271,7 +336,28 @@ const handleUpload = () => {
     keyFile: null,
     archiveFile: null,
     mode: 'files',
-    autoRenew: false
+    certId: null
+  }
+  if (certUploadRef.value) {
+    certUploadRef.value.clearFiles()
+  }
+  if (keyUploadRef.value) {
+    keyUploadRef.value.clearFiles()
+  }
+  if (archiveUploadRef.value) {
+    archiveUploadRef.value.clearFiles()
+  }
+  uploadDialogVisible.value = true
+}
+
+const handleReupload = (cert) => {
+  uploadForm.value = {
+    domain: cert.domain,
+    certFile: null,
+    keyFile: null,
+    archiveFile: null,
+    mode: 'files',
+    certId: cert.id
   }
   if (certUploadRef.value) {
     certUploadRef.value.clearFiles()
@@ -291,6 +377,9 @@ const handleCertFileChange = (file) => {
 
 const handleCertFileRemove = () => {
   uploadForm.value.certFile = null
+  if (certUploadRef.value) {
+    certUploadRef.value.clearFiles()
+  }
 }
 
 const handleKeyFileChange = (file) => {
@@ -299,6 +388,9 @@ const handleKeyFileChange = (file) => {
 
 const handleKeyFileRemove = () => {
   uploadForm.value.keyFile = null
+  if (keyUploadRef.value) {
+    keyUploadRef.value.clearFiles()
+  }
 }
 
 const handleArchiveFileChange = async (file) => {
@@ -321,6 +413,25 @@ const handleArchiveFileChange = async (file) => {
 
 const handleArchiveFileRemove = () => {
   uploadForm.value.archiveFile = null
+  if (archiveUploadRef.value) {
+    archiveUploadRef.value.clearFiles()
+  }
+}
+
+// 检查文件名是否包含域名
+const checkFileNameMatch = (fileName, domain) => {
+  if (!fileName || !domain) return true
+  try {
+    // 移除文件扩展名和常见前缀后进行比较
+    const nameWithoutExt = String(fileName).replace(/\.(crt|pem|cer|key)$/i, '').toLowerCase()
+    const domainLower = String(domain).toLowerCase()
+    // 检查文件名中是否包含域名
+    return nameWithoutExt.includes(domainLower.replace(/\./g, '')) || 
+           nameWithoutExt.includes(domainLower)
+  } catch (error) {
+    console.warn('检查文件名匹配时出错:', error)
+    return true // 出错时默认返回true，不显示警告
+  }
 }
 
 const handleUploadSubmit = async () => {
@@ -350,17 +461,19 @@ const handleUploadSubmit = async () => {
       await certificatesApi.uploadCertificateArchive(
         uploadForm.value.domain,
         uploadForm.value.archiveFile,
-        uploadForm.value.autoRenew
+        false, // 手动上传的证书不支持自动续期
+        uploadForm.value.certId
       )
-      ElMessage.success('证书压缩包上传成功')
+      ElMessage.success(uploadForm.value.certId ? '证书更新成功' : '证书压缩包上传成功')
     } else {
     await certificatesApi.uploadCertificate(
       uploadForm.value.domain,
       uploadForm.value.certFile,
       uploadForm.value.keyFile,
-      uploadForm.value.autoRenew
+      false, // 手动上传的证书不支持自动续期
+      uploadForm.value.certId
     )
-    ElMessage.success('证书上传成功')
+    ElMessage.success(uploadForm.value.certId ? '证书更新成功' : '证书上传成功')
     }
     uploadDialogVisible.value = false
     loadCertificates()
@@ -396,12 +509,43 @@ const handleDelete = async (cert) => {
 
 const handleCopy = async (text) => {
   if (!text) return
+  
+  // 方法1: 尝试使用现代 Clipboard API
+  if (navigator.clipboard && navigator.clipboard.writeText) {
   try {
     await navigator.clipboard.writeText(text)
     ElMessage.success('已复制到剪贴板')
-  } catch (error) {
-    ElMessage.error('复制失败，请手动复制')
+      return
+    } catch (error) {
+      console.warn('Clipboard API 失败，尝试备用方法:', error)
+    }
   }
+  
+  // 方法2: 使用传统的 execCommand 方法（备用）
+  try {
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+    
+    const successful = document.execCommand('copy')
+    document.body.removeChild(textArea)
+    
+    if (successful) {
+      ElMessage.success('已复制到剪贴板')
+      return
+    }
+  } catch (error) {
+    console.warn('execCommand 方法失败:', error)
+  }
+  
+  // 方法3: 如果都失败了，显示对话框让用户手动复制
+  copyTextContent.value = text
+  copyTextDialogVisible.value = true
 }
 
 onMounted(() => {
@@ -483,23 +627,82 @@ onMounted(() => {
   font-size: 13px;
 }
 
-.upload-tabs {
-  margin-top: 8px;
+.compact-form :deep(.el-form-item) {
+  margin-bottom: 14px;
 }
 
-.upload-tabs :deep(.el-tabs__header) {
-  margin-bottom: 20px;
+.compact-form :deep(.el-form-item__label) {
+  font-size: 13px;
+  padding-bottom: 4px;
 }
 
-.upload-tabs :deep(.el-tabs__item) {
-  font-size: 14px;
-  padding: 0 20px;
-  height: 40px;
-  line-height: 40px;
+.form-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
 }
 
-.upload-tabs :deep(.el-tabs__content) {
-  padding: 0;
+
+
+.file-selected-compact {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background-color: var(--el-fill-color-lighter);
+  border-radius: 4px;
+  border: 1px solid var(--el-border-color-light);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-name-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--el-text-color-primary);
+  word-break: break-all;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+  line-height: 1.4;
+}
+
+.file-warning-compact {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--el-color-warning);
+  line-height: 1.3;
+}
+
+.upload-tip-small {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.3;
+}
+
+.action-buttons {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-icon-btn {
+  margin: 0;
+}
+
+.cert-upload-dialog :deep(.el-dialog__body) {
+  max-height: calc(85vh - 120px);
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.cert-upload-dialog :deep(.el-upload) {
+  width: 100%;
+}
+
+.cert-upload-dialog :deep(.el-upload .el-button) {
+  width: 100%;
 }
 </style>
 

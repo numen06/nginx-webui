@@ -171,14 +171,14 @@
               <el-icon><RefreshRight /></el-icon>
               <span class="btn-label">刷新</span>
             </el-button>
-            <el-button
-              type="danger"
-              size="small"
-              @click="forceReleaseHttpPort"
-            >
+              <el-button
+                type="danger"
+                size="small"
+                @click="forceReleaseHttpPort"
+              >
               <el-icon><Lightning /></el-icon>
               <span class="btn-label">强制释放Nginx端口</span>
-            </el-button>
+              </el-button>
           </div>
         </div>
       </template>
@@ -574,7 +574,7 @@
                 <el-tag v-for="module in defaultModules" :key="module" size="small" type="info">
                   {{ module }}
                 </el-tag>
-              </div>
+  </div>
             </el-form-item>
             <el-form-item label="自定义参数">
               <el-input
