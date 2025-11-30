@@ -131,6 +131,7 @@ docker-compose up -d
 docker run -d \
   -p 80:80 \
   -p 443:443 \
+  -p 8000:8000 \
   -v $(pwd)/nginx-webui/data:/app/data \
   --name nginx-webui \
   registry.cn-shanghai.aliyuncs.com/numen/nginx-webui:latest
