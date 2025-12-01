@@ -350,7 +350,7 @@ ANALYSIS_STATE: Dict[str, Any] = {}
 reset_analysis_state()
 
 
-def _run_analyze_in_background(time_range_hours: int, trigger: str = "manual") -> None:
+def _run_analyze_in_background(time_range_hours: int, trigger: str = "manual", full: bool = False) -> None:
     """在单独线程中运行日志分析，避免阻塞请求线程"""
 
     def _task():
@@ -359,6 +359,7 @@ def _run_analyze_in_background(time_range_hours: int, trigger: str = "manual") -
                 time_range_hours=time_range_hours,
                 use_cache=False,
                 trigger=trigger,
+                full=full,
             )
         except Exception as e:
             ANALYSIS_STATE["last_error"] = str(e)
@@ -366,8 +367,9 @@ def _run_analyze_in_background(time_range_hours: int, trigger: str = "manual") -
     # 如果已经在分析中，直接跳过
     if ANALYSIS_STATE.get("is_running"):
         logger.info(
-            "[statistics] 后台分析已在进行中，本次触发将被忽略（hours=%s）",
+            "[statistics] 后台分析已在进行中，本次触发将被忽略（hours=%s, full=%s）",
             time_range_hours,
+            full,
         )
         return
 
@@ -380,19 +382,24 @@ def analyze_logs(
     use_cache: bool = True,
     trigger: str = "auto",
     save_cache: bool = True,
+    full: bool = False,
 ) -> Dict:
     """
     分析日志并返回完整统计数据（保留用于兼容性）
 
     Args:
-        time_range_hours: 时间范围（小时）
+        time_range_hours: 时间范围（小时），当 full=True 时此参数仅用于缓存键生成，不影响实际分析范围
         use_cache: 是否使用缓存
+        trigger: 触发方式（auto / manual / watcher / auto_fallback）
+        save_cache: 是否保存到缓存
+        full: 是否全量分析（True=分析整个日志文件，False=只分析指定时间范围内的日志）
     """
     logger.info(
-        "[statistics] 开始分析访问日志，time_range_hours=%s, use_cache=%s, trigger=%s",
+        "[statistics] 开始分析访问日志，time_range_hours=%s, use_cache=%s, trigger=%s, full=%s",
         time_range_hours,
         use_cache,
         trigger,
+        full,
     )
 
     # 尝试从缓存获取
@@ -408,9 +415,9 @@ def analyze_logs(
     access_log_path = _resolve_access_log_path()
     error_log_path = _resolve_error_log_path()
 
-    # 计算时间范围
+    # 计算时间范围（全量分析时仍需要 end_time 用于统计，但 start_time 不用于过滤）
     end_time = datetime.now()
-    start_time = end_time - timedelta(hours=time_range_hours)
+    start_time = end_time - timedelta(hours=time_range_hours) if not full else None
 
     # 标记分析开始（任务级状态）
     ANALYSIS_STATE["is_running"] = True
@@ -424,7 +431,7 @@ def analyze_logs(
     # 先从尾部读取并解析出目标时间范围内的日志条目列表
     # 然后使用多线程对条目列表做并行统计，加快大数据量下的分析速度
     entries: List[Dict[str, Any]] = []
-    # 上次分析时间：按“日志中最后一条有效记录的时间”来定义
+    # 上次分析时间：按"日志中最后一条有效记录的时间"来定义
     last_entry_time: Optional[datetime] = None
 
     start_ts = datetime.now()
@@ -435,13 +442,14 @@ def analyze_logs(
             if not entry or not entry.get("date"):
                 continue
 
-            # 过滤时间范围（从新到旧扫描，遇到早于时间边界的日志后可以直接停止）
-            if entry["date"] < start_time:
+            # 全量分析：不进行时间过滤，读取整个日志文件
+            # 增量分析：过滤时间范围（从新到旧扫描，遇到早于时间边界的日志后可以直接停止）
+            if not full and start_time and entry["date"] < start_time:
                 break
 
             entries.append(entry)
 
-            # 记录最新的日志时间（用于“上次分析时间”展示）
+            # 记录最新的日志时间（用于"上次分析时间"展示）
             if (last_entry_time is None) or (entry["date"] > last_entry_time):
                 last_entry_time = entry["date"]
     except Exception as e:
@@ -584,7 +592,8 @@ def analyze_logs(
     duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
     ANALYSIS_STATE["last_duration_seconds"] = duration
     logger.info(
-        "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
+        "[statistics] 日志分析完成，full=%s, time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
+        full,
         time_range_hours,
         total_requests,
         duration,
@@ -617,11 +626,12 @@ def analyze_logs(
     if error_log_file.exists():
         try:
             error_lines = read_log_tail(error_log_file, max_lines=10000)
-            # 统计最近时间范围内的错误日志
+            # 统计最近时间范围内的错误日志（全量分析时统计所有错误日志）
             for line in error_lines:
                 log_date = parse_log_date(line)
-                if log_date and log_date >= start_time:
-                    error_log_count += 1
+                if log_date:
+                    if full or (start_time and log_date >= start_time):
+                        error_log_count += 1
         except Exception:
             pass
 
@@ -641,7 +651,7 @@ def analyze_logs(
     result = {
         "success": True,
         "time_range_hours": time_range_hours,
-        "start_time": start_time.isoformat(),
+        "start_time": start_time.isoformat() if start_time else None,
         "end_time": end_time.isoformat(),
         # 分析状态相关字段（数据粒度）
         "analysis_status": "success",
@@ -866,6 +876,7 @@ async def trigger_statistics_analyze(
         _run_analyze_in_background(
             time_range_hours=hours,
             trigger="manual_full" if full else "manual",
+            full=full,
         )
         return {
             "success": True,
