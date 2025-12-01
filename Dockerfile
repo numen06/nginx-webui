@@ -29,9 +29,6 @@ ENV APP_PORT=8000
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
-# 禁用 SELinux
-RUN setenforce 0
-
 # 更新包列表
 RUN dnf update -y
 
@@ -43,8 +40,6 @@ RUN dnf install -y ca-certificates curl wget tar iproute iputils net-tools \
 # 清理缓存
 RUN dnf clean all && \
     rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
-
-
 
 # 设置工作目录
 WORKDIR /app
