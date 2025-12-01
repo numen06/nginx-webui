@@ -40,15 +40,18 @@ from app.routers import (
     git,
 )
 from app.routers import statistics, system
+from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
 from app.routers.statistics import analyze_logs
 
 # 初始化数据库
 init_db()
 
-# 创建 FastAPI 应用
+# 创建 FastAPI 应用（版本号使用程序版本，而不是 Nginx 编译时间）
 app = FastAPI(
-    title="Nginx WebUI API", description="Nginx 管理系统的后端 API", version="1.0.0"
+    title="Nginx WebUI API",
+    description="Nginx 管理系统的后端 API",
+    version=APP_VERSION,
 )
 
 # 配置 CORS
@@ -179,9 +182,11 @@ async def startup_event():
     
     # 启动后台任务：定期更新统计缓存
     def background_cache_updater_sync():
-        """后台任务：定期更新统计缓存（同步版本，在线程中运行）"""
+        """后台任务：定期更新统计缓存（同步版本，在线程中运行）
+
+        要求：程序启动后立即开始后台分析，而不是等待较长延迟。
+        """
         import time
-        time.sleep(30)  # 启动后等待30秒再开始
         while True:
             try:
                 # 更新常用时间范围的缓存（1小时、24小时、7天）
@@ -244,7 +249,7 @@ if static_dir.exists():
 @app.get("/", summary="API 根路径")
 async def root():
     """API 根路径"""
-    return {"message": "Nginx WebUI API", "version": "1.0.0", "docs": "/docs"}
+    return {"message": "Nginx WebUI API", "version": APP_VERSION, "docs": "/docs"}
 
 
 @app.get("/api/health", summary="健康检查")

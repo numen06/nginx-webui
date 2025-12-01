@@ -1,10 +1,16 @@
 """
 系统版本管理工具
-基于编译时间生成版本号
+
+- APP 版本号：表示当前程序版本，例如 1.0.0（来自环境变量或默认值）
+- 构建时间：镜像 / 程序的构建时间，用于辅助排查问题
 """
 from pathlib import Path
 from datetime import datetime
 import os
+
+# 当前程序版本号（系统版本）
+# 优先使用环境变量 APP_VERSION，便于在 CI/CD 中注入版本号
+APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
 
 
 def get_build_time_file() -> Path:
@@ -48,23 +54,12 @@ def get_build_time() -> str:
 
 def get_version() -> str:
     """
-    获取系统版本号（基于构建时间）
+    获取系统版本号（当前程序版本，而不是 Nginx 编译时间）
     
     Returns:
-        版本号字符串，格式：v.YYYYMMDD.HHMMSS
+        版本号字符串，例如：1.0.0
     """
-    build_time = get_build_time()
-    
-    # 格式：v.YYYYMMDD.HHMMSS
-    if len(build_time) >= 14:
-        date_part = build_time[:8]  # YYYYMMDD
-        time_part = build_time[8:14]  # HHMMSS
-        return f"v.{date_part}.{time_part}"
-    elif len(build_time) >= 8:
-        # 只有日期部分
-        return f"v.{build_time[:8]}"
-    else:
-        return f"v.{build_time}"
+    return APP_VERSION
 
 
 def get_version_info() -> dict:
@@ -76,7 +71,7 @@ def get_version_info() -> dict:
     """
     build_time = get_build_time()
     
-    # 解析构建时间
+    # 解析构建时间（用于展示构建时间信息，方便排查问题）
     try:
         if len(build_time) >= 14:
             build_datetime = datetime.strptime(build_time, "%Y%m%d%H%M%S")
@@ -87,10 +82,14 @@ def get_version_info() -> dict:
     except Exception:
         build_datetime = None
     
+    # 系统版本 = 当前程序版本
     version = get_version()
     
     return {
+        # 对外统一使用 version 作为“系统版本”（当前程序版本）
         "version": version,
+        "app_version": version,
+        # 构建相关信息仅用于辅助展示 / 排查
         "build_time": build_time,
         "build_datetime": build_datetime.isoformat() if build_datetime else None,
         "build_date": build_datetime.strftime("%Y-%m-%d") if build_datetime else None,
