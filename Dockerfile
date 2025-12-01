@@ -30,13 +30,20 @@ RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
 
 # 安装系统依赖（包含编译 Nginx 所需工具链）
-# 合并安装命令并清理缓存以减少镜像大小
-RUN dnf update -y && \
-    dnf install -y ca-certificates curl wget tar iproute iputils net-tools\
-                   gcc gcc-c++ make \
-                   pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
+# 说明：
+# - 阿里云龙蜥（Alibaba Cloud Linux 3）官方 Python 镜像中推荐使用 yum
+# - 这里使用 yum 以提高兼容性，避免 dnf 在部分环境中不可用导致构建失败
+RUN yum -y update && \
+    yum install -y \
+        ca-certificates \
+        curl wget tar \
+        iproute iputils net-tools \
+        gcc gcc-c++ make \
+        pcre pcre-devel \
+        zlib zlib-devel \
+        openssl openssl-devel && \
+    yum clean all && \
+    rm -rf /var/cache/yum/* /tmp/* /var/tmp/*
 
 # 设置工作目录
 WORKDIR /app
