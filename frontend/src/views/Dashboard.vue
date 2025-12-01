@@ -321,7 +321,11 @@
             </span>
           </template>
           <el-table :data="stats.attacks" stripe>
-            <el-table-column prop="time" label="时间" width="180" />
+            <el-table-column prop="time" label="时间" width="180">
+              <template #default="{ row }">
+                {{ row.time ? formatDateTime(row.time) : '-' }}
+              </template>
+            </el-table-column>
             <el-table-column prop="ip" label="IP地址" width="150" />
             <el-table-column prop="path" label="路径" show-overflow-tooltip />
             <el-table-column prop="status" label="状态码" width="100" align="center" />
