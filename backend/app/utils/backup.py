@@ -47,7 +47,7 @@ def create_backup(db: Session, created_by_id: Optional[int] = None) -> ConfigBac
         filename=backup_filename,
         file_path=str(backup_path),
         created_by_id=created_by_id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(),
     )
     db.add(backup_record)
     db.commit()

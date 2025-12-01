@@ -57,7 +57,7 @@ def get_cached_statistics(time_range_hours: int, max_age_minutes: int = 5) -> Op
             return None
         
         # 检查缓存是否过期
-        age = datetime.utcnow() - cache.updated_at.replace(tzinfo=None)
+        age = datetime.now() - cache.updated_at.replace(tzinfo=None)
         if age > timedelta(minutes=max_age_minutes):
             return None
         
@@ -105,7 +105,7 @@ def save_statistics_cache(
             cache.start_time = start_time
             cache.end_time = end_time
             cache.last_log_position = last_log_position
-            cache.updated_at = datetime.utcnow()
+            cache.updated_at = datetime.now()
         else:
             # 创建新缓存
             cache = StatisticsCache(
@@ -160,7 +160,7 @@ def cleanup_old_cache(max_age_hours: int = 24) -> None:
     """
     db = SessionLocal()
     try:
-        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+        cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
         deleted = db.query(StatisticsCache).filter(
             StatisticsCache.updated_at < cutoff_time
         ).delete()

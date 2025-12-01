@@ -389,7 +389,7 @@ async def get_certificates(
         # 检查证书是否即将过期（30天内）
         days_until_expiry = None
         if cert.valid_to:
-            days_until_expiry = (cert.valid_to - datetime.utcnow()).days
+            days_until_expiry = (cert.valid_to - datetime.now()).days
 
         result.append(
             {
@@ -959,7 +959,7 @@ async def check_certificate_expiry(
     for cert in certificates:
         days_until_expiry = None
         if cert.valid_to:
-            days_until_expiry = (cert.valid_to - datetime.utcnow()).days
+            days_until_expiry = (cert.valid_to - datetime.now()).days
 
         result.append(
             {

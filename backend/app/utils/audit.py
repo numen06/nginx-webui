@@ -43,7 +43,7 @@ def create_audit_log(
         target=target,
         details=json.dumps(details, ensure_ascii=False) if details else None,
         ip_address=ip_address,
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now()
     )
     db.add(log)
     db.commit()

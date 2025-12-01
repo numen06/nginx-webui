@@ -234,7 +234,8 @@ const handleDownload = (command) => {
       ElMessage.warning('没有可下载的日志')
       return
     }
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+    const now = new Date()
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
     const filename = `${props.filename}-${timestamp}.txt`
     downloadLogs(content, filename)
   } else if (command === 'selected') {
@@ -244,7 +245,8 @@ const handleDownload = (command) => {
     }
     const sortedIndices = Array.from(selectedLines.value).sort((a, b) => a - b)
     const content = getLogContent(true, sortedIndices)
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+    const now2 = new Date()
+    const timestamp = `${now2.getFullYear()}${String(now2.getMonth() + 1).padStart(2, '0')}${String(now2.getDate()).padStart(2, '0')}_${String(now2.getHours()).padStart(2, '0')}${String(now2.getMinutes()).padStart(2, '0')}${String(now2.getSeconds()).padStart(2, '0')}`
     const filename = `${props.filename}-selected-${timestamp}.txt`
     downloadLogs(content, filename)
   }

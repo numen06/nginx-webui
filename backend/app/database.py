@@ -86,7 +86,7 @@ def init_db():
                 username="admin",
                 password_hash=password_hash,
                 is_active=True,
-                created_at=datetime.utcnow()
+                created_at=datetime.now()
             )
             db.add(admin_user)
             db.commit()
