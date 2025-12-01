@@ -108,7 +108,7 @@
         </el-table-column>
         <el-table-column label="修改时间" width="200" align="center" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.modified_time || '-' }}
+            {{ formatDateTime(row.modified_time) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="400" fixed="right" align="center" class-name="file-ops-column">
@@ -247,6 +247,7 @@ import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatDateTime } from '../utils/date'
 import {
   Folder,
   Document,

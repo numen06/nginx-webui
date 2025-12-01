@@ -25,6 +25,10 @@ FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3
 ENV PYTHONUNBUFFERED=1
 ENV APP_PORT=8000
 
+#设置时区
+RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+
 # 安装系统依赖（包含编译 Nginx 所需工具链）
 # 合并安装命令并清理缓存以减少镜像大小
 RUN dnf update -y && \

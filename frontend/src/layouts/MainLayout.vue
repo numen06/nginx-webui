@@ -1,6 +1,6 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="200px" class="sidebar">
+    <el-aside :width="isCollapsed ? '64px' : '200px'" class="sidebar" :class="{ 'is-collapsed': isCollapsed }">
       <div class="logo">
         <svg viewBox="0 0 120 120" class="logo-icon">
           <circle cx="60" cy="60" r="50" fill="none" stroke="var(--nginx-green)" stroke-width="3" opacity="0.3"/>
@@ -8,7 +8,7 @@
           <path d="M 40 60 L 60 40 L 80 60 L 60 80 Z" fill="var(--nginx-green)"/>
           <circle cx="60" cy="60" r="8" fill="var(--nginx-green-light)"/>
         </svg>
-        <span class="logo-text">Nginx WebUI</span>
+        <span v-if="!isCollapsed" class="logo-text">Nginx WebUI</span>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -17,44 +17,58 @@
         background-color="var(--bg-secondary)"
         text-color="var(--text-secondary)"
         active-text-color="var(--nginx-green)"
+        :collapse="isCollapsed"
       >
         <el-menu-item index="/dashboard">
           <el-icon><Odometer /></el-icon>
-          <span>仪表盘</span>
+          <span v-if="!isCollapsed">仪表盘</span>
         </el-menu-item>
         <el-menu-item index="/config">
           <el-icon><Edit /></el-icon>
-          <span>配置管理</span>
+          <span v-if="!isCollapsed">配置管理</span>
         </el-menu-item>
         <el-menu-item index="/logs">
           <el-icon><Document /></el-icon>
-          <span>日志查看</span>
+          <span v-if="!isCollapsed">日志查看</span>
         </el-menu-item>
         <el-menu-item index="/files">
           <el-icon><Folder /></el-icon>
-          <span>文件管理</span>
+          <span v-if="!isCollapsed">文件管理</span>
         </el-menu-item>
         <el-menu-item index="/static-package">
           <el-icon><Box /></el-icon>
-          <span>静态资源包</span>
+          <span v-if="!isCollapsed">静态资源包</span>
         </el-menu-item>
         <el-menu-item index="/certificates">
           <el-icon><Lock /></el-icon>
-          <span>证书管理</span>
+          <span v-if="!isCollapsed">证书管理</span>
         </el-menu-item>
         <el-menu-item index="/audit">
           <el-icon><View /></el-icon>
-          <span>操作日志</span>
+          <span v-if="!isCollapsed">操作日志</span>
         </el-menu-item>
         <el-menu-item index="/nginx">
           <el-icon><Odometer /></el-icon>
-          <span>Nginx 管理</span>
+          <span v-if="!isCollapsed">Nginx 管理</span>
         </el-menu-item>
         <el-menu-item index="/git-sync">
           <el-icon><Share /></el-icon>
-          <span>Git 配置同步</span>
+          <span v-if="!isCollapsed">Git 配置同步</span>
         </el-menu-item>
       </el-menu>
+      <div class="sidebar-footer">
+        <el-button
+          class="collapse-btn"
+          text
+          circle
+          :icon="isCollapsed ? Expand : Fold"
+          @click="toggleCollapse"
+        />
+        <div class="sidebar-version" v-if="systemVersion.version && !isCollapsed">
+          <span class="version-label">系统版本</span>
+          <span class="version-value">{{ systemVersion.version }}</span>
+        </div>
+      </div>
     </el-aside>
     <el-container class="content-container">
       <el-header class="header">
@@ -110,12 +124,13 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { useSetupStore } from '../store/setup'
 import { ElMessage } from 'element-plus'
-import { SwitchButton, User, ArrowDown } from '@element-plus/icons-vue'
+import { SwitchButton, User, ArrowDown, Fold, Expand } from '@element-plus/icons-vue'
+import { systemApi } from '../api/system'
 import NginxSetupWizard from '../components/NginxSetupWizard.vue'
 
 const router = useRouter()
@@ -124,6 +139,14 @@ const authStore = useAuthStore()
 const setupStore = useSetupStore()
 
 const activeMenu = computed(() => route.path)
+
+// 侧边栏折叠状态
+const isCollapsed = ref(false)
+
+// 系统版本信息（用于侧边栏底部展示）
+const systemVersion = ref({
+  version: null
+})
 
 // 使用store中的状态
 const showSetupWizard = computed({
@@ -149,6 +172,26 @@ const handleLogout = () => {
   ElMessage.success('已退出登录')
   router.push('/login')
 }
+
+const toggleCollapse = () => {
+  isCollapsed.value = !isCollapsed.value
+}
+
+const loadSystemVersion = async () => {
+  try {
+    const res = await systemApi.getVersion()
+    if (res.success) {
+      systemVersion.value.version = res.version
+    }
+  } catch (e) {
+    // 版本信息非关键，不弹错误
+    console.error('获取系统版本失败:', e)
+  }
+}
+
+onMounted(() => {
+  loadSystemVersion()
+})
 </script>
 
 <style scoped>
@@ -167,6 +210,8 @@ const handleLogout = () => {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
   border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
 }
 
 .logo {
@@ -209,9 +254,42 @@ const handleLogout = () => {
 
 .sidebar-menu {
   border-right: none;
-  height: calc(100vh - 60px);
+  flex: 1;
   overflow-y: auto;
   background-color: var(--bg-secondary);
+}
+
+.sidebar-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.sidebar-version {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.version-label {
+  opacity: 0.7;
+}
+
+.version-value {
+  font-weight: 500;
+  color: var(--nginx-green-light);
+}
+
+.collapse-btn {
+  color: var(--text-secondary);
+  padding: 4px;
 }
 
 .header {

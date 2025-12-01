@@ -2050,7 +2050,7 @@ async def upgrade_to_production_version(
 
     # 执行升级
     result = _upgrade_to_production_version(version)
-    
+
     # 清除状态缓存（版本切换后状态可能变化）
     if result.get("success"):
         clear_nginx_status_cache()
@@ -2482,10 +2482,10 @@ async def start_nginx_version(
     )
 
     info = _get_version_status(version)
-    
+
     # 清除状态缓存（启动后状态已变化）
     clear_nginx_status_cache()
-    
+
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 启动成功",
@@ -2574,10 +2574,10 @@ async def stop_nginx_version(
     )
 
     info = _get_version_status(version)
-    
+
     # 清除状态缓存（停止后状态已变化）
     clear_nginx_status_cache()
-    
+
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 已停止",
@@ -2730,30 +2730,105 @@ def _get_port_pids(port: int) -> List[int]:
                         except (ValueError, IndexError):
                             continue
         else:
-            # Linux/macOS 使用 lsof 命令
-            cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            if result.returncode not in (0, 1):
-                # 1 表示没有匹配记录，也视为正常
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"lsof 调用错误: {result.stderr.strip() or result.stdout.strip()}",
+            # Linux/macOS 优先使用 lsof，其次使用 ss 或 netstat 作为兼容方案（例如龙蜥系统可能未安装 lsof）
+            try:
+                # 优先使用 lsof 命令
+                cmd = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
 
-            lines = [
-                line.strip() for line in result.stdout.splitlines() if line.strip()
-            ]
-            for line in lines:
+                if result.returncode not in (0, 1):
+                    # 1 表示没有匹配记录，也视为正常
+                    raise RuntimeError(
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or "lsof 调用失败"
+                    )
+
+                lines = [
+                    line.strip() for line in result.stdout.splitlines() if line.strip()
+                ]
+                for line in lines:
+                    try:
+                        pids.append(int(line))
+                    except ValueError:
+                        continue
+            except (FileNotFoundError, RuntimeError):
+                # lsof 不存在或调用失败时，尝试使用 ss 命令
                 try:
-                    pids.append(int(line))
-                except ValueError:
-                    continue
+                    # 示例输出（包含 pid 信息）:
+                    # LISTEN 0 128 *:80 *:* users:(("nginx",pid=1234,fd=6))
+                    cmd = ["ss", "-lntp"]
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            result.stderr.strip()
+                            or result.stdout.strip()
+                            or "ss 调用失败"
+                        )
+
+                    import re
+
+                    pid_pattern = re.compile(r"pid=(\d+)")
+                    lines = result.stdout.splitlines()
+                    for line in lines:
+                        if f":{port} " not in line and f":{port}\n" not in line:
+                            continue
+                        for m in pid_pattern.finditer(line):
+                            try:
+                                pid = int(m.group(1))
+                                if pid > 0:
+                                    pids.append(pid)
+                            except ValueError:
+                                continue
+                except (FileNotFoundError, RuntimeError):
+                    # ss 也不可用时，尝试使用 netstat（某些龙蜥/精简系统可能只有 netstat）
+                    cmd = ["netstat", "-tunlp"]
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+
+                    if result.returncode != 0:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=(
+                                "无法通过 lsof/ss/netstat 获取端口占用信息，"
+                                "请确认系统已安装相应网络工具。"
+                            ),
+                        )
+
+                    lines = result.stdout.splitlines()
+                    for line in lines:
+                        if f":{port} " not in line and f":{port}\n" not in line:
+                            continue
+                        parts = line.split()
+                        if not parts:
+                            continue
+                        # netstat -tunlp 的 PID/Program 名一般在最后一列，形如 "1234/nginx"
+                        pid_part = parts[-1]
+                        if "/" in pid_part:
+                            pid_str = pid_part.split("/", 1)[0]
+                        else:
+                            pid_str = pid_part
+                        try:
+                            pid = int(pid_str)
+                            if pid > 0:
+                                pids.append(pid)
+                        except ValueError:
+                            continue
     except HTTPException:
         raise
     except Exception as e:

@@ -326,6 +326,7 @@ ANALYSIS_STATE: Dict[str, Any] = {
     "last_error": None,  # 最近一次分析错误信息（如果有）
     "last_success": None,  # 最近一次分析是否成功 True/False/None
     "last_trigger": None,  # 最近一次分析触发方式：auto / manual
+    "last_duration_seconds": 0.0,  # 最近一次完整任务耗时（秒）
 }
 
 
@@ -491,6 +492,7 @@ def analyze_logs(
         ANALYSIS_STATE["is_running"] = False
         ANALYSIS_STATE["last_end_time"] = datetime.now()
         duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
+        ANALYSIS_STATE["last_duration_seconds"] = duration
         logger.info(
             "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
             time_range_hours,
@@ -672,18 +674,32 @@ async def get_statistics_summary(
     - 只从缓存读取 summary，不在请求期间重新解析日志
     """
     try:
-        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        # 对基础统计，只要有缓存就展示最新一次结果，不因“过期”而清空，
+        # 以避免在分析耗时过长时，前端看不到上一次的分析时间。
+        cached_data = get_cached_statistics(hours, max_age_minutes=None)
         if cached_data and cached_data.get("summary"):
             # 任务级状态（后台分析任务本身的状态）
             last_start = ANALYSIS_STATE.get("last_start_time")
             last_end = ANALYSIS_STATE.get("last_end_time")
+            is_running = ANALYSIS_STATE.get("is_running", False)
+
+            # 最近一次完整任务耗时（秒）
+            last_duration_seconds = ANALYSIS_STATE.get("last_duration_seconds") or 0.0
+
+            # 当前运行中的任务耗时（秒，动态计算）
+            running_duration_seconds = None
+            if is_running and last_start:
+                running_duration_seconds = (datetime.now() - last_start).total_seconds()
+
             analysis_job = {
-                "is_running": ANALYSIS_STATE.get("is_running", False),
+                "is_running": is_running,
                 "last_start_time": last_start.isoformat() if last_start else None,
                 "last_end_time": last_end.isoformat() if last_end else None,
                 "last_error": ANALYSIS_STATE.get("last_error"),
                 "last_success": ANALYSIS_STATE.get("last_success"),
                 "last_trigger": ANALYSIS_STATE.get("last_trigger"),
+                "last_duration_seconds": last_duration_seconds,
+                "running_duration_seconds": running_duration_seconds,
             }
 
             return {

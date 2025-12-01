@@ -194,7 +194,10 @@ async def list_files(
                 path=str(item.relative_to(root_dir)),
                 is_dir=item.is_dir(),
                 size=stat.st_size if item.is_file() else 0,
-                modified_time=datetime.fromtimestamp(stat.st_mtime).isoformat()
+                # 统一使用本地时间的标准格式（YYYY-MM-DD HH:mm:ss）
+                modified_time=datetime.fromtimestamp(stat.st_mtime).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
             ))
         
         # 按名称排序（目录在前）

@@ -18,6 +18,7 @@
                   :disabled="statsStatus.status === 'analyzing' || analyzingManual"
                   @click="triggerAnalyzeNow"
                 >
+                  <el-icon style="margin-right: 4px;"><DataAnalysis /></el-icon>
                   立即分析
                 </el-button>
               </div>
@@ -44,49 +45,29 @@
             <el-descriptions-item label="运行时间" :span="2">
               <el-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</el-text>
             </el-descriptions-item>
-            <el-descriptions-item label="系统版本" :span="2">
-              <el-tag v-if="systemVersion.version" type="info" size="small">
-                {{ systemVersion.version }}
-              </el-tag>
-              <span v-else class="text-muted">未知</span>
-            </el-descriptions-item>
             <el-descriptions-item label="统计分析状态">
               <el-tag
-                v-if="statsStatus.status === 'analyzing'"
-                type="info"
+                class="analysis-status-tag"
+                :type="analysisTagType"
                 size="small"
               >
-                分析中
+                {{ analysisTagText }}
               </el-tag>
-              <el-tag
-                v-else-if="statsStatus.status === 'ready'"
-                type="success"
-                size="small"
-              >
-                正常
-              </el-tag>
-              <el-tag
-                v-else-if="statsStatus.status === 'failed'"
-                type="danger"
-                size="small"
-              >
-                失败
-              </el-tag>
-              <el-tag
-                v-else-if="statsStatus.status === 'not_ready'"
-                type="warning"
-                size="small"
-              >
-                未就绪
-              </el-tag>
-              <span v-else class="text-muted">未知</span>
             </el-descriptions-item>
-            <el-descriptions-item label="上次分析时间" :span="2">
+            <el-descriptions-item label="任务耗时" :span="2">
+              <el-text type="info" size="small">
+                <span v-if="analysisDurationText">
+                  {{ analysisDurationText }}
+                </span>
+                <span v-else class="text-muted">-</span>
+              </el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="上次分析时间" :span="1">
               <el-text type="info" size="small">
                 {{ statsStatus.lastAnalysisTime ? formatDateTime(statsStatus.lastAnalysisTime) : '-' }}
               </el-text>
             </el-descriptions-item>
-            <el-descriptions-item label="下次预计分析时间" :span="2">
+            <el-descriptions-item label="下次预计分析时间" :span="1">
               <el-text type="info" size="small">
                 {{ statsStatus.nextAnalysisTime ? formatDateTime(statsStatus.nextAnalysisTime) : '-' }}
               </el-text>
@@ -397,7 +378,50 @@ const statsStatus = ref({
   lastJobEndTime: null,       // 最近一次任务结束时间
   lastJobError: null,         // 最近一次任务错误
   lastJobSuccess: null,       // 最近一次任务是否成功
-  lastJobTrigger: null        // 最近一次任务触发方式：auto / manual
+  lastJobTrigger: null,       // 最近一次任务触发方式：auto / manual
+  lastJobDurationSeconds: null,      // 最近一次任务总耗时（秒）
+  runningDurationSeconds: null       // 当前运行中任务耗时（秒）
+})
+
+// 统计分析状态标签（保持固定宽度，避免布局抖动）
+const analysisTagType = computed(() => {
+  const s = statsStatus.value.status
+  if (s === 'analyzing') return 'info'
+  if (s === 'ready') return 'success'
+  if (s === 'failed') return 'danger'
+  if (s === 'not_ready') return 'warning'
+  return 'info'
+})
+
+const analysisTagText = computed(() => {
+  const s = statsStatus.value.status
+  if (s === 'analyzing') return '分析中'
+  if (s === 'ready') return '正常'
+  if (s === 'failed') return '失败'
+  if (s === 'not_ready') return '未就绪'
+  return '未知'
+})
+
+// 分析任务耗时展示文本
+const analysisDurationText = computed(() => {
+  const s = statsStatus.value
+  // 正在分析时，优先展示当前已运行时长
+  if (s.isAnalyzing && s.runningDurationSeconds != null) {
+    const sec = s.runningDurationSeconds
+    if (sec < 60) return `当前耗时：${sec.toFixed(1)} 秒`
+    const min = sec / 60
+    return `当前耗时：${min.toFixed(1)} 分钟`
+  }
+
+  // 最近一次完成任务的耗时
+  if (!s.isAnalyzing && s.lastJobDurationSeconds != null && s.lastJobDurationSeconds > 0) {
+    const sec = s.lastJobDurationSeconds
+    if (sec < 60) return `最近耗时：${sec.toFixed(1)} 秒`
+    const min = sec / 60
+    return `最近耗时：${min.toFixed(1)} 分钟`
+  }
+
+  return ''
 })
 
 // 访问趋势时间范围（单位：小时）
@@ -632,6 +656,8 @@ const loadStatisticsSummary = async () => {
       statsStatus.value.lastJobError = job.last_error || null
       statsStatus.value.lastJobSuccess = job.last_success
       statsStatus.value.lastJobTrigger = job.last_trigger || null
+      statsStatus.value.lastJobDurationSeconds = job.last_duration_seconds ?? null
+      statsStatus.value.runningDurationSeconds = job.running_duration_seconds ?? null
 
       // 统计分析状态：优先展示“任务状态”
       if (statsStatus.value.isAnalyzing) {
@@ -653,6 +679,8 @@ const loadStatisticsSummary = async () => {
       statsStatus.value.lastJobError = null
       statsStatus.value.lastJobSuccess = null
       statsStatus.value.lastJobTrigger = null
+      statsStatus.value.lastJobDurationSeconds = null
+      statsStatus.value.runningDurationSeconds = null
     }
   } catch (error) {
     console.error('获取基础统计数据失败:', error)
@@ -660,11 +688,13 @@ const loadStatisticsSummary = async () => {
     statsStatus.value.lastAnalysisTime = null
     statsStatus.value.nextAnalysisTime = null
     statsStatus.value.isAnalyzing = false
-     statsStatus.value.lastJobStartTime = null
-     statsStatus.value.lastJobEndTime = null
-     statsStatus.value.lastJobError = null
-     statsStatus.value.lastJobSuccess = null
-     statsStatus.value.lastJobTrigger = null
+    statsStatus.value.lastJobStartTime = null
+    statsStatus.value.lastJobEndTime = null
+    statsStatus.value.lastJobError = null
+    statsStatus.value.lastJobSuccess = null
+    statsStatus.value.lastJobTrigger = null
+    statsStatus.value.lastJobDurationSeconds = null
+    statsStatus.value.runningDurationSeconds = null
   } finally {
     loadingSummary.value = false
   }
@@ -1030,6 +1060,18 @@ onUnmounted(() => {
 .nginx-status-descriptions :deep(.el-descriptions__content) {
   background-color: transparent !important;
   color: var(--text-primary);
+}
+
+.analysis-status-tag {
+  min-width: 64px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.analysis-duration-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .status-value {

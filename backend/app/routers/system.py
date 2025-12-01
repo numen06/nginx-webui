@@ -300,12 +300,13 @@ async def get_nginx_status_info(
 async def get_system_version(
     current_user: User = Depends(get_current_user)
 ):
-    """获取系统版本信息（基于编译时间）"""
+    """获取系统版本信息（仅返回程序版本号，精简加速）"""
     try:
+        # 只返回应用版本号，避免不必要的附加信息，减小响应体
         version_info = get_version_info()
         return {
             "success": True,
-            **version_info
+            "version": version_info.get("version"),
         }
     except Exception as e:
         raise HTTPException(

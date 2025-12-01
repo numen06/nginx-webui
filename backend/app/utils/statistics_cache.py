@@ -32,7 +32,9 @@ def get_cache_key(time_range_hours: int, time_bucket: Optional[str] = None) -> s
         return f"{time_range_hours}_{hour_bucket.strftime('%Y-%m-%d_%H')}"
 
 
-def get_cached_statistics(time_range_hours: int, max_age_minutes: int = 5) -> Optional[Dict]:
+def get_cached_statistics(
+    time_range_hours: int, max_age_minutes: Optional[int] = 5
+) -> Optional[Dict]:
     """
     从缓存获取统计数据
     
@@ -56,10 +58,11 @@ def get_cached_statistics(time_range_hours: int, max_age_minutes: int = 5) -> Op
         if not cache:
             return None
         
-        # 检查缓存是否过期
-        age = datetime.now() - cache.updated_at.replace(tzinfo=None)
-        if age > timedelta(minutes=max_age_minutes):
-            return None
+        # 检查缓存是否过期（如果设置了过期时间）
+        if max_age_minutes is not None and max_age_minutes > 0:
+            age = datetime.now() - cache.updated_at.replace(tzinfo=None)
+            if age > timedelta(minutes=max_age_minutes):
+                return None
         
         # 解析并返回数据
         try:
