@@ -135,10 +135,73 @@ def read_log_file(
         }
     
     try:
-        # 读取所有行
-        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-            all_lines = [line.rstrip('\n') for line in f.readlines()]
+        # 为了避免超大日志文件一次性读入内存，这里只读取文件末尾的最多 max_lines_cap 行，
+        # 实现“分片加载”的效果。对于常规使用（查看最近日志）来说已经足够。
+        max_lines_cap = 200_000  # 安全上限，可根据需要调整
+
+        # 读取日志尾部内容（最多 max_lines_cap 行）
+        def _read_tail(path: Path, max_lines: int) -> list[str]:
+            if not path.exists():
+                return []
+            try:
+                with open(path, "rb") as f:
+                    f.seek(0, 2)
+                    file_size = f.tell()
+
+                    # 小文件直接读完
+                    if file_size < 1024 * 1024:  # < 1MB
+                        with open(path, "r", encoding="utf-8", errors="ignore") as f2:
+                            return [line.rstrip("\n") for line in f2.readlines()]
+
+                    lines_buf: list[str] = []
+                    buffer_size = min(8192, file_size)
+                    position = file_size
+                    buffer = b""
+
+                    while len(lines_buf) < max_lines and position > 0:
+                        read_size = min(buffer_size, position)
+                        position -= read_size
+                        f.seek(position)
+                        chunk = f.read(read_size)
+                        buffer = chunk + buffer
+
+                        while b"\n" in buffer and len(lines_buf) < max_lines:
+                            line, buffer = buffer.rsplit(b"\n", 1)
+                            try:
+                                lines_buf.insert(
+                                    0, line.decode("utf-8", errors="ignore")
+                                )
+                            except Exception:
+                                pass
+
+                        if position == 0:
+                            if buffer:
+                                try:
+                                    lines_buf.insert(
+                                        0, buffer.decode("utf-8", errors="ignore")
+                                    )
+                                except Exception:
+                                    pass
+                            break
+
+                    return lines_buf[-max_lines:] if len(lines_buf) > max_lines else lines_buf
+            except Exception:
+                # 回退到简单读取（仍然限制最大行数）
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f2:
+                        all_read = [line.rstrip("\n") for line in f2.readlines()]
+                        return (
+                            all_read[-max_lines:]
+                            if len(all_read) > max_lines
+                            else all_read
+                        )
+                except Exception:
+                    return []
+
+        all_lines = _read_tail(log_file, max_lines_cap)
         
+        # total_lines 以当前截取的行数为准（即最近 max_lines_cap 行）
+        # 对于非常大的日志文件，早期的旧日志不会被包含在分页结果中
         total_lines = len(all_lines)
         
         # 应用过滤条件

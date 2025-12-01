@@ -344,6 +344,15 @@ const systemVersion = ref({
 // 168 小时（7 天）：按天聚合
 const timeRange = ref(1)
 const loading = ref(false)
+
+// 仪表盘分块加载的各区域 loading 状态
+const loadingSummary = ref(false)       // 顶部统计卡片
+const loadingTrend = ref(false)         // 访问趋势图
+const loadingTopIPs = ref(false)        // Top IP 表格
+const loadingTopPaths = ref(false)      // Top Path 表格
+const loadingStatusDist = ref(false)    // 状态码分布图
+const loadingAttacks = ref(false)       // 攻击记录表格
+
 let refreshTimer = null
 
 // 格式化数字
