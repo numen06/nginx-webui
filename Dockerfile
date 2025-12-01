@@ -25,21 +25,29 @@ FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3
 ENV PYTHONUNBUFFERED=1
 ENV APP_PORT=8000
 
-
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
-# 更新包列表
-RUN dnf update -y
-
-# 安装必要的包
-RUN dnf install -y ca-certificates curl wget tar iproute iputils net-tools \
-                    gcc gcc-c++ make \
-                    pcre pcre-devel zlib zlib-devel openssl openssl-devel
-
-# 清理缓存
-RUN dnf clean all && \
+# 安装系统依赖（包含编译 Nginx 所需工具链）
+# 说明：
+# - 阿里云龙蜥镜像在某些环境下 RPM 数据库可能是 bdb_ro，只读导致 dnf 事务失败
+# - 这里先尽量修复 RPM 数据库，再用 dnf 安装，避免 update 带来额外风险
+RUN set -eux; \
+    # 修复 RPM 数据库，忽略错误（在只读场景下尽可能不影响后续）
+    rm -f /var/lib/rpm/__db* || true; \
+    rpm --rebuilddb || true; \
+    # 只安装必要包，不执行 dnf update 以减少事务复杂度
+    dnf install -y \
+        ca-certificates \
+        curl wget tar \
+        iproute iputils net-tools \
+        gcc gcc-c++ make \
+        pcre pcre-devel \
+        zlib zlib-devel \
+        openssl openssl-devel && \
+    dnf clean all && \
     rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
+
 
 # 设置工作目录
 WORKDIR /app
