@@ -69,26 +69,32 @@ def start_log_watcher(
     class _EventHandler(pyinotify.ProcessEvent):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self._last_trigger_ts = 0.0
+            self._timer: Optional[threading.Timer] = None
+
+        def _schedule_trigger(self):
+            # 取消已有的定时任务，合并多次文件变更
+            if self._timer is not None and self._timer.is_alive():
+                self._timer.cancel()
+
+            def _fire():
+                logger.info(
+                    "[log_watcher] 访问日志在最近 %s 秒内有更新，开始触发合并后的后台分析",
+                    debounce_seconds,
+                )
+                # 在独立线程中调用回调，避免阻塞 inotify 事件循环
+                threading.Thread(target=analyze_callback, daemon=True).start()
+
+            self._timer = threading.Timer(debounce_seconds, _fire)
+            self._timer.daemon = True
+            self._timer.start()
 
         def _maybe_trigger(self, event_path: str):
             # 只关心目标文件（按文件名匹配，兼容轮转/重建）
             if Path(event_path).name != access_log_path.name:
                 return
 
-            now = time.time()
-            if now - self._last_trigger_ts < debounce_seconds:
-                return
-
-            self._last_trigger_ts = now
-
-            logger.info(
-                "[log_watcher] 检测到访问日志更新，准备触发后台分析（去抖 %s 秒）",
-                debounce_seconds,
-            )
-
-            # 在独立线程中调用回调，避免阻塞 inotify 事件循环
-            threading.Thread(target=analyze_callback, daemon=True).start()
+            # 不立即触发，延迟 debounce_seconds 秒合并触发
+            self._schedule_trigger()
 
         def process_IN_MODIFY(self, event):  # type: ignore[override]
             self._maybe_trigger(event.pathname)

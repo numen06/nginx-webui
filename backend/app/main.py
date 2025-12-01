@@ -214,7 +214,7 @@ async def startup_event():
                 logging.warning("清理统计缓存失败: %s", exc)
 
         watcher = start_log_watcher(
-            access_log_path, _analyze_all_windows, debounce_seconds=10
+            access_log_path, _analyze_all_windows, debounce_seconds=30
         )
         if watcher:
             ANALYSIS_STATE["watcher_enabled"] = True
