@@ -3,11 +3,12 @@ Nginx 统计路由
 提供访问量、错误率、攻击检测等统计数据
 """
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter, deque
 import re
+import threading
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
@@ -312,6 +313,34 @@ def iter_log_lines_from_tail(file_path: Path):
             return
 
 
+ANALYSIS_INTERVAL_SECONDS = 300  # 后台分析间隔：5分钟
+
+# 全局分析状态（仅用于状态展示）
+ANALYSIS_STATE: Dict[str, Any] = {
+    "is_running": False,
+    "last_start_time": None,
+    "last_end_time": None,
+    "last_error": None,
+}
+
+
+def _run_analyze_in_background(time_range_hours: int) -> None:
+    """在单独线程中运行日志分析，避免阻塞请求线程"""
+
+    def _task():
+        try:
+            analyze_logs(time_range_hours=time_range_hours, use_cache=False)
+        except Exception as e:
+            ANALYSIS_STATE["last_error"] = str(e)
+
+    # 如果已经在分析中，直接跳过
+    if ANALYSIS_STATE.get("is_running"):
+        return
+
+    t = threading.Thread(target=_task, daemon=True)
+    t.start()
+
+
 def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     """
     分析日志并返回完整统计数据（保留用于兼容性）
@@ -333,6 +362,11 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=time_range_hours)
 
+    # 标记分析开始
+    ANALYSIS_STATE["is_running"] = True
+    ANALYSIS_STATE["last_start_time"] = end_time
+    ANALYSIS_STATE["last_error"] = None
+
     access_log_file = Path(access_log_path)
 
     # 解析日志（从尾部开始逐行向前扫描，直到时间边界，不一次性加载所有内容）
@@ -345,64 +379,75 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     bucket_stats: Dict[str, int] = defaultdict(int)
     attack_count = 0
     attack_details = []
+    # 上次分析时间：按“日志中最后一条有效记录的时间”来定义
+    last_entry_time: Optional[datetime] = None
 
-    for line in iter_log_lines_from_tail(access_log_file):
-        entry = parse_access_log_line(line.strip())
-        if not entry or not entry.get("date"):
-            continue
+    try:
+        for line in iter_log_lines_from_tail(access_log_file):
+            entry = parse_access_log_line(line.strip())
+            if not entry or not entry.get("date"):
+                continue
 
-        # 过滤时间范围
-        if entry["date"] < start_time:
-            # 因为是从新到旧扫描，遇到早于时间边界的日志后可以直接停止
-            break
+            # 过滤时间范围
+            if entry["date"] < start_time:
+                # 因为是从新到旧扫描，遇到早于时间边界的日志后可以直接停止
+                break
 
-        total_requests += 1
+            total_requests += 1
 
-        # 统计IP访问
-        ip_stats[entry["ip"]] += 1
+            # 记录最新的日志时间（用于“上次分析时间”展示）
+            if (last_entry_time is None) or (entry["date"] > last_entry_time):
+                last_entry_time = entry["date"]
 
-        # 统计状态码
-        status = entry["status"]
-        status_stats[status] += 1
+            # 统计IP访问
+            ip_stats[entry["ip"]] += 1
 
-        # 统计路径
-        path_stats[entry["path"]] += 1
+            # 统计状态码
+            status = entry["status"]
+            status_stats[status] += 1
 
-        # 统计HTTP方法
-        method_stats[entry["method"]] += 1
+            # 统计路径
+            path_stats[entry["path"]] += 1
 
-        # 按时间桶统计
-        # - 当 time_range_hours <= 1 小时时，按 5 分钟粒度统计
-        # - 当 time_range_hours >= 7 天（168 小时）时，按天统计
-        # - 其他情况（例如 24 小时）按小时统计
-        dt = entry["date"]
-        if time_range_hours <= 1:
-            # 5 分钟对齐：00,05,10,...,55
-            rounded_minute = (dt.minute // 5) * 5
-            bucket_dt = dt.replace(minute=rounded_minute, second=0, microsecond=0)
-            bucket_key = bucket_dt.strftime("%Y-%m-%d %H:%M")
-        elif time_range_hours >= 24 * 7:
-            # 按天聚合
-            bucket_key = dt.strftime("%Y-%m-%d")
-        else:
-            # 按小时聚合
-            bucket_key = dt.strftime("%Y-%m-%d %H:00")
+            # 统计HTTP方法
+            method_stats[entry["method"]] += 1
 
-        bucket_stats[bucket_key] += 1
+            # 按时间桶统计
+            # - 当 time_range_hours <= 1 小时时，按 5 分钟粒度统计
+            # - 当 time_range_hours >= 7 天（168 小时）时，按天统计
+            # - 其他情况（例如 24 小时）按小时统计
+            dt = entry["date"]
+            if time_range_hours <= 1:
+                # 5 分钟对齐：00,05,10,...,55
+                rounded_minute = (dt.minute // 5) * 5
+                bucket_dt = dt.replace(minute=rounded_minute, second=0, microsecond=0)
+                bucket_key = bucket_dt.strftime("%Y-%m-%d %H:%M")
+            elif time_range_hours >= 24 * 7:
+                # 按天聚合
+                bucket_key = dt.strftime("%Y-%m-%d")
+            else:
+                # 按小时聚合
+                bucket_key = dt.strftime("%Y-%m-%d %H:00")
 
-        # 检测攻击
-        attacks = detect_attack(entry)
-        if attacks:
-            attack_count += 1
-            attack_details.append(
-                {
-                    "time": entry["date"].isoformat(),
-                    "ip": entry["ip"],
-                    "path": entry["path"],
-                    "status": status,
-                    "attacks": attacks,
-                }
-            )
+            bucket_stats[bucket_key] += 1
+
+            # 检测攻击
+            attacks = detect_attack(entry)
+            if attacks:
+                attack_count += 1
+                attack_details.append(
+                    {
+                        "time": entry["date"].isoformat(),
+                        "ip": entry["ip"],
+                        "path": entry["path"],
+                        "status": status,
+                        "attacks": attacks,
+                    }
+                )
+    finally:
+        # 标记分析结束
+        ANALYSIS_STATE["is_running"] = False
+        ANALYSIS_STATE["last_end_time"] = datetime.now()
 
     error_requests = sum(
         count for status, count in status_stats.items() if status >= 400
@@ -439,11 +484,32 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
         except Exception:
             pass
 
+    # 计算状态字段
+    # “上次分析时间” = 日志中最后一条被分析记录的时间（如果有），否则回退到分析结束时间
+    last_analysis_time = (
+        last_entry_time or ANALYSIS_STATE.get("last_end_time") or end_time
+    )
+    next_analysis_time = None
+    if last_analysis_time:
+        next_analysis_time = last_analysis_time + timedelta(
+            seconds=ANALYSIS_INTERVAL_SECONDS
+        )
+
     result = {
         "success": True,
         "time_range_hours": time_range_hours,
         "start_time": start_time.isoformat(),
         "end_time": end_time.isoformat(),
+        # 分析状态相关字段
+        "analysis_status": "success",
+        "analysis_status_message": None,
+        "is_analyzing": ANALYSIS_STATE.get("is_running", False),
+        "last_analysis_time": (
+            last_analysis_time.isoformat() if last_analysis_time else None
+        ),
+        "next_analysis_time": (
+            next_analysis_time.isoformat() if next_analysis_time else None
+        ),
         "summary": {
             "total_requests": total_requests,
             "success_requests": success_requests,
@@ -565,6 +631,12 @@ async def get_statistics_summary(
                 "summary": cached_data["summary"],
                 "start_time": cached_data.get("start_time"),
                 "end_time": cached_data.get("end_time"),
+                "analysis_status": cached_data.get("analysis_status") or "ready",
+                "analysis_status_message": cached_data.get("analysis_status_message"),
+                "is_analyzing": cached_data.get("is_analyzing", False),
+                "last_analysis_time": cached_data.get("last_analysis_time")
+                or cached_data.get("end_time"),
+                "next_analysis_time": cached_data.get("next_analysis_time"),
             }
 
         return {
@@ -576,6 +648,42 @@ async def get_statistics_summary(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取统计数据失败: {str(e)}",
+        )
+
+
+@router.post("/analyze", summary="手动触发统计分析")
+async def trigger_statistics_analyze(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    手动触发一次统计分析。
+
+    说明：
+    - 如果当前已有分析任务在运行，则不会重复触发，直接返回提示。
+    - 实际分析在后台线程中执行，不阻塞当前请求。
+    """
+    # 已在分析中，直接返回提示
+    if ANALYSIS_STATE.get("is_running"):
+        return {
+            "success": False,
+            "message": "统计分析正在进行中，请稍后再试",
+            "is_analyzing": True,
+        }
+
+    try:
+        _run_analyze_in_background(time_range_hours=hours)
+        return {
+            "success": True,
+            "message": "统计分析已在后台启动",
+            "is_analyzing": True,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"触发统计分析失败: {str(e)}",
         )
 
 

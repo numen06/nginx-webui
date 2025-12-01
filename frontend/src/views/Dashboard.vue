@@ -7,10 +7,20 @@
           <template #header>
             <div class="card-header">
               <span>Nginx 运行状态</span>
-              <el-button type="info" text @click="refreshStatus">
-                <el-icon><Refresh /></el-icon>
-                刷新
-              </el-button>
+              <div class="card-actions">
+                <el-button type="info" text @click="refreshStatus">
+                  <el-icon><Refresh /></el-icon>
+                  刷新
+                </el-button>
+                <el-button
+                  type="primary"
+                  text
+                  :disabled="statsStatus.status === 'analyzing' || analyzingManual"
+                  @click="triggerAnalyzeNow"
+                >
+                  立即分析
+                </el-button>
+              </div>
             </div>
           </template>
           <el-descriptions :column="2" border size="small" class="nginx-status-descriptions">
@@ -38,14 +48,18 @@
               <el-tag v-if="systemVersion.version" type="info" size="small">
                 {{ systemVersion.version }}
               </el-tag>
-              <el-text v-if="systemVersion.build_time_formatted" type="info" size="small" class="ml-10">
-                ({{ systemVersion.build_time_formatted }})
-              </el-text>
               <span v-else class="text-muted">未知</span>
             </el-descriptions-item>
             <el-descriptions-item label="统计分析状态">
               <el-tag
-                v-if="statsStatus.status === 'ready'"
+                v-if="statsStatus.status === 'analyzing'"
+                type="info"
+                size="small"
+              >
+                分析中
+              </el-tag>
+              <el-tag
+                v-else-if="statsStatus.status === 'ready'"
                 type="success"
                 size="small"
               >
@@ -60,9 +74,14 @@
               </el-tag>
               <span v-else class="text-muted">未知</span>
             </el-descriptions-item>
-            <el-descriptions-item label="最后分析时间" :span="2">
+            <el-descriptions-item label="上次分析时间" :span="2">
               <el-text type="info" size="small">
                 {{ statsStatus.lastAnalysisTime ? formatDateTime(statsStatus.lastAnalysisTime) : '-' }}
+              </el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="下次预计分析时间" :span="2">
+              <el-text type="info" size="small">
+                {{ statsStatus.nextAnalysisTime ? formatDateTime(statsStatus.nextAnalysisTime) : '-' }}
               </el-text>
             </el-descriptions-item>
           </el-descriptions>
@@ -363,8 +382,10 @@ const systemVersion = ref({
 
 // 统计分析状态
 const statsStatus = ref({
-  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready'
-  lastAnalysisTime: null      // 后台分析 end_time（缓存时间范围的结束时间）
+  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing'
+  lastAnalysisTime: null,     // 上次分析到的日志时间
+  nextAnalysisTime: null,     // 下次预计分析时间
+  isAnalyzing: false
 })
 
 // 访问趋势时间范围（单位：小时）
@@ -373,6 +394,7 @@ const statsStatus = ref({
 // 168 小时（7 天）：按天聚合
 const timeRange = ref(1)
 const loading = ref(false)
+const analyzingManual = ref(false)
 
 // 仪表盘分块加载的各区域 loading 状态
 const loadingSummary = ref(false)       // 顶部统计卡片
@@ -586,18 +608,64 @@ const loadStatisticsSummary = async () => {
     const response = await statisticsApi.getSummary(timeRange.value)
     if (response.success) {
       stats.value.summary = response.summary
-      statsStatus.value.status = 'ready'
-      statsStatus.value.lastAnalysisTime = response.end_time || null
+      statsStatus.value.isAnalyzing = !!response.is_analyzing
+      statsStatus.value.lastAnalysisTime = response.last_analysis_time || response.end_time || null
+      statsStatus.value.nextAnalysisTime = response.next_analysis_time || null
+
+      if (statsStatus.value.isAnalyzing) {
+        statsStatus.value.status = 'analyzing'
+      } else {
+        statsStatus.value.status = 'ready'
+      }
     } else {
       statsStatus.value.status = 'not_ready'
       statsStatus.value.lastAnalysisTime = null
+      statsStatus.value.nextAnalysisTime = null
+      statsStatus.value.isAnalyzing = false
     }
   } catch (error) {
     console.error('获取基础统计数据失败:', error)
     statsStatus.value.status = 'not_ready'
     statsStatus.value.lastAnalysisTime = null
+    statsStatus.value.nextAnalysisTime = null
+    statsStatus.value.isAnalyzing = false
   } finally {
     loadingSummary.value = false
+  }
+}
+
+// 手动触发统计分析
+const triggerAnalyzeNow = async () => {
+  if (analyzingManual.value || statsStatus.value.status === 'analyzing') return
+  analyzingManual.value = true
+  statsStatus.value.status = 'analyzing'
+  statsStatus.value.isAnalyzing = true
+
+  try {
+    const res = await statisticsApi.triggerAnalyze(timeRange.value)
+    if (res.success) {
+      ElMessage.success(res.message || '统计分析已在后台启动')
+      // 稍等几秒再刷新一次基础统计，更新状态和时间
+      setTimeout(() => {
+        loadStatisticsSummary()
+      }, 5000)
+    } else {
+      if (res.message) {
+        ElMessage.warning(res.message)
+      }
+      // 如果后端提示已在分析中，则保持 analyzing 状态；否则回退为 not_ready
+      if (!res.is_analyzing) {
+        statsStatus.value.status = 'not_ready'
+        statsStatus.value.isAnalyzing = false
+      }
+    }
+  } catch (error) {
+    console.error('手动触发统计分析失败:', error)
+    ElMessage.error('手动触发统计分析失败: ' + (error.detail || error.message || '未知错误'))
+    statsStatus.value.status = 'not_ready'
+    statsStatus.value.isAnalyzing = false
+  } finally {
+    analyzingManual.value = false
   }
 }
 

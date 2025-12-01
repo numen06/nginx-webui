@@ -53,6 +53,13 @@ export const statisticsApi = {
     return api.get('/statistics/attacks', {
       params: { hours, limit }
     })
+  },
+
+  // 手动触发统计分析
+  triggerAnalyze(hours = 24) {
+    return api.post('/statistics/analyze', null, {
+      params: { hours }
+    })
   }
 }
 
