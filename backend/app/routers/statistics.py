@@ -318,21 +318,27 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_INTERVAL_SECONDS = 300  # 后台分析间隔：5分钟
 
-# 全局分析状态（仅用于状态展示）
+# 全局分析状态（仅用于任务状态展示，而不是数据内容）
 ANALYSIS_STATE: Dict[str, Any] = {
-    "is_running": False,
-    "last_start_time": None,
-    "last_end_time": None,
-    "last_error": None,
+    "is_running": False,  # 当前是否有分析任务在执行
+    "last_start_time": None,  # 最近一次分析任务开始时间
+    "last_end_time": None,  # 最近一次分析任务结束时间
+    "last_error": None,  # 最近一次分析错误信息（如果有）
+    "last_success": None,  # 最近一次分析是否成功 True/False/None
+    "last_trigger": None,  # 最近一次分析触发方式：auto / manual
 }
 
 
-def _run_analyze_in_background(time_range_hours: int) -> None:
+def _run_analyze_in_background(time_range_hours: int, trigger: str = "manual") -> None:
     """在单独线程中运行日志分析，避免阻塞请求线程"""
 
     def _task():
         try:
-            analyze_logs(time_range_hours=time_range_hours, use_cache=False)
+            analyze_logs(
+                time_range_hours=time_range_hours,
+                use_cache=False,
+                trigger=trigger,
+            )
         except Exception as e:
             ANALYSIS_STATE["last_error"] = str(e)
 
@@ -348,7 +354,11 @@ def _run_analyze_in_background(time_range_hours: int) -> None:
     t.start()
 
 
-def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
+def analyze_logs(
+    time_range_hours: int = 24,
+    use_cache: bool = True,
+    trigger: str = "auto",
+) -> Dict:
     """
     分析日志并返回完整统计数据（保留用于兼容性）
 
@@ -357,9 +367,10 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
         use_cache: 是否使用缓存
     """
     logger.info(
-        "[statistics] 开始分析访问日志，time_range_hours=%s, use_cache=%s",
+        "[statistics] 开始分析访问日志，time_range_hours=%s, use_cache=%s, trigger=%s",
         time_range_hours,
         use_cache,
+        trigger,
     )
 
     # 尝试从缓存获取
@@ -379,10 +390,12 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=time_range_hours)
 
-    # 标记分析开始
+    # 标记分析开始（任务级状态）
     ANALYSIS_STATE["is_running"] = True
     ANALYSIS_STATE["last_start_time"] = end_time
     ANALYSIS_STATE["last_error"] = None
+    ANALYSIS_STATE["last_success"] = None
+    ANALYSIS_STATE["last_trigger"] = trigger
 
     access_log_file = Path(access_log_path)
 
@@ -400,6 +413,7 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     last_entry_time: Optional[datetime] = None
 
     start_ts = datetime.now()
+
     try:
         for line in iter_log_lines_from_tail(access_log_file):
             entry = parse_access_log_line(line.strip())
@@ -462,6 +476,15 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
                         "attacks": attacks,
                     }
                 )
+    except Exception as e:
+        ANALYSIS_STATE["last_error"] = str(e)
+        ANALYSIS_STATE["last_success"] = False
+        logger.exception(
+            "[statistics] 日志分析失败，time_range_hours=%s, error=%s",
+            time_range_hours,
+            e,
+        )
+        raise
     finally:
         # 标记分析结束
         ANALYSIS_STATE["is_running"] = False
@@ -525,7 +548,7 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
         "time_range_hours": time_range_hours,
         "start_time": start_time.isoformat(),
         "end_time": end_time.isoformat(),
-        # 分析状态相关字段
+        # 分析状态相关字段（数据粒度）
         "analysis_status": "success",
         "analysis_status_message": None,
         "is_analyzing": ANALYSIS_STATE.get("is_running", False),
@@ -650,18 +673,33 @@ async def get_statistics_summary(
     try:
         cached_data = get_cached_statistics(hours, max_age_minutes=30)
         if cached_data and cached_data.get("summary"):
+            # 任务级状态（后台分析任务本身的状态）
+            last_start = ANALYSIS_STATE.get("last_start_time")
+            last_end = ANALYSIS_STATE.get("last_end_time")
+            analysis_job = {
+                "is_running": ANALYSIS_STATE.get("is_running", False),
+                "last_start_time": last_start.isoformat() if last_start else None,
+                "last_end_time": last_end.isoformat() if last_end else None,
+                "last_error": ANALYSIS_STATE.get("last_error"),
+                "last_success": ANALYSIS_STATE.get("last_success"),
+                "last_trigger": ANALYSIS_STATE.get("last_trigger"),
+            }
+
             return {
                 "success": True,
                 "time_range_hours": hours,
                 "summary": cached_data["summary"],
                 "start_time": cached_data.get("start_time"),
                 "end_time": cached_data.get("end_time"),
+                # 数据级状态（数据新鲜度）
                 "analysis_status": cached_data.get("analysis_status") or "ready",
                 "analysis_status_message": cached_data.get("analysis_status_message"),
                 "is_analyzing": cached_data.get("is_analyzing", False),
                 "last_analysis_time": cached_data.get("last_analysis_time")
                 or cached_data.get("end_time"),
                 "next_analysis_time": cached_data.get("next_analysis_time"),
+                # 任务级状态（供前端展示“后台任务执行状态”）
+                "analysis_job": analysis_job,
             }
 
         return {
@@ -708,7 +746,7 @@ async def trigger_statistics_analyze(
             hours,
             getattr(current_user, "username", None),
         )
-        _run_analyze_in_background(time_range_hours=hours)
+        _run_analyze_in_background(time_range_hours=hours, trigger="manual")
         return {
             "success": True,
             "message": "统计分析已在后台启动",

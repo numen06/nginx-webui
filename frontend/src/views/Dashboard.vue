@@ -63,7 +63,14 @@
                 type="success"
                 size="small"
               >
-                已就绪
+                正常
+              </el-tag>
+              <el-tag
+                v-else-if="statsStatus.status === 'failed'"
+                type="danger"
+                size="small"
+              >
+                失败
               </el-tag>
               <el-tag
                 v-else-if="statsStatus.status === 'not_ready'"
@@ -382,10 +389,15 @@ const systemVersion = ref({
 
 // 统计分析状态
 const statsStatus = ref({
-  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing'
-  lastAnalysisTime: null,     // 上次分析到的日志时间
-  nextAnalysisTime: null,     // 下次预计分析时间
-  isAnalyzing: false
+  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing' | 'failed'
+  lastAnalysisTime: null,     // 上次分析到的日志时间（数据维度）
+  nextAnalysisTime: null,     // 下次预计分析时间（数据维度）
+  isAnalyzing: false,         // 后台任务是否在执行
+  lastJobStartTime: null,     // 最近一次任务开始时间
+  lastJobEndTime: null,       // 最近一次任务结束时间
+  lastJobError: null,         // 最近一次任务错误
+  lastJobSuccess: null,       // 最近一次任务是否成功
+  lastJobTrigger: null        // 最近一次任务触发方式：auto / manual
 })
 
 // 访问趋势时间范围（单位：小时）
@@ -608,20 +620,39 @@ const loadStatisticsSummary = async () => {
     const response = await statisticsApi.getSummary(timeRange.value)
     if (response.success) {
       stats.value.summary = response.summary
-      statsStatus.value.isAnalyzing = !!response.is_analyzing
+      // 数据维度的时间信息
       statsStatus.value.lastAnalysisTime = response.last_analysis_time || response.end_time || null
       statsStatus.value.nextAnalysisTime = response.next_analysis_time || null
 
+      // 后台任务维度的状态信息
+      const job = response.analysis_job || {}
+      statsStatus.value.isAnalyzing = !!job.is_running
+      statsStatus.value.lastJobStartTime = job.last_start_time || null
+      statsStatus.value.lastJobEndTime = job.last_end_time || null
+      statsStatus.value.lastJobError = job.last_error || null
+      statsStatus.value.lastJobSuccess = job.last_success
+      statsStatus.value.lastJobTrigger = job.last_trigger || null
+
+      // 统计分析状态：优先展示“任务状态”
       if (statsStatus.value.isAnalyzing) {
         statsStatus.value.status = 'analyzing'
-      } else {
+      } else if (statsStatus.value.lastJobSuccess === false || statsStatus.value.lastJobError) {
+        statsStatus.value.status = 'failed'
+      } else if (statsStatus.value.lastJobEndTime) {
         statsStatus.value.status = 'ready'
+      } else {
+        statsStatus.value.status = 'not_ready'
       }
     } else {
       statsStatus.value.status = 'not_ready'
       statsStatus.value.lastAnalysisTime = null
       statsStatus.value.nextAnalysisTime = null
       statsStatus.value.isAnalyzing = false
+      statsStatus.value.lastJobStartTime = null
+      statsStatus.value.lastJobEndTime = null
+      statsStatus.value.lastJobError = null
+      statsStatus.value.lastJobSuccess = null
+      statsStatus.value.lastJobTrigger = null
     }
   } catch (error) {
     console.error('获取基础统计数据失败:', error)
@@ -629,6 +660,11 @@ const loadStatisticsSummary = async () => {
     statsStatus.value.lastAnalysisTime = null
     statsStatus.value.nextAnalysisTime = null
     statsStatus.value.isAnalyzing = false
+     statsStatus.value.lastJobStartTime = null
+     statsStatus.value.lastJobEndTime = null
+     statsStatus.value.lastJobError = null
+     statsStatus.value.lastJobSuccess = null
+     statsStatus.value.lastJobTrigger = null
   } finally {
     loadingSummary.value = false
   }

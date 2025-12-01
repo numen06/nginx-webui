@@ -44,6 +44,12 @@ from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
 from app.routers.statistics import analyze_logs
 
+# 配置全局日志（包含统计分析日志）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 # 初始化数据库
 init_db()
 
@@ -192,7 +198,11 @@ async def startup_event():
                 # 更新常用时间范围的缓存（1小时、24小时、7天）
                 for hours in [1, 24, 168]:
                     try:
-                        analyze_logs(time_range_hours=hours, use_cache=False)
+                        analyze_logs(
+                            time_range_hours=hours,
+                            use_cache=False,
+                            trigger="auto",
+                        )
                     except Exception as e:
                         logging.warning(f"更新统计缓存失败 (hours={hours}): {e}")
                 
