@@ -435,13 +435,26 @@ async def get_statistics_overview(
     hours: int = Query(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取 Nginx 统计概览数据（使用缓存优化性能）"""
+    """
+    获取 Nginx 统计概览数据
+
+    说明：
+    - 只返回后台预先分析并缓存好的数据
+    - 不在请求期间临时解析日志，避免阻塞和卡死
+    """
     try:
-        result = analyze_logs(time_range_hours=hours, use_cache=not force_refresh)
-        return result
+        cached = get_cached_statistics(hours, max_age_minutes=30)
+        if cached:
+            return cached
+
+        # 缓存尚未生成时返回占位结果，提示前端稍后重试
+        return {
+            "success": False,
+            "time_range_hours": hours,
+            "message": "统计数据暂未生成，请稍后重试",
+        }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -451,13 +464,26 @@ async def get_statistics_overview(
 
 @router.get("/realtime", summary="获取实时统计数据")
 async def get_realtime_statistics(
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取最近1小时的实时统计数据（使用缓存优化性能）"""
+    """
+    获取最近1小时的实时统计数据
+
+    说明：
+    - 只返回后台预先分析并缓存好的数据（hours=1）
+    - 不在请求期间临时解析日志
+    """
     try:
-        result = analyze_logs(time_range_hours=1, use_cache=not force_refresh)
-        return result
+        hours = 1
+        cached = get_cached_statistics(hours, max_age_minutes=10)
+        if cached:
+            return cached
+
+        return {
+            "success": False,
+            "time_range_hours": hours,
+            "message": "实时统计数据暂未生成，请稍后重试",
+        }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -470,75 +496,27 @@ async def get_statistics_summary(
     hours: int = Query(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取基础统计数据（总数、成功、错误、错误率等）- 轻量级接口"""
+    """
+    获取基础统计数据（总数、成功、错误、错误率等）- 轻量级接口
+
+    说明：
+    - 只从缓存读取 summary，不在请求期间重新解析日志
+    """
     try:
-        # 尝试从缓存获取完整数据
-        if not force_refresh:
-            cached_data = get_cached_statistics(hours, max_age_minutes=5)
-            if cached_data and cached_data.get("summary"):
-                return {
-                    "success": True,
-                    "time_range_hours": hours,
-                    "summary": cached_data["summary"],
-                }
-
-        # 解析日志
-        log_entries = _parse_logs_in_range(hours)
-
-        # 统计状态码
-        status_stats: Dict[int, int] = defaultdict(int)
-        attack_count = 0
-
-        for entry in log_entries:
-            status = entry["status"]
-            status_stats[status] += 1
-
-            # 检测攻击（简化版，只计数）
-            attacks = detect_attack(entry)
-            if attacks:
-                attack_count += 1
-
-        total_requests = len(log_entries)
-        error_requests = sum(
-            count for status, count in status_stats.items() if status >= 400
-        )
-        success_requests = sum(
-            count for status, count in status_stats.items() if 200 <= status < 300
-        )
-        error_rate = (
-            (error_requests / total_requests * 100) if total_requests > 0 else 0
-        )
-
-        # 读取错误日志统计
-        error_log_path = _resolve_error_log_path()
-        error_log_count = 0
-        error_log_file = Path(error_log_path)
-        if error_log_file.exists():
-            try:
-                end_time = datetime.now()
-                start_time = end_time - timedelta(hours=hours)
-                error_lines = read_log_tail(error_log_file, max_lines=10000)
-                for line in error_lines:
-                    log_date = parse_log_date(line)
-                    if log_date and log_date >= start_time:
-                        error_log_count += 1
-            except:
-                pass
+        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        if cached_data and cached_data.get("summary"):
+            return {
+                "success": True,
+                "time_range_hours": hours,
+                "summary": cached_data["summary"],
+            }
 
         return {
-            "success": True,
+            "success": False,
             "time_range_hours": hours,
-            "summary": {
-                "total_requests": total_requests,
-                "success_requests": success_requests,
-                "error_requests": error_requests,
-                "error_rate": round(error_rate, 2),
-                "attack_count": attack_count,
-                "error_log_count": error_log_count,
-            },
+            "message": "基础统计数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
@@ -552,51 +530,27 @@ async def get_statistics_trend(
     hours: int = Query(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取时间趋势图数据"""
+    """
+    获取时间趋势图数据
+
+    说明：
+    - 只从缓存读取 hourly_trend，不在请求期间重新解析日志
+    """
     try:
-        # 尝试从缓存获取
-        if not force_refresh:
-            cached_data = get_cached_statistics(hours, max_age_minutes=5)
-            if cached_data and cached_data.get("hourly_trend"):
-                return {
-                    "success": True,
-                    "time_range_hours": hours,
-                    "hourly_trend": cached_data["hourly_trend"],
-                }
-
-        # 解析日志
-        log_entries = _parse_logs_in_range(hours)
-
-        # 按时间桶统计
-        bucket_stats: Dict[str, int] = defaultdict(int)
-        for entry in log_entries:
-            dt = entry["date"]
-            if hours <= 1:
-                rounded_minute = (dt.minute // 5) * 5
-                bucket_dt = dt.replace(minute=rounded_minute, second=0, microsecond=0)
-                bucket_key = bucket_dt.strftime("%Y-%m-%d %H:%M")
-            elif hours >= 24 * 7:
-                bucket_key = dt.strftime("%Y-%m-%d")
-            else:
-                bucket_key = dt.strftime("%Y-%m-%d %H:00")
-
-            bucket_stats[bucket_key] += 1
-
-        # 按时间排序
-        sorted_buckets = sorted(bucket_stats.items())
-        bucket_labels = [item[0] for item in sorted_buckets]
-        bucket_counts = [item[1] for item in sorted_buckets]
+        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        if cached_data and cached_data.get("hourly_trend"):
+            return {
+                "success": True,
+                "time_range_hours": hours,
+                "hourly_trend": cached_data["hourly_trend"],
+            }
 
         return {
-            "success": True,
+            "success": False,
             "time_range_hours": hours,
-            "hourly_trend": {
-                "hours": bucket_labels,
-                "counts": bucket_counts,
-            },
+            "message": "趋势数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
@@ -611,36 +565,28 @@ async def get_top_ips(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
     limit: int = Query(10, ge=1, le=50, description="返回数量"),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取访问量Top IPs"""
+    """
+    获取访问量Top IPs
+
+    说明：
+    - 只从缓存读取 top_ips，不在请求期间重新解析日志
+    """
     try:
-        # 尝试从缓存获取
-        if not force_refresh:
-            cached_data = get_cached_statistics(hours, max_age_minutes=5)
-            if cached_data and cached_data.get("top_ips"):
-                return {
-                    "success": True,
-                    "time_range_hours": hours,
-                    "top_ips": cached_data["top_ips"][:limit],
-                }
-
-        # 解析日志
-        log_entries = _parse_logs_in_range(hours)
-
-        # 统计IP访问
-        ip_stats: Dict[str, int] = defaultdict(int)
-        for entry in log_entries:
-            ip_stats[entry["ip"]] += 1
-
-        # 获取Top IPs
-        top_ips = sorted(ip_stats.items(), key=lambda x: x[1], reverse=True)[:limit]
+        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        if cached_data and cached_data.get("top_ips"):
+            return {
+                "success": True,
+                "time_range_hours": hours,
+                "top_ips": cached_data["top_ips"][:limit],
+            }
 
         return {
-            "success": True,
+            "success": False,
             "time_range_hours": hours,
-            "top_ips": [{"ip": ip, "count": count} for ip, count in top_ips],
+            "top_ips": [],
+            "message": "Top IP 数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
@@ -655,36 +601,28 @@ async def get_top_paths(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
     limit: int = Query(10, ge=1, le=50, description="返回数量"),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取访问量Top Paths"""
+    """
+    获取访问量Top Paths
+
+    说明：
+    - 只从缓存读取 top_paths，不在请求期间重新解析日志
+    """
     try:
-        # 尝试从缓存获取
-        if not force_refresh:
-            cached_data = get_cached_statistics(hours, max_age_minutes=5)
-            if cached_data and cached_data.get("top_paths"):
-                return {
-                    "success": True,
-                    "time_range_hours": hours,
-                    "top_paths": cached_data["top_paths"][:limit],
-                }
-
-        # 解析日志
-        log_entries = _parse_logs_in_range(hours)
-
-        # 统计路径访问
-        path_stats: Dict[str, int] = defaultdict(int)
-        for entry in log_entries:
-            path_stats[entry["path"]] += 1
-
-        # 获取Top Paths
-        top_paths = sorted(path_stats.items(), key=lambda x: x[1], reverse=True)[:limit]
+        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        if cached_data and cached_data.get("top_paths"):
+            return {
+                "success": True,
+                "time_range_hours": hours,
+                "top_paths": cached_data["top_paths"][:limit],
+            }
 
         return {
-            "success": True,
+            "success": False,
             "time_range_hours": hours,
-            "top_paths": [{"path": path, "count": count} for path, count in top_paths],
+            "top_paths": [],
+            "message": "Top Path 数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
@@ -698,33 +636,28 @@ async def get_status_distribution(
     hours: int = Query(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取状态码分布数据"""
+    """
+    获取状态码分布数据
+
+    说明：
+    - 只从缓存读取 status_distribution，不在请求期间重新解析日志
+    """
     try:
-        # 尝试从缓存获取
-        if not force_refresh:
-            cached_data = get_cached_statistics(hours, max_age_minutes=5)
-            if cached_data and cached_data.get("status_distribution"):
-                return {
-                    "success": True,
-                    "time_range_hours": hours,
-                    "status_distribution": cached_data["status_distribution"],
-                }
-
-        # 解析日志
-        log_entries = _parse_logs_in_range(hours)
-
-        # 统计状态码
-        status_stats: Dict[int, int] = defaultdict(int)
-        for entry in log_entries:
-            status_stats[entry["status"]] += 1
+        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        if cached_data and cached_data.get("status_distribution"):
+            return {
+                "success": True,
+                "time_range_hours": hours,
+                "status_distribution": cached_data["status_distribution"],
+            }
 
         return {
-            "success": True,
+            "success": False,
             "time_range_hours": hours,
-            "status_distribution": dict(status_stats),
+            "status_distribution": {},
+            "message": "状态码分布数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
@@ -739,34 +672,31 @@ async def get_attacks(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
     ),
     limit: int = Query(50, ge=1, le=200, description="返回数量"),
-    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
     current_user: User = Depends(get_current_user),
 ):
-    """获取攻击检测记录（延迟加载，数据量大）"""
-    try:
-        # 解析日志
-        log_entries = _parse_logs_in_range(hours)
+    """
+    获取攻击检测记录（延迟加载，数据量大）
 
-        # 检测攻击
-        attack_details = []
-        for entry in log_entries:
-            attacks = detect_attack(entry)
-            if attacks:
-                attack_details.append(
-                    {
-                        "time": entry["date"].isoformat(),
-                        "ip": entry["ip"],
-                        "path": entry["path"],
-                        "status": entry["status"],
-                        "attacks": attacks,
-                    }
-                )
+    说明：
+    - 只从缓存读取 attacks，不在请求期间重新解析日志
+    """
+    try:
+        cached_data = get_cached_statistics(hours, max_age_minutes=30)
+        if cached_data and cached_data.get("attacks") is not None:
+            attacks_list = cached_data.get("attacks") or []
+            return {
+                "success": True,
+                "time_range_hours": hours,
+                "attacks": attacks_list[:limit],
+                "total_count": len(attacks_list),
+            }
 
         return {
-            "success": True,
+            "success": False,
             "time_range_hours": hours,
-            "attacks": attack_details[:limit],
-            "total_count": len(attack_details),
+            "attacks": [],
+            "total_count": 0,
+            "message": "攻击检测数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
