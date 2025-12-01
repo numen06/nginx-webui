@@ -26,16 +26,25 @@ ENV PYTHONUNBUFFERED=1
 ENV APP_PORT=8000
 
 
-# 安装系统依赖（包含编译 Nginx 所需工具链）
-# 合并安装命令并清理缓存以减少镜像大小
-RUN dnf update -y && \
-    dnf install -y ca-certificates curl wget tar iproute iputils net-tools\
-                   gcc gcc-c++ make \
-                   pcre pcre-devel zlib zlib-devel openssl openssl-devel && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+# 禁用 SELinux
+RUN setenforce 0
+
+# 更新包列表
+RUN dnf update -y
+
+# 安装必要的包
+RUN dnf install -y ca-certificates curl wget tar iproute iputils net-tools \
+                    gcc gcc-c++ make \
+                    pcre pcre-devel zlib zlib-devel openssl openssl-devel
+
+# 清理缓存
+RUN dnf clean all && \
+    rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
+
+
 
 # 设置工作目录
 WORKDIR /app
