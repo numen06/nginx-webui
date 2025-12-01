@@ -213,9 +213,48 @@ def read_log_tail(file_path: Path, max_lines: int = 50000) -> List[str]:
             return []
 
 
+def _parse_logs_in_range(time_range_hours: int = 24) -> List[Dict]:
+    """
+    解析指定时间范围内的日志条目（基础函数，只解析不统计）
+
+    Args:
+        time_range_hours: 时间范围（小时）
+
+    Returns:
+        日志条目列表
+    """
+    access_log_path = _resolve_access_log_path()
+
+    # 计算时间范围
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=time_range_hours)
+
+    # 优化：只读取最后N行日志
+    max_lines = min(100000, time_range_hours * 3600)
+
+    # 读取访问日志
+    access_log_file = Path(access_log_path)
+    all_lines = read_log_tail(access_log_file, max_lines=max_lines)
+
+    # 解析日志
+    log_entries = []
+    for line in all_lines:
+        entry = parse_access_log_line(line.strip())
+        if not entry or not entry.get("date"):
+            continue
+
+        # 过滤时间范围
+        if entry["date"] < start_time:
+            continue
+
+        log_entries.append(entry)
+
+    return log_entries
+
+
 def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     """
-    分析日志并返回统计数据
+    分析日志并返回完整统计数据（保留用于兼容性）
 
     Args:
         time_range_hours: 时间范围（小时）
@@ -421,4 +460,314 @@ async def get_realtime_statistics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取实时统计数据失败: {str(e)}",
+        )
+
+
+@router.get("/summary", summary="获取基础统计数据")
+async def get_statistics_summary(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
+    current_user: User = Depends(get_current_user),
+):
+    """获取基础统计数据（总数、成功、错误、错误率等）- 轻量级接口"""
+    try:
+        # 尝试从缓存获取完整数据
+        if not force_refresh:
+            cached_data = get_cached_statistics(hours, max_age_minutes=5)
+            if cached_data and cached_data.get("summary"):
+                return {
+                    "success": True,
+                    "time_range_hours": hours,
+                    "summary": cached_data["summary"],
+                }
+
+        # 解析日志
+        log_entries = _parse_logs_in_range(hours)
+
+        # 统计状态码
+        status_stats: Dict[int, int] = defaultdict(int)
+        attack_count = 0
+
+        for entry in log_entries:
+            status = entry["status"]
+            status_stats[status] += 1
+
+            # 检测攻击（简化版，只计数）
+            attacks = detect_attack(entry)
+            if attacks:
+                attack_count += 1
+
+        total_requests = len(log_entries)
+        error_requests = sum(
+            count for status, count in status_stats.items() if status >= 400
+        )
+        success_requests = sum(
+            count for status, count in status_stats.items() if 200 <= status < 300
+        )
+        error_rate = (
+            (error_requests / total_requests * 100) if total_requests > 0 else 0
+        )
+
+        # 读取错误日志统计
+        error_log_path = _resolve_error_log_path()
+        error_log_count = 0
+        error_log_file = Path(error_log_path)
+        if error_log_file.exists():
+            try:
+                end_time = datetime.now()
+                start_time = end_time - timedelta(hours=hours)
+                error_lines = read_log_tail(error_log_file, max_lines=10000)
+                for line in error_lines:
+                    log_date = parse_log_date(line)
+                    if log_date and log_date >= start_time:
+                        error_log_count += 1
+            except:
+                pass
+
+        return {
+            "success": True,
+            "time_range_hours": hours,
+            "summary": {
+                "total_requests": total_requests,
+                "success_requests": success_requests,
+                "error_requests": error_requests,
+                "error_rate": round(error_rate, 2),
+                "attack_count": attack_count,
+                "error_log_count": error_log_count,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取统计数据失败: {str(e)}",
+        )
+
+
+@router.get("/trend", summary="获取时间趋势数据")
+async def get_statistics_trend(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
+    current_user: User = Depends(get_current_user),
+):
+    """获取时间趋势图数据"""
+    try:
+        # 尝试从缓存获取
+        if not force_refresh:
+            cached_data = get_cached_statistics(hours, max_age_minutes=5)
+            if cached_data and cached_data.get("hourly_trend"):
+                return {
+                    "success": True,
+                    "time_range_hours": hours,
+                    "hourly_trend": cached_data["hourly_trend"],
+                }
+
+        # 解析日志
+        log_entries = _parse_logs_in_range(hours)
+
+        # 按时间桶统计
+        bucket_stats: Dict[str, int] = defaultdict(int)
+        for entry in log_entries:
+            dt = entry["date"]
+            if hours <= 1:
+                rounded_minute = (dt.minute // 5) * 5
+                bucket_dt = dt.replace(minute=rounded_minute, second=0, microsecond=0)
+                bucket_key = bucket_dt.strftime("%Y-%m-%d %H:%M")
+            elif hours >= 24 * 7:
+                bucket_key = dt.strftime("%Y-%m-%d")
+            else:
+                bucket_key = dt.strftime("%Y-%m-%d %H:00")
+
+            bucket_stats[bucket_key] += 1
+
+        # 按时间排序
+        sorted_buckets = sorted(bucket_stats.items())
+        bucket_labels = [item[0] for item in sorted_buckets]
+        bucket_counts = [item[1] for item in sorted_buckets]
+
+        return {
+            "success": True,
+            "time_range_hours": hours,
+            "hourly_trend": {
+                "hours": bucket_labels,
+                "counts": bucket_counts,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取趋势数据失败: {str(e)}",
+        )
+
+
+@router.get("/top-ips", summary="获取Top IPs")
+async def get_top_ips(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    limit: int = Query(10, ge=1, le=50, description="返回数量"),
+    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
+    current_user: User = Depends(get_current_user),
+):
+    """获取访问量Top IPs"""
+    try:
+        # 尝试从缓存获取
+        if not force_refresh:
+            cached_data = get_cached_statistics(hours, max_age_minutes=5)
+            if cached_data and cached_data.get("top_ips"):
+                return {
+                    "success": True,
+                    "time_range_hours": hours,
+                    "top_ips": cached_data["top_ips"][:limit],
+                }
+
+        # 解析日志
+        log_entries = _parse_logs_in_range(hours)
+
+        # 统计IP访问
+        ip_stats: Dict[str, int] = defaultdict(int)
+        for entry in log_entries:
+            ip_stats[entry["ip"]] += 1
+
+        # 获取Top IPs
+        top_ips = sorted(ip_stats.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+        return {
+            "success": True,
+            "time_range_hours": hours,
+            "top_ips": [{"ip": ip, "count": count} for ip, count in top_ips],
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取Top IPs失败: {str(e)}",
+        )
+
+
+@router.get("/top-paths", summary="获取Top Paths")
+async def get_top_paths(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    limit: int = Query(10, ge=1, le=50, description="返回数量"),
+    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
+    current_user: User = Depends(get_current_user),
+):
+    """获取访问量Top Paths"""
+    try:
+        # 尝试从缓存获取
+        if not force_refresh:
+            cached_data = get_cached_statistics(hours, max_age_minutes=5)
+            if cached_data and cached_data.get("top_paths"):
+                return {
+                    "success": True,
+                    "time_range_hours": hours,
+                    "top_paths": cached_data["top_paths"][:limit],
+                }
+
+        # 解析日志
+        log_entries = _parse_logs_in_range(hours)
+
+        # 统计路径访问
+        path_stats: Dict[str, int] = defaultdict(int)
+        for entry in log_entries:
+            path_stats[entry["path"]] += 1
+
+        # 获取Top Paths
+        top_paths = sorted(path_stats.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+        return {
+            "success": True,
+            "time_range_hours": hours,
+            "top_paths": [{"path": path, "count": count} for path, count in top_paths],
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取Top Paths失败: {str(e)}",
+        )
+
+
+@router.get("/status-distribution", summary="获取状态码分布")
+async def get_status_distribution(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
+    current_user: User = Depends(get_current_user),
+):
+    """获取状态码分布数据"""
+    try:
+        # 尝试从缓存获取
+        if not force_refresh:
+            cached_data = get_cached_statistics(hours, max_age_minutes=5)
+            if cached_data and cached_data.get("status_distribution"):
+                return {
+                    "success": True,
+                    "time_range_hours": hours,
+                    "status_distribution": cached_data["status_distribution"],
+                }
+
+        # 解析日志
+        log_entries = _parse_logs_in_range(hours)
+
+        # 统计状态码
+        status_stats: Dict[int, int] = defaultdict(int)
+        for entry in log_entries:
+            status_stats[entry["status"]] += 1
+
+        return {
+            "success": True,
+            "time_range_hours": hours,
+            "status_distribution": dict(status_stats),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取状态码分布失败: {str(e)}",
+        )
+
+
+@router.get("/attacks", summary="获取攻击检测记录")
+async def get_attacks(
+    hours: int = Query(
+        24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    limit: int = Query(50, ge=1, le=200, description="返回数量"),
+    force_refresh: bool = Query(False, description="强制刷新，不使用缓存"),
+    current_user: User = Depends(get_current_user),
+):
+    """获取攻击检测记录（延迟加载，数据量大）"""
+    try:
+        # 解析日志
+        log_entries = _parse_logs_in_range(hours)
+
+        # 检测攻击
+        attack_details = []
+        for entry in log_entries:
+            attacks = detect_attack(entry)
+            if attacks:
+                attack_details.append(
+                    {
+                        "time": entry["date"].isoformat(),
+                        "ip": entry["ip"],
+                        "path": entry["path"],
+                        "status": entry["status"],
+                        "attacks": attacks,
+                    }
+                )
+
+        return {
+            "success": True,
+            "time_range_hours": hours,
+            "attacks": attack_details[:limit],
+            "total_count": len(attack_details),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取攻击检测记录失败: {str(e)}",
         )

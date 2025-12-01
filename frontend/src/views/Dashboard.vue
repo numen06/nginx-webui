@@ -539,23 +539,129 @@ const loadNginxStatus = async () => {
   }
 }
 
-// 加载统计数据
-const loadStatistics = async () => {
-  if (loading.value) return
-  loading.value = true
+// 加载基础统计数据（优先加载，轻量级）
+const loadStatisticsSummary = async () => {
+  if (loadingSummary.value) return
+  loadingSummary.value = true
   
   try {
-    const response = await statisticsApi.getOverview(timeRange.value)
+    const response = await statisticsApi.getSummary(timeRange.value)
     if (response.success) {
-      stats.value = response
-    } else {
-      ElMessage.warning(response.error || '获取统计数据失败')
+      stats.value.summary = response.summary
     }
   } catch (error) {
-    ElMessage.error('获取统计数据失败: ' + (error.detail || error.message || '未知错误'))
+    console.error('获取基础统计数据失败:', error)
   } finally {
-    loading.value = false
+    loadingSummary.value = false
   }
+}
+
+// 加载时间趋势数据
+const loadStatisticsTrend = async () => {
+  if (loadingTrend.value) return
+  loadingTrend.value = true
+  
+  try {
+    const response = await statisticsApi.getTrend(timeRange.value)
+    if (response.success) {
+      stats.value.hourly_trend = response.hourly_trend
+    }
+  } catch (error) {
+    console.error('获取趋势数据失败:', error)
+  } finally {
+    loadingTrend.value = false
+  }
+}
+
+// 加载Top IPs
+const loadTopIPs = async () => {
+  if (loadingTopIPs.value) return
+  loadingTopIPs.value = true
+  
+  try {
+    const response = await statisticsApi.getTopIPs(timeRange.value, 10)
+    if (response.success) {
+      stats.value.top_ips = response.top_ips
+    }
+  } catch (error) {
+    console.error('获取Top IPs失败:', error)
+  } finally {
+    loadingTopIPs.value = false
+  }
+}
+
+// 加载Top Paths
+const loadTopPaths = async () => {
+  if (loadingTopPaths.value) return
+  loadingTopPaths.value = true
+  
+  try {
+    const response = await statisticsApi.getTopPaths(timeRange.value, 10)
+    if (response.success) {
+      stats.value.top_paths = response.top_paths
+    }
+  } catch (error) {
+    console.error('获取Top Paths失败:', error)
+  } finally {
+    loadingTopPaths.value = false
+  }
+}
+
+// 加载状态码分布
+const loadStatusDistribution = async () => {
+  if (loadingStatusDist.value) return
+  loadingStatusDist.value = true
+  
+  try {
+    const response = await statisticsApi.getStatusDistribution(timeRange.value)
+    if (response.success) {
+      stats.value.status_distribution = response.status_distribution
+    }
+  } catch (error) {
+    console.error('获取状态码分布失败:', error)
+  } finally {
+    loadingStatusDist.value = false
+  }
+}
+
+// 加载攻击检测（延迟加载）
+const loadAttacks = async () => {
+  if (loadingAttacks.value) return
+  loadingAttacks.value = true
+  
+  try {
+    const response = await statisticsApi.getAttacks(timeRange.value, 50)
+    if (response.success) {
+      stats.value.attacks = response.attacks
+    }
+  } catch (error) {
+    console.error('获取攻击检测失败:', error)
+  } finally {
+    loadingAttacks.value = false
+  }
+}
+
+// 加载所有统计数据（按优先级分批加载）
+const loadStatistics = async () => {
+  // 第一批：基础统计（立即加载，最轻量）
+  loadStatisticsSummary()
+  
+  // 第二批：图表数据（稍后加载）
+  setTimeout(() => {
+    loadStatisticsTrend()
+    loadStatusDistribution()
+  }, 100)
+  
+  // 第三批：Top数据（再稍后加载）
+  setTimeout(() => {
+    loadTopIPs()
+    loadTopPaths()
+  }, 300)
+  
+  // 第四批：攻击检测（最后加载，数据量大）
+  setTimeout(() => {
+    loadAttacks()
+  }, 500)
 }
 
 // 加载系统资源
