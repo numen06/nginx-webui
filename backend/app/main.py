@@ -188,7 +188,7 @@ async def startup_event():
         print(f"⚠ 自动启动 Nginx 时出错: {str(e)}")
         print("   应用将继续启动，您可以稍后手动启动 Nginx")
 
-    # 启动访问日志监听：基于 pyinotify 动态触发统计分析（替代原来的定时任务）
+    # 启动访问日志监听：基于 pyinotify 动态触发统计分析（替代原来的纯定时任务）
     try:
         access_log_path = Path(_resolve_access_log_path())
 
@@ -226,6 +226,37 @@ async def startup_event():
     except Exception as e:
         ANALYSIS_STATE["watcher_enabled"] = False
         logging.warning(f"初始化日志监听失败，将依赖手动触发分析: {e}")
+
+    # 兜底：每 5 分钟定时触发一次分析，防止极端情况下监听失效或长时间无请求却仍需刷新统计
+    def fallback_analyzer():
+        import time
+
+        while True:
+            try:
+                for hours in [1, 24, 168]:
+                    try:
+                        analyze_logs(
+                            time_range_hours=hours,
+                            use_cache=False,
+                            trigger="auto_fallback",
+                            save_cache=True,
+                        )
+                    except Exception as exc:
+                        logging.warning("兜底定时分析失败 (hours=%s): %s", hours, exc)
+
+                # 定期清理统计缓存
+                try:
+                    cleanup_old_cache(max_age_hours=24)
+                except Exception as exc:
+                    logging.warning("兜底定时清理统计缓存失败: %s", exc)
+            except Exception as exc:
+                logging.error("兜底定时分析线程异常: %s", exc)
+
+            # 每 5 分钟兜底一次
+            time.sleep(300)
+
+    threading.Thread(target=fallback_analyzer, daemon=True).start()
+    print("✓ 统计分析兜底定时任务已启动（每 5 分钟一次）")
 
 
 # 挂载静态文件目录（前端打包文件）
