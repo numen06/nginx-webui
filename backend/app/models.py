@@ -96,3 +96,18 @@ class GitRepository(Base):
         nullable=False,
     )
 
+
+class StatisticsCache(Base):
+    """统计数据缓存"""
+    __tablename__ = "statistics_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    time_range_hours = Column(Integer, nullable=False, index=True)  # 时间范围（小时）
+    cache_key = Column(String(100), unique=True, nullable=False, index=True)  # 缓存键：hours_timestamp
+    data = Column(Text, nullable=False)  # JSON格式的统计数据
+    start_time = Column(DateTime, nullable=False)  # 统计开始时间
+    end_time = Column(DateTime, nullable=False)  # 统计结束时间
+    last_log_position = Column(Integer, default=0)  # 上次读取的日志位置（行号）
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+

@@ -4,6 +4,7 @@ FastAPI 应用主入口
 
 import shutil
 import threading
+import asyncio
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +40,8 @@ from app.routers import (
     git,
 )
 from app.routers import statistics, system
+from app.utils.statistics_cache import cleanup_old_cache
+from app.routers.statistics import analyze_logs
 
 # 初始化数据库
 init_db()
@@ -173,6 +176,33 @@ async def startup_event():
         # 自动启动失败不影响应用启动
         print(f"⚠ 自动启动 Nginx 时出错: {str(e)}")
         print("   应用将继续启动，您可以稍后手动启动 Nginx")
+    
+    # 启动后台任务：定期更新统计缓存
+    def background_cache_updater_sync():
+        """后台任务：定期更新统计缓存（同步版本，在线程中运行）"""
+        import time
+        time.sleep(30)  # 启动后等待30秒再开始
+        while True:
+            try:
+                # 更新常用时间范围的缓存（1小时、24小时、7天）
+                for hours in [1, 24, 168]:
+                    try:
+                        analyze_logs(time_range_hours=hours, use_cache=False)
+                    except Exception as e:
+                        logging.warning(f"更新统计缓存失败 (hours={hours}): {e}")
+                
+                # 清理过期缓存（每天执行一次）
+                cleanup_old_cache(max_age_hours=24)
+            except Exception as e:
+                logging.error(f"后台缓存更新任务出错: {e}")
+            
+            # 每5分钟更新一次
+            time.sleep(300)
+    
+    # 在后台线程中启动缓存更新任务
+    cache_thread = threading.Thread(target=background_cache_updater_sync, daemon=True)
+    cache_thread.start()
+    print("✓ 统计缓存后台更新任务已启动")
 
 
 # 挂载静态文件目录（前端打包文件）
