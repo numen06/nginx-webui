@@ -7,6 +7,7 @@ from typing import Optional, Dict, List, Any
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter, deque
+import logging
 import re
 import threading
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -313,6 +314,8 @@ def iter_log_lines_from_tail(file_path: Path):
             return
 
 
+logger = logging.getLogger(__name__)
+
 ANALYSIS_INTERVAL_SECONDS = 300  # 后台分析间隔：5分钟
 
 # 全局分析状态（仅用于状态展示）
@@ -335,6 +338,10 @@ def _run_analyze_in_background(time_range_hours: int) -> None:
 
     # 如果已经在分析中，直接跳过
     if ANALYSIS_STATE.get("is_running"):
+        logger.info(
+            "[statistics] 后台分析已在进行中，本次触发将被忽略（hours=%s）",
+            time_range_hours,
+        )
         return
 
     t = threading.Thread(target=_task, daemon=True)
@@ -349,10 +356,20 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
         time_range_hours: 时间范围（小时）
         use_cache: 是否使用缓存
     """
+    logger.info(
+        "[statistics] 开始分析访问日志，time_range_hours=%s, use_cache=%s",
+        time_range_hours,
+        use_cache,
+    )
+
     # 尝试从缓存获取
     if use_cache:
         cached_data = get_cached_statistics(time_range_hours, max_age_minutes=5)
         if cached_data:
+            logger.info(
+                "[statistics] 命中统计缓存，直接返回结果，time_range_hours=%s",
+                time_range_hours,
+            )
             return cached_data
 
     access_log_path = _resolve_access_log_path()
@@ -382,6 +399,7 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     # 上次分析时间：按“日志中最后一条有效记录的时间”来定义
     last_entry_time: Optional[datetime] = None
 
+    start_ts = datetime.now()
     try:
         for line in iter_log_lines_from_tail(access_log_file):
             entry = parse_access_log_line(line.strip())
@@ -448,6 +466,13 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
         # 标记分析结束
         ANALYSIS_STATE["is_running"] = False
         ANALYSIS_STATE["last_end_time"] = datetime.now()
+        duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
+        logger.info(
+            "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
+            time_range_hours,
+            total_requests,
+            duration,
+        )
 
     error_requests = sum(
         count for status, count in status_stats.items() if status >= 400
@@ -667,6 +692,10 @@ async def trigger_statistics_analyze(
     """
     # 已在分析中，直接返回提示
     if ANALYSIS_STATE.get("is_running"):
+        logger.info(
+            "[statistics] 手动触发分析被拒绝：当前已有分析任务在进行中（hours=%s）",
+            hours,
+        )
         return {
             "success": False,
             "message": "统计分析正在进行中，请稍后再试",
@@ -674,6 +703,11 @@ async def trigger_statistics_analyze(
         }
 
     try:
+        logger.info(
+            "[statistics] 手动触发统计分析开始，hours=%s，用户=%s",
+            hours,
+            getattr(current_user, "username", None),
+        )
         _run_analyze_in_background(time_range_hours=hours)
         return {
             "success": True,
@@ -681,6 +715,7 @@ async def trigger_statistics_analyze(
             "is_analyzing": True,
         }
     except Exception as e:
+        logger.exception("[statistics] 手动触发统计分析失败：%s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"触发统计分析失败: {str(e)}",
