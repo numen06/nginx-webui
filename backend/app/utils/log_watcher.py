@@ -70,30 +70,51 @@ def start_log_watcher(
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._timer: Optional[threading.Timer] = None
+            self._timer_lock = threading.Lock()  # 保护定时器状态的锁
 
         def _schedule_trigger(self):
-            # 取消已有的定时任务，合并多次文件变更
-            if self._timer is not None and self._timer.is_alive():
-                self._timer.cancel()
+            """
+            延迟执行逻辑：
+            - 如果定时器不存在或已过期，设置新的30秒定时器
+            - 如果定时器正在运行，不做任何操作（忽略本次触发）
+            - 30秒后统一执行一次分析
+            """
+            with self._timer_lock:
+                # 如果定时器正在运行，忽略本次触发
+                if self._timer is not None and self._timer.is_alive():
+                    logger.debug(
+                        "[log_watcher] 检测到日志更新，但已有延迟任务在等待（%s秒后执行），本次触发被忽略",
+                        debounce_seconds,
+                    )
+                    return
 
-            def _fire():
+                def _fire():
+                    logger.info(
+                        "[log_watcher] 延迟 %s 秒后，开始触发合并后的后台分析",
+                        debounce_seconds,
+                    )
+                    # 在独立线程中调用回调，避免阻塞 inotify 事件循环
+                    threading.Thread(target=analyze_callback, daemon=True).start()
+                    # 执行完成后，清除定时器引用
+                    with self._timer_lock:
+                        self._timer = None
+
+                # 设置新的30秒定时器
+                self._timer = threading.Timer(debounce_seconds, _fire)
+                self._timer.daemon = True
+                self._timer.start()
                 logger.info(
-                    "[log_watcher] 访问日志在最近 %s 秒内有更新，开始触发合并后的后台分析",
+                    "[log_watcher] 检测到日志更新，已设置延迟任务（%s秒后执行），"
+                    "在此期间的新触发将被忽略",
                     debounce_seconds,
                 )
-                # 在独立线程中调用回调，避免阻塞 inotify 事件循环
-                threading.Thread(target=analyze_callback, daemon=True).start()
-
-            self._timer = threading.Timer(debounce_seconds, _fire)
-            self._timer.daemon = True
-            self._timer.start()
 
         def _maybe_trigger(self, event_path: str):
             # 只关心目标文件（按文件名匹配，兼容轮转/重建）
             if Path(event_path).name != access_log_path.name:
                 return
 
-            # 不立即触发，延迟 debounce_seconds 秒合并触发
+            # 延迟 debounce_seconds 秒后统一执行（期间的新触发会被忽略）
             self._schedule_trigger()
 
         def process_IN_MODIFY(self, event):  # type: ignore[override]
