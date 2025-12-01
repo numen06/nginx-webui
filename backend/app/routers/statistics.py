@@ -241,6 +241,12 @@ def _parse_logs_in_range(time_range_hours: int = 24) -> List[Dict]:
 
     # 读取访问日志
     access_log_file = Path(access_log_path)
+
+    # 读取同时间范围下的历史缓存，用于在“本次无新日志”时沿用上一次的 last_analysis_time
+    previous_cache = get_cached_statistics(time_range_hours, max_age_minutes=None)
+    previous_last_analysis_time_str: Optional[str] = None
+    if previous_cache:
+        previous_last_analysis_time_str = previous_cache.get("last_analysis_time")
     all_lines = read_log_tail(access_log_file, max_lines=max_lines)
 
     # 解析日志
@@ -320,17 +326,28 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_INTERVAL_SECONDS = 300  # 后台分析间隔：5分钟
 
+def reset_analysis_state() -> None:
+    """
+    重置全局分析任务状态。
+    在程序启动时应调用一次，避免沿用上一次进程中的“分析中”等状态。
+    """
+    ANALYSIS_STATE.update(
+        {
+            "is_running": False,  # 当前是否有分析任务在执行
+            "last_start_time": None,  # 最近一次分析任务开始时间
+            "last_end_time": None,  # 最近一次分析任务结束时间
+            "last_error": None,  # 最近一次分析错误信息（如果有）
+            "last_success": None,  # 最近一次分析是否成功 True/False/None
+            "last_trigger": None,  # 最近一次分析触发方式：auto / manual / watcher / auto_fallback
+            "last_duration_seconds": 0.0,  # 最近一次完整任务耗时（秒）
+            "watcher_enabled": False,  # 是否启用了基于日志变化的监听（由 main.py 设置）
+        }
+    )
+
+
 # 全局分析状态（仅用于任务状态展示，而不是数据内容）
-ANALYSIS_STATE: Dict[str, Any] = {
-    "is_running": False,  # 当前是否有分析任务在执行
-    "last_start_time": None,  # 最近一次分析任务开始时间
-    "last_end_time": None,  # 最近一次分析任务结束时间
-    "last_error": None,  # 最近一次分析错误信息（如果有）
-    "last_success": None,  # 最近一次分析是否成功 True/False/None
-    "last_trigger": None,  # 最近一次分析触发方式：auto / manual / watcher
-    "last_duration_seconds": 0.0,  # 最近一次完整任务耗时（秒）
-    "watcher_enabled": False,  # 是否启用了基于日志变化的监听
-}
+ANALYSIS_STATE: Dict[str, Any] = {}
+reset_analysis_state()
 
 
 def _run_analyze_in_background(time_range_hours: int, trigger: str = "manual") -> None:
@@ -609,10 +626,17 @@ def analyze_logs(
             pass
 
     # 计算状态字段
-    # “上次分析时间” = 日志中最后一条被分析记录的时间（如果有），否则回退到分析结束时间
-    last_analysis_time = (
-        last_entry_time or ANALYSIS_STATE.get("last_end_time") or end_time
-    )
+    # “上次分析时间”：
+    #   1. 优先使用本次分析到的最新日志时间 last_entry_time（数据维度）
+    #   2. 如果本次时间窗口内没有任何有效日志，则沿用上一次缓存中的 last_analysis_time
+    #   3. 如果仍然没有可用时间，则回退到本次分析结束时间
+    if last_entry_time is not None:
+        last_analysis_time_iso = last_entry_time.isoformat()
+    elif previous_last_analysis_time_str:
+        last_analysis_time_iso = previous_last_analysis_time_str
+    else:
+        fallback_dt = ANALYSIS_STATE.get("last_end_time") or end_time
+        last_analysis_time_iso = fallback_dt.isoformat()
 
     result = {
         "success": True,
@@ -623,9 +647,7 @@ def analyze_logs(
         "analysis_status": "success",
         "analysis_status_message": None,
         "is_analyzing": ANALYSIS_STATE.get("is_running", False),
-        "last_analysis_time": (
-            last_analysis_time.isoformat() if last_analysis_time else None
-        ),
+        "last_analysis_time": last_analysis_time_iso,
         # 分析任务处理的访问日志条数（任务分析行数）
         "analyzed_lines": total_requests,
         "summary": {

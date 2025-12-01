@@ -42,7 +42,7 @@ from app.routers import (
 from app.routers import statistics, system
 from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
-from app.routers.statistics import analyze_logs, ANALYSIS_STATE
+from app.routers.statistics import analyze_logs, ANALYSIS_STATE, reset_analysis_state
 from app.utils.log_watcher import start_log_watcher
 from app.routers.logs import _resolve_access_log_path
 
@@ -88,6 +88,12 @@ app.include_router(system.router)
 @app.on_event("startup")
 async def startup_event():
     """应用启动时打印核心配置信息并自动启动nginx"""
+    # 启动前重置统计分析任务状态，避免沿用上一次进程中的“分析中”等状态
+    try:
+        reset_analysis_state()
+    except Exception:
+        # 即使重置失败也不影响应用启动，只在日志中记录
+        logging.warning("重置统计分析状态失败，将使用默认状态")
     cfg = get_config()
     nginx_available = is_nginx_available()
 
