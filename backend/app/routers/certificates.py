@@ -123,6 +123,21 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _get_file_extension(filename: str, default_ext: str) -> str:
+    """从文件名提取扩展名，如果无效则返回默认扩展名"""
+    if not filename:
+        return default_ext
+    ext = Path(filename).suffix.lower()
+    # 只接受常见的证书/私钥扩展名
+    valid_cert_exts = {".crt", ".pem", ".cer"}
+    valid_key_exts = {".key", ".pem"}
+    if default_ext == ".crt" and ext in valid_cert_exts:
+        return ext
+    elif default_ext == ".key" and ext in valid_key_exts:
+        return ext
+    return default_ext
+
+
 def _persist_certificate_record(
     *,
     domain: str,
@@ -134,11 +149,41 @@ def _persist_certificate_record(
     request: Request,
     audit_action: str,
     success_message: str = "证书上传成功",
+    cert_id: Optional[int] = None,  # 如果提供，则更新现有证书
+    cert_filename: Optional[str] = None,  # 原始证书文件名
+    key_filename: Optional[str] = None,  # 原始私钥文件名
 ):
     if not cert_bytes or not key_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="证书或私钥内容为空"
         )
+
+    # 域名唯一性校验（在写入文件前检查）
+    if cert_id:
+        # 更新证书时，检查域名是否变更，如果变更则检查新域名是否已存在
+        cert = db.query(Certificate).filter(Certificate.id == cert_id).first()
+        if not cert:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在"
+            )
+        if cert.domain != domain:
+            existing_cert = db.query(Certificate).filter(
+                Certificate.domain == domain,
+                Certificate.id != cert_id
+            ).first()
+            if existing_cert:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"域名 {domain} 已存在其他证书，无法修改"
+                )
+    else:
+        # 创建新证书时，检查域名是否已存在
+        existing_cert = db.query(Certificate).filter(Certificate.domain == domain).first()
+        if existing_cert:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"域名 {domain} 已存在证书，请使用重新上传功能更新现有证书"
+            )
 
     config = get_config()
     ssl_dir = Path(config.nginx.ssl_dir)
@@ -147,8 +192,12 @@ def _persist_certificate_record(
         ssl_dir = ssl_dir.resolve()
     ssl_dir.mkdir(parents=True, exist_ok=True)
 
-    cert_path = ssl_dir / f"{domain}.crt"
-    key_path = ssl_dir / f"{domain}.key"
+    # 从原始文件名提取扩展名，保留用户的文件格式
+    cert_ext = _get_file_extension(cert_filename, ".crt")
+    key_ext = _get_file_extension(key_filename, ".key")
+    
+    cert_path = ssl_dir / f"{domain}{cert_ext}"
+    key_path = ssl_dir / f"{domain}{key_ext}"
 
     cert_path.write_bytes(cert_bytes)
     key_path.write_bytes(key_bytes)
@@ -161,19 +210,53 @@ def _persist_certificate_record(
     valid_from = _parse_iso_datetime(cert_info.get("valid_from"))
     valid_to = _parse_iso_datetime(cert_info.get("valid_to"))
 
-    cert = Certificate(
-        domain=domain,
-        cert_path=str(cert_path_abs),
-        key_path=str(key_path_abs),
-        issuer=cert_info.get("issuer"),
-        valid_from=valid_from,
-        valid_to=valid_to,
-        auto_renew=auto_renew,
-        created_by_id=current_user.id,
-    )
-    db.add(cert)
-    db.commit()
-    db.refresh(cert)
+    # 如果提供了cert_id，更新现有证书；否则创建新证书
+    if cert_id:
+        # cert 已经在前面查询过了
+        if cert.domain != domain:
+            cert.domain = domain
+        
+        # 如果文件路径发生变化（扩展名不同），删除旧文件
+        old_cert_path = Path(cert.cert_path) if cert.cert_path else None
+        old_key_path = Path(cert.key_path) if cert.key_path else None
+        
+        # 更新证书信息
+        cert.cert_path = str(cert_path_abs)
+        cert.key_path = str(key_path_abs)
+        
+        # 删除旧文件（如果路径不同）
+        if old_cert_path and old_cert_path.exists() and old_cert_path != cert_path_abs:
+            try:
+                old_cert_path.unlink()
+            except Exception:
+                pass  # 忽略删除失败
+        
+        if old_key_path and old_key_path.exists() and old_key_path != key_path_abs:
+            try:
+                old_key_path.unlink()
+            except Exception:
+                pass  # 忽略删除失败
+        cert.issuer = cert_info.get("issuer")
+        cert.valid_from = valid_from
+        cert.valid_to = valid_to
+        cert.auto_renew = auto_renew
+        db.commit()
+        db.refresh(cert)
+        success_message = "证书更新成功"
+    else:
+        cert = Certificate(
+            domain=domain,
+            cert_path=str(cert_path_abs),
+            key_path=str(key_path_abs),
+            issuer=cert_info.get("issuer"),
+            valid_from=valid_from,
+            valid_to=valid_to,
+            auto_renew=auto_renew,
+            created_by_id=current_user.id,
+        )
+        db.add(cert)
+        db.commit()
+        db.refresh(cert)
 
     create_audit_log(
         db=db,
@@ -306,7 +389,7 @@ async def get_certificates(
         # 检查证书是否即将过期（30天内）
         days_until_expiry = None
         if cert.valid_to:
-            days_until_expiry = (cert.valid_to - datetime.utcnow()).days
+            days_until_expiry = (cert.valid_to - datetime.now()).days
 
         result.append(
             {
@@ -372,10 +455,11 @@ async def upload_certificate(
     cert_file: UploadFile = File(...),
     key_file: UploadFile = File(...),
     auto_renew: bool = Form(False),
+    cert_id: Optional[int] = Form(None),  # 如果提供，则更新现有证书
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """手动上传证书"""
+    """手动上传证书（如果提供cert_id，则更新现有证书）"""
     try:
         cert_bytes = await cert_file.read()
         key_bytes = await key_file.read()
@@ -387,8 +471,11 @@ async def upload_certificate(
             current_user=current_user,
             db=db,
             request=request,
-            audit_action="cert_upload",
-            success_message="证书上传成功",
+            audit_action="cert_upload" if not cert_id else "cert_update",
+            success_message="证书上传成功" if not cert_id else "证书更新成功",
+            cert_id=cert_id,
+            cert_filename=cert_file.filename,
+            key_filename=key_file.filename,
         )
     except HTTPException:
         raise
@@ -507,6 +594,7 @@ async def upload_certificate_archive(
     domain: str = Form(None),
     archive_file: UploadFile = File(...),
     auto_renew: bool = Form(False),
+    cert_id: Optional[int] = Form(None),  # 如果提供，则更新现有证书
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -577,6 +665,10 @@ async def upload_certificate_archive(
 
             cert_bytes = cert_path.read_bytes()
             key_bytes = key_path.read_bytes()
+            
+            # 从解压后的文件路径中提取原始文件名
+            cert_filename = cert_path.name
+            key_filename = key_path.name
 
         return _persist_certificate_record(
             domain=domain,
@@ -586,8 +678,11 @@ async def upload_certificate_archive(
             current_user=current_user,
             db=db,
             request=request,
-            audit_action="cert_upload_archive",
-            success_message="证书压缩包上传成功",
+            audit_action="cert_upload_archive" if not cert_id else "cert_update",
+            success_message="证书压缩包上传成功" if not cert_id else "证书更新成功",
+            cert_id=cert_id,
+            cert_filename=cert_filename,
+            key_filename=key_filename,
         )
     except HTTPException:
         raise
@@ -690,17 +785,31 @@ async def renew_cert(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """手动续期指定证书"""
+    """手动续期指定证书（对于手动上传的证书，会尝试通过certbot申请新证书）"""
     cert = db.query(Certificate).filter(Certificate.id == cert_id).first()
 
     if not cert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
-    # 调用 certbot 续期
+    # 先尝试通过 certbot 续期（适用于通过certbot申请的证书）
     result = renew_certificate(domain=cert.domain)
+
+    # 如果续期失败，可能是因为证书是手动上传的，certbot中没有记录
+    # 这种情况下，我们可以尝试重新申请证书（如果用户配置了邮箱等信息）
+    # 但目前先返回错误，提示用户手动更新证书
+    if not result["success"]:
+        # 检查是否是因为certbot中没有该域名的记录
+        if "No such certificate" in result.get("output", "") or "certificate not found" in result.get("output", "").lower():
+            return {
+                "success": False,
+                "message": f"该证书是通过手动上传的，无法自动续期。请通过重新上传功能手动更新证书，或通过申请证书功能使用certbot自动申请新证书。",
+                "output": result.get("output", "")
+            }
 
     # 如果续期成功，更新证书信息
     if result["success"]:
+        # 如果续期成功，certbot会更新证书文件，我们需要更新数据库中的证书信息
+        # 但手动上传的证书路径可能不在certbot的标准路径，需要重新读取证书文件
         cert_info = get_certificate_info(cert.cert_path)
 
         if cert_info.get("valid_to"):
@@ -850,7 +959,7 @@ async def check_certificate_expiry(
     for cert in certificates:
         days_until_expiry = None
         if cert.valid_to:
-            days_until_expiry = (cert.valid_to - datetime.utcnow()).days
+            days_until_expiry = (cert.valid_to - datetime.now()).days
 
         result.append(
             {

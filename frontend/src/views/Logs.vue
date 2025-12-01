@@ -107,6 +107,14 @@
               filename="access-log"
               ref="accessLogViewerRef"
             />
+            <div
+              v-if="accessHasMore && !loading && accessLogs && accessLogs.length > 0"
+              class="load-more-wrapper"
+            >
+              <el-button size="small" type="info" @click="loadMoreAccess">
+                加载更早的 100 行
+              </el-button>
+            </div>
           </div>
         </el-card>
       </el-tab-pane>
@@ -216,6 +224,14 @@
               filename="error-log"
               ref="errorLogViewerRef"
             />
+            <div
+              v-if="errorHasMore && !loading && errorLogs && errorLogs.length > 0"
+              class="load-more-wrapper"
+            >
+              <el-button size="small" type="info" @click="loadMoreError">
+                加载更早的 100 行
+              </el-button>
+            </div>
           </div>
         </el-card>
       </el-tab-pane>
@@ -263,6 +279,14 @@ const accessLogViewerRef = ref(null)
 const errorLogViewerRef = ref(null)
 const MAX_VERSION_LABEL_LENGTH = 20
 
+// 日志分页相关（仅查看最近部分日志，支持逐步向上加载）
+const ACCESS_PAGE_SIZE = 100
+const ERROR_PAGE_SIZE = 100
+const accessPage = ref(1)
+const errorPage = ref(1)
+const accessHasMore = ref(false)
+const errorHasMore = ref(false)
+
 const formatShortVersion = (text) => {
   if (!text) return ''
   return text.length > MAX_VERSION_LABEL_LENGTH
@@ -274,11 +298,12 @@ const loadLogs = async () => {
   loading.value = true
   try {
     if (activeTab.value === 'access') {
+      // 重置为第一页，默认查看最近的 1000 行
+      accessPage.value = 1
       const keyword = accessFilters.value.keyword || null
       const startDate = accessFilters.value.dateRange?.[0] || null
       const endDate = accessFilters.value.dateRange?.[1] || null
-      // 使用最大允许的page_size来获取日志（后端限制为1000）
-      const response = await logsApi.getAccessLogs(1, 1000, keyword, startDate, endDate)
+      const response = await logsApi.getAccessLogs(accessPage.value, ACCESS_PAGE_SIZE, keyword, startDate, endDate)
       console.log('访问日志响应:', response)
       if (response && response.success !== false) {
         accessLogs.value = Array.isArray(response.logs) ? response.logs : []
@@ -291,6 +316,10 @@ const loadLogs = async () => {
           install_path: response.install_path || null,
           binary: response.binary || null
         }
+        // 更新是否还有更多更早的日志
+        const pagination = response.pagination || {}
+        const totalPages = pagination.total_pages || 1
+        accessHasMore.value = accessPage.value < totalPages
       } else {
         accessLogs.value = []
         if (response && response.success === false) {
@@ -298,11 +327,12 @@ const loadLogs = async () => {
         }
       }
     } else {
+      // 重置为第一页，默认查看最近的 1000 行
+      errorPage.value = 1
       const keyword = errorFilters.value.keyword || null
       const startDate = errorFilters.value.dateRange?.[0] || null
       const endDate = errorFilters.value.dateRange?.[1] || null
-      // 使用较大的page_size来获取日志（后端限制为50000）
-      const response = await logsApi.getErrorLogs(1, 50000, keyword, startDate, endDate)
+      const response = await logsApi.getErrorLogs(errorPage.value, ERROR_PAGE_SIZE, keyword, startDate, endDate)
       console.log('错误日志响应:', response)
       if (response && response.success !== false) {
         errorLogs.value = Array.isArray(response.logs) ? response.logs : []
@@ -315,6 +345,10 @@ const loadLogs = async () => {
           install_path: response.install_path || null,
           binary: response.binary || null
         }
+        // 更新是否还有更多更早的日志
+        const pagination = response.pagination || {}
+        const totalPages = pagination.total_pages || 1
+        errorHasMore.value = errorPage.value < totalPages
       } else {
         errorLogs.value = []
         if (response && response.success === false) {
@@ -331,6 +365,73 @@ const loadLogs = async () => {
     } else {
       errorLogs.value = []
     }
+  } finally {
+    loading.value = false
+  }
+}
+
+// 加载更多（更早）的访问日志
+const loadMoreAccess = async () => {
+  if (!accessHasMore.value || loading.value) return
+  loading.value = true
+  try {
+    accessPage.value += 1
+    const keyword = accessFilters.value.keyword || null
+    const startDate = accessFilters.value.dateRange?.[0] || null
+    const endDate = accessFilters.value.dateRange?.[1] || null
+    const response = await logsApi.getAccessLogs(accessPage.value, ACCESS_PAGE_SIZE, keyword, startDate, endDate)
+    console.log('访问日志（加载更多）响应:', response)
+    if (response && response.success !== false) {
+      const newLogs = Array.isArray(response.logs) ? response.logs : []
+      // 更早的日志追加到当前列表顶部
+      accessLogs.value = [...newLogs, ...accessLogs.value]
+      const pagination = response.pagination || {}
+      const totalPages = pagination.total_pages || 1
+      accessHasMore.value = accessPage.value < totalPages
+    } else {
+      accessPage.value -= 1
+      if (response && response.success === false) {
+        ElMessage.warning(response.detail || '未获取到更多访问日志数据')
+      }
+    }
+  } catch (error) {
+    accessPage.value -= 1
+    console.error('加载更多访问日志失败:', error)
+    const errorMsg = error?.detail || error?.message || '加载更多访问日志失败'
+    ElMessage.error(errorMsg)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 加载更多（更早）的错误日志
+const loadMoreError = async () => {
+  if (!errorHasMore.value || loading.value) return
+  loading.value = true
+  try {
+    errorPage.value += 1
+    const keyword = errorFilters.value.keyword || null
+    const startDate = errorFilters.value.dateRange?.[0] || null
+    const endDate = errorFilters.value.dateRange?.[1] || null
+    const response = await logsApi.getErrorLogs(errorPage.value, ERROR_PAGE_SIZE, keyword, startDate, endDate)
+    console.log('错误日志（加载更多）响应:', response)
+    if (response && response.success !== false) {
+      const newLogs = Array.isArray(response.logs) ? response.logs : []
+      errorLogs.value = [...newLogs, ...errorLogs.value]
+      const pagination = response.pagination || {}
+      const totalPages = pagination.total_pages || 1
+      errorHasMore.value = errorPage.value < totalPages
+    } else {
+      errorPage.value -= 1
+      if (response && response.success === false) {
+        ElMessage.warning(response.detail || '未获取到更多错误日志数据')
+      }
+    }
+  } catch (error) {
+    errorPage.value -= 1
+    console.error('加载更多错误日志失败:', error)
+    const errorMsg = error?.detail || error?.message || '加载更多错误日志失败'
+    ElMessage.error(errorMsg)
   } finally {
     loading.value = false
   }
@@ -503,6 +604,12 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.load-more-wrapper {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
 }
 
 </style>

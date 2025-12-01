@@ -133,7 +133,7 @@ def _export_nginx_config(workspace: Path, project_name: str) -> Dict[str, Any]:
     metadata = {
         "project_name": project_name,
         "source_config": str(config_path),
-        "synced_at": datetime.utcnow().isoformat() + "Z",
+        "synced_at": datetime.now().isoformat(),
     }
     metadata_path = project_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
@@ -163,7 +163,7 @@ def sync_repository(repo: GitRepository) -> Dict[str, Any]:
             "message": "没有需要提交的变更",
         }
 
-    commit_message = f"sync nginx config {datetime.utcnow().isoformat()}Z"
+    commit_message = f"sync nginx config {datetime.now().isoformat()}"
     _run_git(["config", "user.name", "nginx-webui"], cwd=workspace)
     _run_git(["config", "user.email", "nginx-webui@example.local"], cwd=workspace)
     _run_git(["commit", "-m", commit_message], cwd=workspace)

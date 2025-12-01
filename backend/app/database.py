@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from app.models import Base, User, ConfigBackup, OperationLog, Certificate, GitRepository
+from app.models import Base, User, ConfigBackup, OperationLog, Certificate, GitRepository, StatisticsCache
 
 
 def _safe_mkdir(path: Path) -> None:
@@ -86,7 +86,7 @@ def init_db():
                 username="admin",
                 password_hash=password_hash,
                 is_active=True,
-                created_at=datetime.utcnow()
+                created_at=datetime.now()
             )
             db.add(admin_user)
             db.commit()

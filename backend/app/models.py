@@ -16,7 +16,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     
     # 关联关系
@@ -32,7 +32,7 @@ class ConfigBackup(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # 关联关系
@@ -50,7 +50,7 @@ class OperationLog(Base):
     target = Column(String(500), nullable=True)  # 操作目标
     details = Column(Text, nullable=True)  # 操作详情（JSON 格式）
     ip_address = Column(String(50), nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.now, nullable=False, index=True)
     
     # 关联关系
     user = relationship("User", back_populates="operation_logs")
@@ -68,7 +68,7 @@ class Certificate(Base):
     valid_from = Column(DateTime, nullable=True)
     valid_to = Column(DateTime, nullable=True, index=True)
     auto_renew = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # 关联关系
@@ -88,11 +88,26 @@ class GitRepository(Base):
     last_synced_at = Column(DateTime, nullable=True)
     last_sync_status = Column(String(50), nullable=True)
     last_sync_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=datetime.now,
+        onupdate=datetime.now,
         nullable=False,
     )
+
+
+class StatisticsCache(Base):
+    """统计数据缓存"""
+    __tablename__ = "statistics_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    time_range_hours = Column(Integer, nullable=False, index=True)  # 时间范围（小时）
+    cache_key = Column(String(100), unique=True, nullable=False, index=True)  # 缓存键：hours_timestamp
+    data = Column(Text, nullable=False)  # JSON格式的统计数据
+    start_time = Column(DateTime, nullable=False)  # 统计开始时间
+    end_time = Column(DateTime, nullable=False)  # 统计结束时间
+    last_log_position = Column(Integer, default=0)  # 上次读取的日志位置（行号）
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
 

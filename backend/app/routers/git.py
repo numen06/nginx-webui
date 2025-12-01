@@ -39,7 +39,7 @@ def _serialize_repo(repo: Optional[GitRepository]) -> Optional[dict]:
         "username": repo.username,
         "branch": repo.branch,
         "has_password": bool(repo.password),
-        "last_synced_at": repo.last_synced_at.isoformat() + "Z"
+        "last_synced_at": repo.last_synced_at.isoformat() if repo.last_synced_at else None
         if repo.last_synced_at
         else None,
         "last_sync_status": repo.last_sync_status,
@@ -81,7 +81,7 @@ async def save_git_config(
 
     repo = _get_repo(db)
 
-    now = datetime.utcnow()
+    now = datetime.now()
     if repo is None:
         repo = GitRepository(
             project_name=project_name,
@@ -138,12 +138,12 @@ async def sync_git_repository(
 
     try:
         result = sync_repository(repo)
-        repo.last_synced_at = datetime.utcnow()
+        repo.last_synced_at = datetime.now()
         repo.last_sync_status = "success" if result.get("changed") else "skipped"
         repo.last_sync_message = result.get("message")
         db.commit()
     except GitSyncError as exc:
-        repo.last_synced_at = datetime.utcnow()
+        repo.last_synced_at = datetime.now()
         repo.last_sync_status = "failed"
         repo.last_sync_message = str(exc)
         db.commit()

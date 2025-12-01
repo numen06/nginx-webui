@@ -38,6 +38,7 @@ from app.auth import get_current_user, User
 from app.config import get_config
 from app.database import get_db
 from app.utils.audit import create_audit_log, get_client_ip
+from app.utils.nginx_status_cache import clear_nginx_status_cache
 
 
 router = APIRouter(prefix="/api/nginx", tags=["nginx"])
@@ -79,6 +80,12 @@ class NginxBuildResult(BaseModel):
     message: str
     version: str
     build_log_path: Optional[str] = None
+
+
+class CompileRequest(BaseModel):
+    """编译请求"""
+
+    custom_configure_args: Optional[str] = None  # 自定义configure参数，每行一个参数
 
 
 class UrlCheckRequest(BaseModel):
@@ -751,18 +758,31 @@ def _restore_protected_dirs(install_path: Path, backups: Dict[str, Path]) -> Non
                 shutil.copytree(backup_path, target_dir, dirs_exist_ok=True)
 
 
-def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResult:
+def _compile_nginx_from_source(
+    source_tar: Path,
+    version: str,
+    custom_configure_args: Optional[List[str]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+) -> NginxBuildResult:
     """
     从源码编译安装 Nginx
 
     Args:
         source_tar: 源码 tar.gz 文件路径
         version: 目标版本号
+        custom_configure_args: 用户自定义的configure参数列表
+        log_callback: 日志回调函数，用于实时输出日志
     """
     _ensure_nginx_dirs()
     build_root = _get_build_root()
 
     logs: list[str] = []
+
+    def _log(message: str):
+        """内部日志函数，同时写入logs列表和回调"""
+        logs.append(message)
+        if log_callback:
+            log_callback(message)
 
     install_path = _get_install_path(
         version
@@ -770,16 +790,19 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
     build_dir = build_root / version  # 源码解压与编译目录：<build_root>/<version>
     tmp_install_path = build_root / f"{version}_install_tmp"  # 编译安装使用的临时目录
 
-    # 如果目标版本已经存在，避免静默覆盖
+    # 如果目标版本已经存在，先备份并清理（允许重新编译）
     if install_path.exists() and any(install_path.iterdir()):
-        msg = f"Nginx 版本 {version} 已存在，请先删除或选择其他版本号"
-        log_path = _write_build_log(version, msg)
-        return NginxBuildResult(
-            success=False,
-            message=msg,
-            version=version,
-            build_log_path=str(log_path),
-        )
+        _log(f"检测到版本 {version} 已存在，将覆盖现有版本...")
+        try:
+            # 创建备份目录
+            backup_path = install_path.parent / f"{version}_backup_{int(time.time())}"
+            if backup_path.exists():
+                shutil.rmtree(backup_path, ignore_errors=True)
+            shutil.move(str(install_path), str(backup_path))
+            _log(f"已将现有版本备份到: {backup_path}")
+        except Exception as e:
+            _log(f"备份现有版本失败: {e}，尝试直接删除...")
+            shutil.rmtree(install_path, ignore_errors=True)
 
     # 清理并创建构建目录
     if build_dir.exists():
@@ -791,65 +814,120 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
         shutil.rmtree(tmp_install_path, ignore_errors=True)
 
     try:
-        logs.append(f"使用源码包: {source_tar}")
+        _log(f"使用源码包: {source_tar}")
 
         # 解压源码
         if not source_tar.exists():
             raise RuntimeError(f"源码包不存在: {source_tar}")
 
+        _log("正在解压源码包...")
         with tarfile.open(source_tar, "r:gz") as tar:
             tar.extractall(build_dir)
-        logs.append(f"已解压到构建目录: {build_dir}")
+        _log(f"已解压到构建目录: {build_dir}")
 
         source_dir = _detect_source_dir(build_dir)
-        logs.append(f"检测到源码目录: {source_dir}")
+        _log(f"检测到源码目录: {source_dir}")
 
-        logs.append(f"临时安装路径: {tmp_install_path}")
+        _log(f"临时安装路径: {tmp_install_path}")
 
-        # configure
-        configure_cmd = [
-            "./configure",
-            f"--prefix={tmp_install_path}",
+        # 默认的configure参数
+        default_configure_args = [
+            # HTTP核心模块
+            "--with-http_ssl_module",  # SSL/TLS支持
+            "--with-http_realip_module",  # 真实IP模块
+            "--with-http_addition_module",  # 响应添加模块
+            "--with-http_sub_module",  # 响应替换模块
+            "--with-http_dav_module",  # WebDAV支持
+            "--with-http_flv_module",  # FLV流媒体支持
+            "--with-http_mp4_module",  # MP4流媒体支持
+            "--with-http_gunzip_module",  # Gunzip支持
+            "--with-http_gzip_static_module",  # Gzip静态支持
+            "--with-http_auth_request_module",  # 认证请求模块
+            "--with-http_random_index_module",  # 随机索引模块
+            "--with-http_secure_link_module",  # 安全链接模块
+            "--with-http_degradation_module",  # 降级模块
+            "--with-http_slice_module",  # 切片模块
+            "--with-http_stub_status_module",  # 状态模块
+            "--with-http_v2_module",  # HTTP/2支持
+            # Stream模块（TCP/UDP代理）
+            "--with-stream",
+            "--with-stream_ssl_module",  # Stream SSL支持
+            "--with-stream_realip_module",  # Stream真实IP模块
+            "--with-stream_ssl_preread_module",  # Stream SSL预读模块
         ]
-        logs.append(f"执行配置命令: {' '.join(configure_cmd)}")
+
+        # 合并默认参数和用户自定义参数
+        # --prefix 必须由后台决定，用户不能覆盖
+        configure_cmd = ["./configure", f"--prefix={tmp_install_path}"]
+
+        # 添加默认参数
+        configure_cmd.extend(default_configure_args)
+
+        # 添加用户自定义参数（排除--prefix，因为由后台决定）
+        if custom_configure_args:
+            for arg in custom_configure_args:
+                arg = arg.strip()
+                if arg and not arg.startswith("--prefix"):
+                    configure_cmd.append(arg)
+
+        _log(f"执行配置命令: {' '.join(configure_cmd)}")
+        _log("=" * 80)
         result = subprocess.run(
             configure_cmd,
             cwd=source_dir,
             capture_output=True,
             text=True,
         )
-        logs.append(result.stdout)
-        logs.append(result.stderr)
+        _log(result.stdout)
+        if result.stderr:
+            _log(result.stderr)
         if result.returncode != 0:
             raise RuntimeError("configure 失败")
+        _log("配置完成！")
+        _log("=" * 80)
 
         # make
         make_cmd = ["make", "-j", str(os.cpu_count() or 1)]
-        logs.append(f"执行编译命令: {' '.join(make_cmd)}")
-        result = subprocess.run(
+        _log(f"执行编译命令: {' '.join(make_cmd)}")
+        _log("=" * 80)
+        # make命令输出较多，实时输出
+        process = subprocess.Popen(
             make_cmd,
             cwd=source_dir,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
+            universal_newlines=True,
         )
-        logs.append(result.stdout)
-        logs.append(result.stderr)
-        if result.returncode != 0:
+        for line in process.stdout:
+            _log(line.rstrip())
+        process.wait()
+        if process.returncode != 0:
             raise RuntimeError("make 失败")
+        _log("编译完成！")
+        _log("=" * 80)
 
         # make install
         install_cmd = ["make", "install"]
-        logs.append(f"执行安装命令: {' '.join(install_cmd)}")
-        result = subprocess.run(
+        _log(f"执行安装命令: {' '.join(install_cmd)}")
+        _log("=" * 80)
+        process = subprocess.Popen(
             install_cmd,
             cwd=source_dir,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
+            universal_newlines=True,
         )
-        logs.append(result.stdout)
-        logs.append(result.stderr)
-        if result.returncode != 0:
+        for line in process.stdout:
+            _log(line.rstrip())
+        process.wait()
+        if process.returncode != 0:
             raise RuntimeError("make install 失败")
+        _log("安装完成！")
+        _log("=" * 80)
 
         # 校验临时安装目录中的可执行文件
         executable = _get_nginx_executable(tmp_install_path)
@@ -868,10 +946,11 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
 
         # 修改编译后的nginx.conf，使其使用版本目录下的配置目录和静态文件目录
         _update_nginx_config_for_version(install_path, version)
-        logs.append("已更新nginx.conf以使用版本目录下的配置目录和静态文件目录")
+        _log("已更新nginx.conf以使用版本目录下的配置目录和静态文件目录")
 
         # 记录真实版本号，供后续展示与 last 目录识别
         _write_version_metadata(install_path, version)
+        _log("编译安装完成！")
 
         full_log = "\n".join(logs)
         log_path = _write_build_log(version, full_log)
@@ -882,7 +961,10 @@ def _compile_nginx_from_source(source_tar: Path, version: str) -> NginxBuildResu
             build_log_path=str(log_path),
         )
     except Exception as e:
-        logs.append(f"编译过程出错: {e}")
+        _log(f"编译过程出错: {e}")
+        import traceback
+
+        _log(traceback.format_exc())
         full_log = "\n".join(logs)
         log_path = _write_build_log(version, full_log)
         return NginxBuildResult(
@@ -1804,22 +1886,25 @@ async def upload_and_build_nginx_version(
 
 @router.post(
     "/versions/{version}/compile",
-    response_model=NginxBuildResult,
-    summary="编译已下载/上传的 Nginx 源码包",
+    summary="编译已下载/上传的 Nginx 源码包（流式输出）",
 )
 async def compile_nginx_version(
     version: str,
-    request: Request,
+    compile_request: CompileRequest = Body(default=CompileRequest()),
+    request: Request = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> NginxBuildResult:
+):
     """
-    使用已下载/上传的源码包编译安装指定版本 Nginx。
+    使用已下载/上传的源码包编译安装指定版本 Nginx（支持实时日志流式输出）。
 
     要求：
     - build_root 中存在 nginx-<version>.tar.gz 或等价源码包
     - 编译成功后会在 versions_root/<version> 下生成完整安装目录
     - 编译完成后，可以通过 /versions/{version}/upgrade-to-production 接口升级到运行版
+
+    支持自定义configure参数（custom_configure_args），每行一个参数。
+    --prefix参数由系统自动设置，不能覆盖。
     """
     _ensure_nginx_dirs()
     source_tar = _get_source_tar_path(version)
@@ -1829,30 +1914,110 @@ async def compile_nginx_version(
             detail="源码包不存在，请先通过在线下载或上传方式准备源码包",
         )
 
-    result = _compile_nginx_from_source(source_tar, version)
+    # 解析用户自定义的configure参数
+    custom_args = []
+    if compile_request.custom_configure_args:
+        custom_args = [
+            line.strip()
+            for line in compile_request.custom_configure_args.split("\n")
+            if line.strip() and not line.strip().startswith("--prefix")
+        ]
 
-    # 记录审计日志
-    create_audit_log(
-        db=db,
-        user_id=current_user.id,
-        username=current_user.username,
-        action="nginx_version_compile",
-        target=version,
-        details={
-            "source_tar": str(source_tar),
-            "success": result.success,
-            "build_log_path": result.build_log_path,
+    async def generate_logs():
+        """生成器函数，实时输出编译日志"""
+        import asyncio
+        import queue
+        from concurrent.futures import ThreadPoolExecutor
+
+        # 创建一个队列来收集日志
+        log_queue = queue.Queue()
+        compile_done = False
+        compile_result = None
+
+        def log_callback_thread(message: str):
+            """日志回调函数（在线程中调用）"""
+            log_queue.put(message)
+
+        try:
+            # 开始编译
+            yield f"data: 开始编译 Nginx {version}...\n\n"
+
+            # 使用线程执行编译
+            executor = ThreadPoolExecutor(max_workers=1)
+
+            future = executor.submit(
+                _compile_nginx_from_source,
+                source_tar,
+                version,
+                custom_args,
+                log_callback_thread,
+            )
+
+            # 实时发送日志
+            while not compile_done:
+                try:
+                    # 等待日志或编译完成
+                    try:
+                        log_message = log_queue.get(timeout=0.5)
+                        # 转义特殊字符，发送SSE格式
+                        escaped_msg = (
+                            log_message.replace("\n", "\\n")
+                            .replace("\r", "\\r")
+                            .replace("\0", "")
+                        )
+                        yield f"data: {escaped_msg}\n\n"
+                    except queue.Empty:
+                        if future.done():
+                            compile_done = True
+                            break
+                        # 继续等待
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    yield f"data: [ERROR] 日志读取错误: {str(e)}\n\n"
+
+            # 获取编译结果
+            result = future.result()
+            compile_result = result
+
+            # 记录审计日志
+            create_audit_log(
+                db=db,
+                user_id=current_user.id,
+                username=current_user.username,
+                action="nginx_version_compile",
+                target=version,
+                details={
+                    "source_tar": str(source_tar),
+                    "success": result.success,
+                    "build_log_path": result.build_log_path,
+                    "custom_args": custom_args,
+                },
+                ip_address=get_client_ip(request),
+            )
+
+            # 发送最终结果
+            if result.success:
+                yield f"data: [SUCCESS] 编译成功！\n\n"
+            else:
+                yield f"data: [ERROR] {result.message}\n\n"
+
+            executor.shutdown(wait=False)
+
+        except Exception as e:
+            import traceback
+
+            error_msg = f"编译过程异常: {str(e)}\n{traceback.format_exc()}"
+            yield f"data: [ERROR] {error_msg}\n\n"
+
+    return StreamingResponse(
+        generate_logs(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用nginx缓冲
         },
-        ip_address=get_client_ip(request),
     )
-
-    if not result.success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=result.message,
-        )
-
-    return result
 
 
 @router.post(
@@ -1885,6 +2050,10 @@ async def upgrade_to_production_version(
 
     # 执行升级
     result = _upgrade_to_production_version(version)
+    
+    # 清除状态缓存（版本切换后状态可能变化）
+    if result.get("success"):
+        clear_nginx_status_cache()
 
     # 记录审计日志
     create_audit_log(
@@ -1950,7 +2119,7 @@ async def get_compile_progress(
 ):
     """
     获取指定版本的编译进度
-    
+
     通过检查编译日志和文件系统状态来判断编译进度
     """
     log_path = _get_build_log_path(version)
@@ -1958,11 +2127,11 @@ async def get_compile_progress(
     build_dir = build_root / version
     install_path = _get_install_path(version)
     executable = _get_nginx_executable(install_path)
-    
+
     progress = 0
     stage = "等待开始"
     message = ""
-    
+
     # 检查是否已编译完成
     if install_path.exists() and executable.exists():
         progress = 100
@@ -1972,16 +2141,16 @@ async def get_compile_progress(
             "progress": progress,
             "stage": stage,
             "message": message,
-            "completed": True
+            "completed": True,
         }
-    
+
     # 检查编译日志
     log_size = 0
     if log_path.exists():
         try:
             log_size = log_path.stat().st_size
             log_content = log_path.read_text(encoding="utf-8", errors="ignore")
-            
+
             # 先检查错误情况
             if "configure 失败" in log_content:
                 progress = 20
@@ -1992,7 +2161,7 @@ async def get_compile_progress(
                     "stage": stage,
                     "message": message,
                     "completed": False,
-                    "error": True
+                    "error": True,
                 }
             if "make 失败" in log_content:
                 progress = 50
@@ -2003,7 +2172,7 @@ async def get_compile_progress(
                     "stage": stage,
                     "message": message,
                     "completed": False,
-                    "error": True
+                    "error": True,
                 }
             if "make install 失败" in log_content:
                 progress = 80
@@ -2014,7 +2183,7 @@ async def get_compile_progress(
                     "stage": stage,
                     "message": message,
                     "completed": False,
-                    "error": True
+                    "error": True,
                 }
             if "编译过程出错" in log_content:
                 progress = max(progress, 10)
@@ -2025,12 +2194,15 @@ async def get_compile_progress(
                     "stage": stage,
                     "message": message,
                     "completed": False,
-                    "error": True
+                    "error": True,
                 }
-            
+
             # 根据日志内容判断进度（按顺序检查，确保进度递增）
             # 检查是否已完成安装
-            if "已将临时安装目录移动到正式路径" in log_content or "已更新nginx.conf" in log_content:
+            if (
+                "已将临时安装目录移动到正式路径" in log_content
+                or "已更新nginx.conf" in log_content
+            ):
                 progress = 95
                 stage = "完成安装"
                 message = "正在完成最后的配置..."
@@ -2071,10 +2243,12 @@ async def get_compile_progress(
         except Exception as e:
             # 读取日志失败，尝试通过文件系统判断
             pass
-    
+
     # 通过文件系统和日志大小判断进度（用于实时更新）
     if build_dir.exists():
-        source_dirs = [d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")]
+        source_dirs = [
+            d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")
+        ]
         if source_dirs:
             source_dir = source_dirs[0]
             # 检查是否有编译产物
@@ -2092,7 +2266,7 @@ async def get_compile_progress(
                         progress = max(progress, estimated_progress)
                         stage = "编译中"
                         message = f"正在编译（已生成 {len(obj_files)} 个目标文件）..."
-            
+
             # 如果日志文件在增长，说明编译正在进行
             if log_size > 0 and progress < 50:
                 # 根据日志大小估算进度（粗略估算）
@@ -2103,20 +2277,22 @@ async def get_compile_progress(
                     progress = max(progress, 45)
                 elif log_size > 5000:  # 5KB
                     progress = max(progress, 30)
-    
+
     # 通过文件系统判断
     if build_dir.exists():
-        source_dirs = [d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")]
+        source_dirs = [
+            d for d in build_dir.iterdir() if d.is_dir() and d.name.startswith("nginx-")
+        ]
         if source_dirs:
             progress = max(progress, 15)
             stage = "源码已解压"
             message = "源码包已解压，准备配置..."
-    
+
     return {
         "progress": progress,
         "stage": stage,
         "message": message,
-        "completed": False
+        "completed": False,
     }
 
 
@@ -2306,6 +2482,10 @@ async def start_nginx_version(
     )
 
     info = _get_version_status(version)
+    
+    # 清除状态缓存（启动后状态已变化）
+    clear_nginx_status_cache()
+    
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 启动成功",
@@ -2394,6 +2574,10 @@ async def stop_nginx_version(
     )
 
     info = _get_version_status(version)
+    
+    # 清除状态缓存（停止后状态已变化）
+    clear_nginx_status_cache()
+    
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 已停止",
@@ -2488,6 +2672,9 @@ async def force_stop_nginx_version(
             detail="尝试发送终止信号后进程仍在运行，请手动检查系统进程",
         )
 
+    # 清除状态缓存（停止后状态已变化）
+    clear_nginx_status_cache()
+
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 已强制停止",
@@ -2498,10 +2685,10 @@ async def force_stop_nginx_version(
 def _get_port_pids(port: int) -> List[int]:
     """
     获取占用指定端口的进程PID列表
-    
+
     Args:
         port: 端口号
-        
+
     Returns:
         占用该端口的进程PID列表
     """
@@ -2650,38 +2837,28 @@ async def force_release_nginx_ports(
     - Linux/macOS: 调用 `lsof -t -iTCP:<port> -sTCP:LISTEN` 获取监听该端口的 PID 列表
     - Windows: 调用 `netstat -ano | findstr :<port>` 获取监听该端口的 PID 列表
     - 对每个 PID 发送 SIGTERM，然后必要时发送 SIGKILL
-    
+
     注意：该能力较强，仅应授予有权限的用户使用。
     """
     ports = [80, 443]
     all_pids: List[int] = []
     port_results = {}
-    
+
     # 获取所有端口的PID
     for port in ports:
         try:
             pids = _get_port_pids(port)
             if pids:
                 all_pids.extend(pids)
-                port_results[port] = {
-                    "pids": pids,
-                    "count": len(pids)
-                }
+                port_results[port] = {"pids": pids, "count": len(pids)}
             else:
-                port_results[port] = {
-                    "pids": [],
-                    "count": 0
-                }
+                port_results[port] = {"pids": [], "count": 0}
         except Exception as e:
-            port_results[port] = {
-                "pids": [],
-                "count": 0,
-                "error": str(e)
-            }
-    
+            port_results[port] = {"pids": [], "count": 0, "error": str(e)}
+
     # 去重所有PID（同一个进程可能占用多个端口）
     all_pids = list(set(all_pids))
-    
+
     if not all_pids:
         # 审计
         create_audit_log(
@@ -2697,7 +2874,7 @@ async def force_release_nginx_ports(
             },
             ip_address=get_client_ip(request),
         )
-        
+
         return {
             "success": True,
             "message": "端口80和443当前没有进程在监听",
@@ -2705,20 +2882,20 @@ async def force_release_nginx_ports(
             "pids": [],
             "port_results": port_results,
         }
-    
+
     # 终止所有进程
     kill_results = _kill_pids(all_pids)
-    
+
     # 更新端口结果，添加终止结果
     for port in ports:
         if port in port_results:
             port_pids = port_results[port]["pids"]
             port_results[port]["kill_results"] = {
-                pid: kill_results.get(pid, {}) 
-                for pid in port_pids 
+                pid: kill_results.get(pid, {})
+                for pid in port_pids
                 if pid in kill_results
             }
-    
+
     # 审计
     create_audit_log(
         db=db,
@@ -2734,9 +2911,11 @@ async def force_release_nginx_ports(
         },
         ip_address=get_client_ip(request),
     )
-    
-    port_summary = ", ".join([f"{port}({port_results[port]['count']}个进程)" for port in ports])
-    
+
+    port_summary = ", ".join(
+        [f"{port}({port_results[port]['count']}个进程)" for port in ports]
+    )
+
     return {
         "success": True,
         "message": f"已尝试终止占用端口{port_summary}的进程",
@@ -2847,11 +3026,11 @@ async def check_setup_status(
     all_versions = _list_all_versions()
     compiled_versions = [v for v in all_versions if v.compiled]
     has_compiled = len(compiled_versions) > 0
-    
+
     # 检查是否有默认nginx压缩包
     default_tar = _get_default_nginx_tar_path()
     has_default_tar = default_tar is not None and default_tar.exists()
-    
+
     return {
         "has_compiled_nginx": has_compiled,
         "has_default_tar": has_default_tar,
@@ -2873,28 +3052,28 @@ async def prepare_default_nginx(
     """
     default_version = "1.29.3"
     default_tar = _get_default_nginx_tar_path()
-    
+
     if not default_tar or not default_tar.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="默认nginx压缩包不存在",
         )
-    
+
     # 检查目标文件是否已存在
     build_root = _get_build_root()
     build_root.mkdir(parents=True, exist_ok=True)
     target_tar = build_root / f"nginx-{default_version}.tar.gz"
-    
+
     if target_tar.exists():
         return {
             "success": True,
             "message": f"默认压缩包已存在于构建目录",
             "version": default_version,
         }
-    
+
     try:
         shutil.copy2(default_tar, target_tar)
-        
+
         # 记录审计日志
         create_audit_log(
             db=db,
@@ -2908,7 +3087,7 @@ async def prepare_default_nginx(
             },
             ip_address=get_client_ip(request),
         )
-        
+
         return {
             "success": True,
             "message": f"默认压缩包已复制到构建目录",

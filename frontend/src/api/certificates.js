@@ -11,13 +11,16 @@ export const certificatesApi = {
     return api.get(`/certificates/${certId}`)
   },
 
-  // 上传证书
-  uploadCertificate(domain, certFile, keyFile, autoRenew) {
+  // 上传证书（如果提供certId，则更新现有证书）
+  uploadCertificate(domain, certFile, keyFile, autoRenew, certId = null) {
     const formData = new FormData()
     formData.append('domain', domain)
     formData.append('cert_file', certFile)
     formData.append('key_file', keyFile)
     formData.append('auto_renew', autoRenew)
+    if (certId) {
+      formData.append('cert_id', certId)
+    }
     return api.post('/certificates/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
@@ -36,14 +39,17 @@ export const certificatesApi = {
     })
   },
 
-  // 上传压缩包并自动解析证书
-  uploadCertificateArchive(domain, archiveFile, autoRenew) {
+  // 上传压缩包并自动解析证书（如果提供certId，则更新现有证书）
+  uploadCertificateArchive(domain, archiveFile, autoRenew, certId = null) {
     const formData = new FormData()
     if (domain) {
       formData.append('domain', domain)
     }
     formData.append('archive_file', archiveFile)
     formData.append('auto_renew', autoRenew)
+    if (certId) {
+      formData.append('cert_id', certId)
+    }
     return api.post('/certificates/upload-archive', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'

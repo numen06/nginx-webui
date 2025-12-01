@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth import get_current_user, User
 from app.utils.nginx import is_nginx_available, get_nginx_status
+from app.utils.version import get_version_info
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -292,5 +293,23 @@ async def get_nginx_status_info(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取 Nginx 状态失败: {str(e)}"
+        )
+
+
+@router.get("/version", summary="获取系统版本信息")
+async def get_system_version(
+    current_user: User = Depends(get_current_user)
+):
+    """获取系统版本信息（基于编译时间）"""
+    try:
+        version_info = get_version_info()
+        return {
+            "success": True,
+            **version_info
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取系统版本信息失败: {str(e)}"
         )
 

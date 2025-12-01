@@ -112,7 +112,7 @@ async def cleanup_audit_logs(
 ):
     """清理早于指定天数的操作日志"""
     retain_days = payload.retain_days
-    cutoff_time = datetime.utcnow() - timedelta(days=retain_days)
+    cutoff_time = datetime.now() - timedelta(days=retain_days)
     
     deleted_count = (
         db.query(OperationLog)

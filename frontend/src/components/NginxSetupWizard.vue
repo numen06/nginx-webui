@@ -198,7 +198,7 @@ const handlePrepare = async () => {
     
     // 自动开始编译
     setTimeout(() => {
-      handleCompile()
+    handleCompile()
     }, 300)
   } catch (error) {
     clearInterval(prepareTimer)
@@ -302,7 +302,7 @@ const handleCompile = async () => {
           // 更新真实进度（0-100%）
           const progressValue = Number(progressData.progress) || 0
           if (progressValue > progressState.lastRealProgress) {
-            progressState.lastRealProgress = progressValue
+          progressState.lastRealProgress = progressValue
             console.log(`[编译进度] API返回真实进度: ${progressValue}%`)
           }
           

@@ -7,10 +7,20 @@
           <template #header>
             <div class="card-header">
               <span>Nginx 运行状态</span>
-              <el-button type="info" text @click="refreshStatus">
-                <el-icon><Refresh /></el-icon>
-                刷新
-              </el-button>
+              <div class="card-actions">
+                <el-button type="info" text @click="refreshStatus">
+                  <el-icon><Refresh /></el-icon>
+                  刷新
+                </el-button>
+                <el-button
+                  type="primary"
+                  text
+                  :disabled="statsStatus.status === 'analyzing' || analyzingManual"
+                  @click="triggerAnalyzeNow"
+                >
+                  立即分析
+                </el-button>
+              </div>
             </div>
           </template>
           <el-descriptions :column="2" border size="small" class="nginx-status-descriptions">
@@ -33,6 +43,53 @@
             </el-descriptions-item>
             <el-descriptions-item label="运行时间" :span="2">
               <el-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="系统版本" :span="2">
+              <el-tag v-if="systemVersion.version" type="info" size="small">
+                {{ systemVersion.version }}
+              </el-tag>
+              <span v-else class="text-muted">未知</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="统计分析状态">
+              <el-tag
+                v-if="statsStatus.status === 'analyzing'"
+                type="info"
+                size="small"
+              >
+                分析中
+              </el-tag>
+              <el-tag
+                v-else-if="statsStatus.status === 'ready'"
+                type="success"
+                size="small"
+              >
+                正常
+              </el-tag>
+              <el-tag
+                v-else-if="statsStatus.status === 'failed'"
+                type="danger"
+                size="small"
+              >
+                失败
+              </el-tag>
+              <el-tag
+                v-else-if="statsStatus.status === 'not_ready'"
+                type="warning"
+                size="small"
+              >
+                未就绪
+              </el-tag>
+              <span v-else class="text-muted">未知</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="上次分析时间" :span="2">
+              <el-text type="info" size="small">
+                {{ statsStatus.lastAnalysisTime ? formatDateTime(statsStatus.lastAnalysisTime) : '-' }}
+              </el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="下次预计分析时间" :span="2">
+              <el-text type="info" size="small">
+                {{ statsStatus.nextAnalysisTime ? formatDateTime(statsStatus.nextAnalysisTime) : '-' }}
+              </el-text>
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -298,6 +355,7 @@ import { configApi } from '../api/config'
 import { statisticsApi } from '../api/statistics'
 import { systemApi } from '../api/system'
 import { ElMessage } from 'element-plus'
+import { formatDateTime } from '../utils/date'
 
 const nginxStatus = ref({
   running: false,
@@ -324,12 +382,40 @@ const systemResources = ref({
   system: {}
 })
 
+const systemVersion = ref({
+  version: null,
+  build_time_formatted: null
+})
+
+// 统计分析状态
+const statsStatus = ref({
+  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing' | 'failed'
+  lastAnalysisTime: null,     // 上次分析到的日志时间（数据维度）
+  nextAnalysisTime: null,     // 下次预计分析时间（数据维度）
+  isAnalyzing: false,         // 后台任务是否在执行
+  lastJobStartTime: null,     // 最近一次任务开始时间
+  lastJobEndTime: null,       // 最近一次任务结束时间
+  lastJobError: null,         // 最近一次任务错误
+  lastJobSuccess: null,       // 最近一次任务是否成功
+  lastJobTrigger: null        // 最近一次任务触发方式：auto / manual
+})
+
 // 访问趋势时间范围（单位：小时）
 // 1 小时：后端按 5 分钟粒度聚合
 // 24 小时：按小时聚合
 // 168 小时（7 天）：按天聚合
 const timeRange = ref(1)
 const loading = ref(false)
+const analyzingManual = ref(false)
+
+// 仪表盘分块加载的各区域 loading 状态
+const loadingSummary = ref(false)       // 顶部统计卡片
+const loadingTrend = ref(false)         // 访问趋势图
+const loadingTopIPs = ref(false)        // Top IP 表格
+const loadingTopPaths = ref(false)      // Top Path 表格
+const loadingStatusDist = ref(false)    // 状态码分布图
+const loadingAttacks = ref(false)       // 攻击记录表格
+
 let refreshTimer = null
 
 // 格式化数字
@@ -525,23 +611,206 @@ const loadNginxStatus = async () => {
   }
 }
 
-// 加载统计数据
-const loadStatistics = async () => {
-  if (loading.value) return
-  loading.value = true
+// 加载基础统计数据（优先加载，轻量级）
+const loadStatisticsSummary = async () => {
+  if (loadingSummary.value) return
+  loadingSummary.value = true
   
   try {
-    const response = await statisticsApi.getOverview(timeRange.value)
+    const response = await statisticsApi.getSummary(timeRange.value)
     if (response.success) {
-      stats.value = response
+      stats.value.summary = response.summary
+      // 数据维度的时间信息
+      statsStatus.value.lastAnalysisTime = response.last_analysis_time || response.end_time || null
+      statsStatus.value.nextAnalysisTime = response.next_analysis_time || null
+
+      // 后台任务维度的状态信息
+      const job = response.analysis_job || {}
+      statsStatus.value.isAnalyzing = !!job.is_running
+      statsStatus.value.lastJobStartTime = job.last_start_time || null
+      statsStatus.value.lastJobEndTime = job.last_end_time || null
+      statsStatus.value.lastJobError = job.last_error || null
+      statsStatus.value.lastJobSuccess = job.last_success
+      statsStatus.value.lastJobTrigger = job.last_trigger || null
+
+      // 统计分析状态：优先展示“任务状态”
+      if (statsStatus.value.isAnalyzing) {
+        statsStatus.value.status = 'analyzing'
+      } else if (statsStatus.value.lastJobSuccess === false || statsStatus.value.lastJobError) {
+        statsStatus.value.status = 'failed'
+      } else if (statsStatus.value.lastJobEndTime) {
+        statsStatus.value.status = 'ready'
+      } else {
+        statsStatus.value.status = 'not_ready'
+      }
     } else {
-      ElMessage.warning(response.error || '获取统计数据失败')
+      statsStatus.value.status = 'not_ready'
+      statsStatus.value.lastAnalysisTime = null
+      statsStatus.value.nextAnalysisTime = null
+      statsStatus.value.isAnalyzing = false
+      statsStatus.value.lastJobStartTime = null
+      statsStatus.value.lastJobEndTime = null
+      statsStatus.value.lastJobError = null
+      statsStatus.value.lastJobSuccess = null
+      statsStatus.value.lastJobTrigger = null
     }
   } catch (error) {
-    ElMessage.error('获取统计数据失败: ' + (error.detail || error.message || '未知错误'))
+    console.error('获取基础统计数据失败:', error)
+    statsStatus.value.status = 'not_ready'
+    statsStatus.value.lastAnalysisTime = null
+    statsStatus.value.nextAnalysisTime = null
+    statsStatus.value.isAnalyzing = false
+     statsStatus.value.lastJobStartTime = null
+     statsStatus.value.lastJobEndTime = null
+     statsStatus.value.lastJobError = null
+     statsStatus.value.lastJobSuccess = null
+     statsStatus.value.lastJobTrigger = null
   } finally {
-    loading.value = false
+    loadingSummary.value = false
   }
+}
+
+// 手动触发统计分析
+const triggerAnalyzeNow = async () => {
+  if (analyzingManual.value || statsStatus.value.status === 'analyzing') return
+  analyzingManual.value = true
+  statsStatus.value.status = 'analyzing'
+  statsStatus.value.isAnalyzing = true
+
+  try {
+    const res = await statisticsApi.triggerAnalyze(timeRange.value)
+    if (res.success) {
+      ElMessage.success(res.message || '统计分析已在后台启动')
+      // 稍等几秒再刷新一次基础统计，更新状态和时间
+      setTimeout(() => {
+        loadStatisticsSummary()
+      }, 5000)
+    } else {
+      if (res.message) {
+        ElMessage.warning(res.message)
+      }
+      // 如果后端提示已在分析中，则保持 analyzing 状态；否则回退为 not_ready
+      if (!res.is_analyzing) {
+        statsStatus.value.status = 'not_ready'
+        statsStatus.value.isAnalyzing = false
+      }
+    }
+  } catch (error) {
+    console.error('手动触发统计分析失败:', error)
+    ElMessage.error('手动触发统计分析失败: ' + (error.detail || error.message || '未知错误'))
+    statsStatus.value.status = 'not_ready'
+    statsStatus.value.isAnalyzing = false
+  } finally {
+    analyzingManual.value = false
+  }
+}
+
+// 加载时间趋势数据
+const loadStatisticsTrend = async () => {
+  if (loadingTrend.value) return
+  loadingTrend.value = true
+  
+  try {
+    const response = await statisticsApi.getTrend(timeRange.value)
+    if (response.success) {
+      stats.value.hourly_trend = response.hourly_trend
+    }
+  } catch (error) {
+    console.error('获取趋势数据失败:', error)
+  } finally {
+    loadingTrend.value = false
+  }
+}
+
+// 加载Top IPs
+const loadTopIPs = async () => {
+  if (loadingTopIPs.value) return
+  loadingTopIPs.value = true
+  
+  try {
+    const response = await statisticsApi.getTopIPs(timeRange.value, 10)
+    if (response.success) {
+      stats.value.top_ips = response.top_ips
+    }
+  } catch (error) {
+    console.error('获取Top IPs失败:', error)
+  } finally {
+    loadingTopIPs.value = false
+  }
+}
+
+// 加载Top Paths
+const loadTopPaths = async () => {
+  if (loadingTopPaths.value) return
+  loadingTopPaths.value = true
+  
+  try {
+    const response = await statisticsApi.getTopPaths(timeRange.value, 10)
+    if (response.success) {
+      stats.value.top_paths = response.top_paths
+    }
+  } catch (error) {
+    console.error('获取Top Paths失败:', error)
+  } finally {
+    loadingTopPaths.value = false
+  }
+}
+
+// 加载状态码分布
+const loadStatusDistribution = async () => {
+  if (loadingStatusDist.value) return
+  loadingStatusDist.value = true
+  
+  try {
+    const response = await statisticsApi.getStatusDistribution(timeRange.value)
+    if (response.success) {
+      stats.value.status_distribution = response.status_distribution
+    }
+  } catch (error) {
+    console.error('获取状态码分布失败:', error)
+  } finally {
+    loadingStatusDist.value = false
+  }
+}
+
+// 加载攻击检测（延迟加载）
+const loadAttacks = async () => {
+  if (loadingAttacks.value) return
+  loadingAttacks.value = true
+  
+  try {
+    const response = await statisticsApi.getAttacks(timeRange.value, 50)
+    if (response.success) {
+      stats.value.attacks = response.attacks
+    }
+  } catch (error) {
+    console.error('获取攻击检测失败:', error)
+  } finally {
+    loadingAttacks.value = false
+  }
+}
+
+// 加载所有统计数据（按优先级分批加载）
+const loadStatistics = async () => {
+  // 第一批：基础统计（立即加载，最轻量）
+  loadStatisticsSummary()
+  
+  // 第二批：图表数据（稍后加载）
+  setTimeout(() => {
+    loadStatisticsTrend()
+    loadStatusDistribution()
+  }, 100)
+  
+  // 第三批：Top数据（再稍后加载）
+  setTimeout(() => {
+    loadTopIPs()
+    loadTopPaths()
+  }, 300)
+  
+  // 第四批：攻击检测（最后加载，数据量大）
+  setTimeout(() => {
+    loadAttacks()
+  }, 500)
 }
 
 // 加载系统资源
@@ -559,11 +828,28 @@ const loadSystemResources = async () => {
   }
 }
 
+// 加载系统版本
+const loadSystemVersion = async () => {
+  try {
+    const response = await systemApi.getVersion()
+    if (response.success) {
+      systemVersion.value = {
+        version: response.version,
+        build_time_formatted: response.build_time_formatted
+      }
+    }
+  } catch (error) {
+    console.error('获取系统版本失败:', error)
+    // 不显示错误消息，版本信息不是关键功能
+  }
+}
+
 // 刷新状态
 const refreshStatus = () => {
   loadNginxStatus()
   loadStatistics()
   loadSystemResources()
+  loadSystemVersion()
 }
 
 // 组件挂载
@@ -571,12 +857,14 @@ onMounted(() => {
   loadNginxStatus()
   loadStatistics()
   loadSystemResources()
+  loadSystemVersion()
   
   // 每30秒自动刷新
   refreshTimer = setInterval(() => {
     loadNginxStatus()
     loadStatistics()
     loadSystemResources()
+    // 版本信息不需要频繁刷新，只在初始加载时获取
   }, 30000)
 })
 
@@ -605,6 +893,10 @@ onUnmounted(() => {
 
 .mr-5 {
   margin-right: 5px;
+}
+
+.ml-10 {
+  margin-left: 10px;
 }
 
 .card-header {
