@@ -23,6 +23,11 @@ from app.utils.nginx import (
     has_pending_config_changes,
     apply_working_config,
 )
+from app.utils.nginx_status_cache import (
+    get_cached_nginx_status,
+    set_cached_nginx_status,
+    clear_nginx_status_cache,
+)
 from app.utils.nginx_versions import get_active_version
 from app.utils.backup import create_backup, list_backups, restore_backup, get_backup
 from app.utils.audit import create_audit_log, get_client_ip
@@ -195,6 +200,9 @@ async def reload_nginx_config(
     apply_working_config()
     result = reload_nginx()
     result["backup_id"] = backup.id
+    
+    # 清除状态缓存（重载后状态可能变化）
+    clear_nginx_status_cache()
 
     # 记录操作日志
     create_audit_log(
@@ -211,9 +219,28 @@ async def reload_nginx_config(
 
 
 @router.get("/status", summary="获取 Nginx 运行状态")
-async def get_status(current_user: User = Depends(get_current_user)):
-    """获取 Nginx 运行状态"""
+async def get_status(
+    force_refresh: bool = False,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    获取 Nginx 运行状态（使用缓存优化性能）
+    
+    Args:
+        force_refresh: 强制刷新，不使用缓存
+    """
+    # 尝试从缓存获取
+    if not force_refresh:
+        cached_status = get_cached_nginx_status()
+        if cached_status is not None:
+            return cached_status
+    
+    # 缓存未命中或强制刷新，重新获取状态
     status_info = get_nginx_status()
+    
+    # 保存到缓存
+    set_cached_nginx_status(status_info)
+    
     return status_info
 
 

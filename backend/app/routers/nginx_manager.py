@@ -38,6 +38,7 @@ from app.auth import get_current_user, User
 from app.config import get_config
 from app.database import get_db
 from app.utils.audit import create_audit_log, get_client_ip
+from app.utils.nginx_status_cache import clear_nginx_status_cache
 
 
 router = APIRouter(prefix="/api/nginx", tags=["nginx"])
@@ -2049,6 +2050,10 @@ async def upgrade_to_production_version(
 
     # 执行升级
     result = _upgrade_to_production_version(version)
+    
+    # 清除状态缓存（版本切换后状态可能变化）
+    if result.get("success"):
+        clear_nginx_status_cache()
 
     # 记录审计日志
     create_audit_log(
@@ -2477,6 +2482,10 @@ async def start_nginx_version(
     )
 
     info = _get_version_status(version)
+    
+    # 清除状态缓存（启动后状态已变化）
+    clear_nginx_status_cache()
+    
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 启动成功",
@@ -2565,6 +2574,10 @@ async def stop_nginx_version(
     )
 
     info = _get_version_status(version)
+    
+    # 清除状态缓存（停止后状态已变化）
+    clear_nginx_status_cache()
+    
     return {
         "success": True,
         "message": f"Nginx 版本 {version} 已停止",
@@ -2658,6 +2671,9 @@ async def force_stop_nginx_version(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="尝试发送终止信号后进程仍在运行，请手动检查系统进程",
         )
+
+    # 清除状态缓存（停止后状态已变化）
+    clear_nginx_status_cache()
 
     return {
         "success": True,

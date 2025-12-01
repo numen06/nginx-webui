@@ -52,12 +52,15 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
 
 # 准备数据目录结构，便于通过 /app/data 单目录持久化
 # 同时清理临时文件和缓存
-RUN mkdir -p /app/data/backend \
+# 记录构建时间作为系统版本
+RUN BUILD_TIME=$(date +%Y%m%d%H%M%S) && \
+    mkdir -p /app/data/backend \
     && mkdir -p /app/data/logs \
     && mkdir -p /app/data/ssl \
     && mkdir -p /app/data/nginx/versions \
     && mkdir -p /app/data/nginx/build_logs \
     && mkdir -p /app/nginx \
+    && echo "$BUILD_TIME" > /app/data/backend/.build_time \
     && rm -rf /app/backend/data && ln -s /app/data/backend /app/backend/data \
     && rm -rf /var/log/nginx && ln -s /app/data/logs /var/log/nginx \
     && rm -rf /app/nginx/ssl && ln -s /app/data/ssl /app/nginx/ssl \

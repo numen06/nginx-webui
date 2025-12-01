@@ -34,6 +34,15 @@
             <el-descriptions-item label="运行时间" :span="2">
               <el-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</el-text>
             </el-descriptions-item>
+            <el-descriptions-item label="系统版本" :span="2">
+              <el-tag v-if="systemVersion.version" type="info" size="small">
+                {{ systemVersion.version }}
+              </el-tag>
+              <el-text v-if="systemVersion.build_time_formatted" type="info" size="small" class="ml-10">
+                ({{ systemVersion.build_time_formatted }})
+              </el-text>
+              <span v-else class="text-muted">未知</span>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
       </el-col>
@@ -324,6 +333,11 @@ const systemResources = ref({
   system: {}
 })
 
+const systemVersion = ref({
+  version: null,
+  build_time_formatted: null
+})
+
 // 访问趋势时间范围（单位：小时）
 // 1 小时：后端按 5 分钟粒度聚合
 // 24 小时：按小时聚合
@@ -559,11 +573,28 @@ const loadSystemResources = async () => {
   }
 }
 
+// 加载系统版本
+const loadSystemVersion = async () => {
+  try {
+    const response = await systemApi.getVersion()
+    if (response.success) {
+      systemVersion.value = {
+        version: response.version,
+        build_time_formatted: response.build_time_formatted
+      }
+    }
+  } catch (error) {
+    console.error('获取系统版本失败:', error)
+    // 不显示错误消息，版本信息不是关键功能
+  }
+}
+
 // 刷新状态
 const refreshStatus = () => {
   loadNginxStatus()
   loadStatistics()
   loadSystemResources()
+  loadSystemVersion()
 }
 
 // 组件挂载
@@ -571,12 +602,14 @@ onMounted(() => {
   loadNginxStatus()
   loadStatistics()
   loadSystemResources()
+  loadSystemVersion()
   
   // 每30秒自动刷新
   refreshTimer = setInterval(() => {
     loadNginxStatus()
     loadStatistics()
     loadSystemResources()
+    // 版本信息不需要频繁刷新，只在初始加载时获取
   }, 30000)
 })
 
@@ -605,6 +638,10 @@ onUnmounted(() => {
 
 .mr-5 {
   margin-right: 5px;
+}
+
+.ml-10 {
+  margin-left: 10px;
 }
 
 .card-header {
