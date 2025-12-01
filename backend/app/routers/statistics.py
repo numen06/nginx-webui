@@ -358,6 +358,7 @@ def analyze_logs(
     time_range_hours: int = 24,
     use_cache: bool = True,
     trigger: str = "auto",
+    save_cache: bool = True,
 ) -> Dict:
     """
     分析日志并返回完整统计数据（保留用于兼容性）
@@ -579,8 +580,8 @@ def analyze_logs(
         "attacks": attack_details[:50],  # 最多返回50条攻击记录
     }
 
-    # 保存到缓存
-    if use_cache:
+    # 保存到缓存（与是否从缓存读取解耦：后台/手动任务通常 use_cache=False 但仍需写入缓存）
+    if save_cache:
         try:
             save_statistics_cache(
                 time_range_hours=time_range_hours,
