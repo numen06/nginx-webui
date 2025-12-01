@@ -19,7 +19,7 @@
                   @click="triggerAnalyzeNow"
                 >
                   <el-icon style="margin-right: 4px;"><DataAnalysis /></el-icon>
-                  立即分析
+                  全量分析
                 </el-button>
               </div>
             </div>
