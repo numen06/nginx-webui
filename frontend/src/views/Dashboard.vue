@@ -43,6 +43,28 @@
               </el-text>
               <span v-else class="text-muted">未知</span>
             </el-descriptions-item>
+            <el-descriptions-item label="统计分析状态">
+              <el-tag
+                v-if="statsStatus.status === 'ready'"
+                type="success"
+                size="small"
+              >
+                已就绪
+              </el-tag>
+              <el-tag
+                v-else-if="statsStatus.status === 'not_ready'"
+                type="warning"
+                size="small"
+              >
+                未就绪
+              </el-tag>
+              <span v-else class="text-muted">未知</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="最后分析时间" :span="2">
+              <el-text type="info" size="small">
+                {{ statsStatus.lastAnalysisTime ? formatDateTime(statsStatus.lastAnalysisTime) : '-' }}
+              </el-text>
+            </el-descriptions-item>
           </el-descriptions>
         </el-card>
       </el-col>
@@ -307,6 +329,7 @@ import { configApi } from '../api/config'
 import { statisticsApi } from '../api/statistics'
 import { systemApi } from '../api/system'
 import { ElMessage } from 'element-plus'
+import { formatDateTime } from '../utils/date'
 
 const nginxStatus = ref({
   running: false,
@@ -336,6 +359,12 @@ const systemResources = ref({
 const systemVersion = ref({
   version: null,
   build_time_formatted: null
+})
+
+// 统计分析状态
+const statsStatus = ref({
+  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready'
+  lastAnalysisTime: null      // 后台分析 end_time（缓存时间范围的结束时间）
 })
 
 // 访问趋势时间范围（单位：小时）
@@ -557,9 +586,16 @@ const loadStatisticsSummary = async () => {
     const response = await statisticsApi.getSummary(timeRange.value)
     if (response.success) {
       stats.value.summary = response.summary
+      statsStatus.value.status = 'ready'
+      statsStatus.value.lastAnalysisTime = response.end_time || null
+    } else {
+      statsStatus.value.status = 'not_ready'
+      statsStatus.value.lastAnalysisTime = null
     }
   } catch (error) {
     console.error('获取基础统计数据失败:', error)
+    statsStatus.value.status = 'not_ready'
+    statsStatus.value.lastAnalysisTime = null
   } finally {
     loadingSummary.value = false
   }

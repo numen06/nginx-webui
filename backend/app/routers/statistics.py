@@ -436,7 +436,7 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
                 log_date = parse_log_date(line)
                 if log_date and log_date >= start_time:
                     error_log_count += 1
-        except:
+        except Exception:
             pass
 
     result = {
@@ -563,6 +563,8 @@ async def get_statistics_summary(
                 "success": True,
                 "time_range_hours": hours,
                 "summary": cached_data["summary"],
+                "start_time": cached_data.get("start_time"),
+                "end_time": cached_data.get("end_time"),
             }
 
         return {

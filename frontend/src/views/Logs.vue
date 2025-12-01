@@ -112,7 +112,7 @@
               class="load-more-wrapper"
             >
               <el-button size="small" type="info" @click="loadMoreAccess">
-                加载更早的 1000 行
+                加载更早的 100 行
               </el-button>
             </div>
           </div>
@@ -229,7 +229,7 @@
               class="load-more-wrapper"
             >
               <el-button size="small" type="info" @click="loadMoreError">
-                加载更早的 1000 行
+                加载更早的 100 行
               </el-button>
             </div>
           </div>
@@ -280,8 +280,8 @@ const errorLogViewerRef = ref(null)
 const MAX_VERSION_LABEL_LENGTH = 20
 
 // 日志分页相关（仅查看最近部分日志，支持逐步向上加载）
-const ACCESS_PAGE_SIZE = 1000
-const ERROR_PAGE_SIZE = 1000
+const ACCESS_PAGE_SIZE = 100
+const ERROR_PAGE_SIZE = 100
 const accessPage = ref(1)
 const errorPage = ref(1)
 const accessHasMore = ref(false)
