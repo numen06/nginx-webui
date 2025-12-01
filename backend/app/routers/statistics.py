@@ -6,7 +6,7 @@ Nginx 统计路由
 from typing import Optional, Dict, List
 from pathlib import Path
 from datetime import datetime, timedelta
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, deque
 import re
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
@@ -202,13 +202,15 @@ def read_log_tail(file_path: Path, max_lines: int = 50000) -> List[str]:
 
             return lines[-max_lines:] if len(lines) > max_lines else lines
     except Exception as e:
-        # 如果优化读取失败，回退到简单读取（但限制行数）
+        # 如果优化读取失败，回退到简单读取（但仍然只保留最后 max_lines 行，避免一次性读入整个超大文件）
         try:
+            from collections import deque as _deque
+
+            tail = _deque(maxlen=max_lines)
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                all_lines = f.readlines()
-                return (
-                    all_lines[-max_lines:] if len(all_lines) > max_lines else all_lines
-                )
+                for line in f:
+                    tail.append(line)
+            return list(tail)
         except:
             return []
 

@@ -186,15 +186,15 @@ def read_log_file(
 
                     return lines_buf[-max_lines:] if len(lines_buf) > max_lines else lines_buf
             except Exception:
-                # 回退到简单读取（仍然限制最大行数）
+                # 回退到简单读取（仍然限制最大行数，避免一次性读入超大文件）
                 try:
+                    from collections import deque as _deque
+
+                    tail = _deque(maxlen=max_lines)
                     with open(path, "r", encoding="utf-8", errors="ignore") as f2:
-                        all_read = [line.rstrip("\n") for line in f2.readlines()]
-                        return (
-                            all_read[-max_lines:]
-                            if len(all_read) > max_lines
-                            else all_read
-                        )
+                        for line in f2:
+                            tail.append(line.rstrip("\n"))
+                    return list(tail)
                 except Exception:
                     return []
 
