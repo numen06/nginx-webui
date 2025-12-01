@@ -137,7 +137,7 @@ def read_log_file(
     try:
         # 为了避免超大日志文件一次性读入内存，这里只读取文件末尾的最多 max_lines_cap 行，
         # 实现“分片加载”的效果。对于常规使用（查看最近日志）来说已经足够。
-        max_lines_cap = 200_000  # 安全上限，可根据需要调整
+        max_lines_cap = 2000  # 安全上限，可根据需要调整
 
         # 读取日志尾部内容（最多 max_lines_cap 行）
         def _read_tail(path: Path, max_lines: int) -> list[str]:
