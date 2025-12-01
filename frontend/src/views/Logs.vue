@@ -38,6 +38,12 @@
                 </el-text>
                 <span v-else class="text-muted">未知</span>
               </el-descriptions-item>
+              <el-descriptions-item label="日志文件大小">
+                <el-text v-if="accessLogInfo.log_size_bytes != null" type="info" size="small">
+                  {{ formatFileSize(accessLogInfo.log_size_bytes) }}
+                </el-text>
+                <span v-else class="text-muted">未知</span>
+              </el-descriptions-item>
               <el-descriptions-item v-if="accessLogInfo.nginx_version_detail" label="版本详情" :span="2">
                 <el-text type="info" size="small">{{ accessLogInfo.nginx_version_detail }}</el-text>
               </el-descriptions-item>
@@ -155,6 +161,12 @@
                 </el-text>
                 <span v-else class="text-muted">未知</span>
               </el-descriptions-item>
+              <el-descriptions-item label="日志文件大小">
+                <el-text v-if="errorLogInfo.log_size_bytes != null" type="info" size="small">
+                  {{ formatFileSize(errorLogInfo.log_size_bytes) }}
+                </el-text>
+                <span v-else class="text-muted">未知</span>
+              </el-descriptions-item>
               <el-descriptions-item v-if="errorLogInfo.nginx_version_detail" label="版本详情" :span="2">
                 <el-text type="info" size="small">{{ errorLogInfo.nginx_version_detail }}</el-text>
               </el-descriptions-item>
@@ -247,6 +259,16 @@ import { Refresh, Search, RefreshRight } from '@element-plus/icons-vue'
 import LogViewer from '../components/LogViewer.vue'
 import { formatDateTime } from '../utils/date'
 
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return '0 B'
+  if (bytes == null || Number.isNaN(bytes)) return '-'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const value = bytes / Math.pow(k, i)
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${sizes[i]}`
+}
+
 const activeTab = ref('access')
 const loading = ref(false)
 const accessLogs = ref([])
@@ -255,6 +277,7 @@ const accessLogInfo = ref({
   nginx_version: null,
   nginx_version_detail: null,
   log_path: null,
+  log_size_bytes: null,
   active_version: null,
   install_path: null,
   binary: null
@@ -263,6 +286,7 @@ const errorLogInfo = ref({
   nginx_version: null,
   nginx_version_detail: null,
   log_path: null,
+  log_size_bytes: null,
   active_version: null,
   install_path: null,
   binary: null
@@ -312,6 +336,7 @@ const loadLogs = async () => {
           nginx_version: response.nginx_version || null,
           nginx_version_detail: response.nginx_version_detail || null,
           log_path: response.log_path || null,
+          log_size_bytes: response.log_size_bytes ?? null,
           active_version: response.active_version || null,
           install_path: response.install_path || null,
           binary: response.binary || null
@@ -341,6 +366,7 @@ const loadLogs = async () => {
           nginx_version: response.nginx_version || null,
           nginx_version_detail: response.nginx_version_detail || null,
           log_path: response.log_path || null,
+          log_size_bytes: response.log_size_bytes ?? null,
           active_version: response.active_version || null,
           install_path: response.install_path || null,
           binary: response.binary || null
