@@ -8,8 +8,10 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter, deque
 import logging
+import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
@@ -401,16 +403,9 @@ def analyze_logs(
 
     access_log_file = Path(access_log_path)
 
-    # 解析日志（从尾部开始逐行向前扫描，直到时间边界，不一次性加载所有内容）
-    total_requests = 0
-    ip_stats: Dict[str, int] = defaultdict(int)
-    status_stats: Dict[int, int] = defaultdict(int)
-    path_stats: Dict[str, int] = defaultdict(int)
-    method_stats: Dict[str, int] = defaultdict(int)
-    # 通用时间桶统计（根据 time_range_hours 决定粒度）
-    bucket_stats: Dict[str, int] = defaultdict(int)
-    attack_count = 0
-    attack_details = []
+    # 先从尾部读取并解析出目标时间范围内的日志条目列表
+    # 然后使用多线程对条目列表做并行统计，加快大数据量下的分析速度
+    entries: List[Dict[str, Any]] = []
     # 上次分析时间：按“日志中最后一条有效记录的时间”来定义
     last_entry_time: Optional[datetime] = None
 
@@ -422,34 +417,62 @@ def analyze_logs(
             if not entry or not entry.get("date"):
                 continue
 
-            # 过滤时间范围
+            # 过滤时间范围（从新到旧扫描，遇到早于时间边界的日志后可以直接停止）
             if entry["date"] < start_time:
-                # 因为是从新到旧扫描，遇到早于时间边界的日志后可以直接停止
                 break
 
-            total_requests += 1
+            entries.append(entry)
 
             # 记录最新的日志时间（用于“上次分析时间”展示）
             if (last_entry_time is None) or (entry["date"] > last_entry_time):
                 last_entry_time = entry["date"]
+    except Exception as e:
+        ANALYSIS_STATE["last_error"] = str(e)
+        ANALYSIS_STATE["last_success"] = False
+        logger.exception(
+            "[statistics] 日志预解析失败，time_range_hours=%s, error=%s",
+            time_range_hours,
+            e,
+        )
+        raise
 
+    # 并行统计阶段
+    total_requests = len(entries)
+
+    # 初始化全局统计结果
+    ip_stats: Dict[str, int] = defaultdict(int)
+    status_stats: Dict[int, int] = defaultdict(int)
+    path_stats: Dict[str, int] = defaultdict(int)
+    method_stats: Dict[str, int] = defaultdict(int)
+    bucket_stats: Dict[str, int] = defaultdict(int)
+    attack_count = 0
+    attack_details: List[Dict[str, Any]] = []
+
+    def _aggregate_chunk(chunk: List[Dict[str, Any]]):
+        """对一个条目切片做局部统计，供线程池并行执行"""
+        local_ip: Dict[str, int] = defaultdict(int)
+        local_status: Dict[int, int] = defaultdict(int)
+        local_path: Dict[str, int] = defaultdict(int)
+        local_method: Dict[str, int] = defaultdict(int)
+        local_bucket: Dict[str, int] = defaultdict(int)
+        local_attack_count = 0
+        local_attacks: List[Dict[str, Any]] = []
+
+        for entry in chunk:
             # 统计IP访问
-            ip_stats[entry["ip"]] += 1
+            local_ip[entry["ip"]] += 1
 
             # 统计状态码
             status = entry["status"]
-            status_stats[status] += 1
+            local_status[status] += 1
 
             # 统计路径
-            path_stats[entry["path"]] += 1
+            local_path[entry["path"]] += 1
 
             # 统计HTTP方法
-            method_stats[entry["method"]] += 1
+            local_method[entry["method"]] += 1
 
             # 按时间桶统计
-            # - 当 time_range_hours <= 1 小时时，按 5 分钟粒度统计
-            # - 当 time_range_hours >= 7 天（168 小时）时，按天统计
-            # - 其他情况（例如 24 小时）按小时统计
             dt = entry["date"]
             if time_range_hours <= 1:
                 # 5 分钟对齐：00,05,10,...,55
@@ -463,13 +486,13 @@ def analyze_logs(
                 # 按小时聚合
                 bucket_key = dt.strftime("%Y-%m-%d %H:00")
 
-            bucket_stats[bucket_key] += 1
+            local_bucket[bucket_key] += 1
 
             # 检测攻击
             attacks = detect_attack(entry)
             if attacks:
-                attack_count += 1
-                attack_details.append(
+                local_attack_count += 1
+                local_attacks.append(
                     {
                         "time": entry["date"].isoformat(),
                         "ip": entry["ip"],
@@ -478,27 +501,76 @@ def analyze_logs(
                         "attacks": attacks,
                     }
                 )
-    except Exception as e:
-        ANALYSIS_STATE["last_error"] = str(e)
-        ANALYSIS_STATE["last_success"] = False
-        logger.exception(
-            "[statistics] 日志分析失败，time_range_hours=%s, error=%s",
-            time_range_hours,
-            e,
+
+        return (
+            local_ip,
+            local_status,
+            local_path,
+            local_method,
+            local_bucket,
+            local_attack_count,
+            local_attacks,
         )
-        raise
-    finally:
-        # 标记分析结束
-        ANALYSIS_STATE["is_running"] = False
-        ANALYSIS_STATE["last_end_time"] = datetime.now()
-        duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
-        ANALYSIS_STATE["last_duration_seconds"] = duration
-        logger.info(
-            "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
-            time_range_hours,
-            total_requests,
-            duration,
-        )
+
+    # 如果日志条目较多，开启多线程并行统计
+    if entries:
+        max_workers = min(4, os.cpu_count() or 2)
+        if total_requests < 1000:
+            # 数据量较小时，用单线程避免额外开销
+            chunks = [entries]
+        else:
+            # 将 entries 均匀切成 N 片，交给线程池处理
+            chunk_size = max(1, total_requests // max_workers)
+            chunks = [
+                entries[i : i + chunk_size]
+                for i in range(0, total_requests, chunk_size)
+            ]
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for (
+                    local_ip,
+                    local_status,
+                    local_path,
+                    local_method,
+                    local_bucket,
+                    local_attack_count,
+                    local_attacks,
+                ) in executor.map(_aggregate_chunk, chunks):
+                    # 合并局部结果到全局
+                    for k, v in local_ip.items():
+                        ip_stats[k] += v
+                    for k, v in local_status.items():
+                        status_stats[k] += v
+                    for k, v in local_path.items():
+                        path_stats[k] += v
+                    for k, v in local_method.items():
+                        method_stats[k] += v
+                    for k, v in local_bucket.items():
+                        bucket_stats[k] += v
+                    attack_count += local_attack_count
+                    attack_details.extend(local_attacks)
+        except Exception as e:
+            ANALYSIS_STATE["last_error"] = str(e)
+            ANALYSIS_STATE["last_success"] = False
+            logger.exception(
+                "[statistics] 并行统计阶段失败，time_range_hours=%s, error=%s",
+                time_range_hours,
+                e,
+            )
+            raise
+
+    # 标记分析结束与耗时
+    ANALYSIS_STATE["is_running"] = False
+    ANALYSIS_STATE["last_end_time"] = datetime.now()
+    duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
+    ANALYSIS_STATE["last_duration_seconds"] = duration
+    logger.info(
+        "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
+        time_range_hours,
+        total_requests,
+        duration,
+    )
 
     error_requests = sum(
         count for status, count in status_stats.items() if status >= 400
@@ -731,10 +803,14 @@ async def get_statistics_summary(
         )
 
 
-@router.post("/analyze", summary="手动触发统计分析")
+@router.post("/analyze", summary="手动触发统计分析（支持全量/增量）")
 async def trigger_statistics_analyze(
     hours: int = Query(
         24, ge=1, le=168, description="统计时间范围（小时），最多168小时（7天）"
+    ),
+    full: bool = Query(
+        False,
+        description="是否执行全量分析（忽略增量优化，适合日志结构变化或异常后手动重算）",
     ),
     current_user: User = Depends(get_current_user),
 ):
@@ -742,6 +818,8 @@ async def trigger_statistics_analyze(
     手动触发一次统计分析。
 
     说明：
+    - 默认采用“与后台任务相同的模式”（后续可支持增量/全量差异）；
+    - full=true 时明确表示“全量分析”，优先级最高；
     - 如果当前已有分析任务在运行，则不会重复触发，直接返回提示。
     - 实际分析在后台线程中执行，不阻塞当前请求。
     """
@@ -759,15 +837,20 @@ async def trigger_statistics_analyze(
 
     try:
         logger.info(
-            "[statistics] 手动触发统计分析开始，hours=%s，用户=%s",
+            "[statistics] 手动触发统计分析开始，hours=%s，full=%s，用户=%s",
             hours,
+            full,
             getattr(current_user, "username", None),
         )
-        _run_analyze_in_background(time_range_hours=hours, trigger="manual")
+        _run_analyze_in_background(
+            time_range_hours=hours,
+            trigger="manual_full" if full else "manual",
+        )
         return {
             "success": True,
-            "message": "统计分析已在后台启动",
+            "message": "全量统计分析已在后台启动" if full else "统计分析已在后台启动",
             "is_analyzing": True,
+            "full": full,
         }
     except Exception as e:
         logger.exception("[statistics] 手动触发统计分析失败：%s", e)

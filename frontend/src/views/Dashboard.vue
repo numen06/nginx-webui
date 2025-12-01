@@ -708,7 +708,8 @@ const triggerAnalyzeNow = async () => {
   statsStatus.value.isAnalyzing = true
 
   try {
-    const res = await statisticsApi.triggerAnalyze(timeRange.value)
+    // 页面触发：默认执行全量分析（full=true）
+    const res = await statisticsApi.triggerAnalyze(timeRange.value, true)
     if (res.success) {
       ElMessage.success(res.message || '统计分析已在后台启动')
       // 稍等几秒再刷新一次基础统计，更新状态和时间
