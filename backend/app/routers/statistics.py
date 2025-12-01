@@ -415,9 +415,50 @@ def analyze_logs(
     access_log_path = _resolve_access_log_path()
     error_log_path = _resolve_error_log_path()
 
-    # 计算时间范围（全量分析时仍需要 end_time 用于统计，但 start_time 不用于过滤）
+    # 读取同时间范围下的历史缓存，用于增量分析的锚点
+    previous_cache = get_cached_statistics(time_range_hours, max_age_minutes=None)
+    previous_last_analysis_time_str: Optional[str] = None
+    previous_last_analysis_time: Optional[datetime] = None
+    if previous_cache:
+        previous_last_analysis_time_str = previous_cache.get("last_analysis_time")
+        if previous_last_analysis_time_str:
+            try:
+                # 解析历史分析时间（可能是 ISO 格式字符串）
+                previous_last_analysis_time = datetime.fromisoformat(
+                    previous_last_analysis_time_str.replace("Z", "+00:00")
+                )
+                # 转换为本地时间（如果有时区信息）
+                if previous_last_analysis_time.tzinfo:
+                    previous_last_analysis_time = previous_last_analysis_time.replace(tzinfo=None)
+            except Exception:
+                previous_last_analysis_time = None
+
+    # 计算时间范围
     end_time = datetime.now()
-    start_time = end_time - timedelta(hours=time_range_hours) if not full else None
+    
+    # 增量分析：使用"上次分析时间"作为锚点，只读取该时间点之后的日志
+    # 全量分析：start_time = None，读取整个日志文件
+    if full:
+        start_time = None
+        logger.info(
+            "[statistics] 全量分析模式：将读取整个日志文件（time_range_hours=%s 仅用于缓存键）",
+            time_range_hours,
+        )
+    elif previous_last_analysis_time:
+        # 增量分析：使用上次分析时间作为起点
+        start_time = previous_last_analysis_time
+        logger.info(
+            "[statistics] 增量分析模式：从上次分析时间 %s 开始读取（锚点模式）",
+            start_time.isoformat(),
+        )
+    else:
+        # 首次分析或没有历史锚点：使用时间范围
+        start_time = end_time - timedelta(hours=time_range_hours)
+        logger.info(
+            "[statistics] 首次分析模式：使用时间范围 %s 到 %s",
+            start_time.isoformat(),
+            end_time.isoformat(),
+        )
 
     # 标记分析开始（任务级状态）
     ANALYSIS_STATE["is_running"] = True
@@ -443,8 +484,17 @@ def analyze_logs(
                 continue
 
             # 全量分析：不进行时间过滤，读取整个日志文件
-            # 增量分析：过滤时间范围（从新到旧扫描，遇到早于时间边界的日志后可以直接停止）
-            if not full and start_time and entry["date"] < start_time:
+            # 增量分析：使用"上次分析时间"作为锚点，只读取该时间点之后的日志
+            # 注意：iter_log_lines_from_tail 从文件尾部开始读取（从新到旧），
+            #       所以当遇到锚点时间或更早的日志时，说明已经读到了之前分析过的日志，应该停止
+            if not full and start_time and entry["date"] <= start_time:
+                # 遇到锚点时间（previous_last_analysis_time）或更早的日志，停止读取
+                # 因为更早的日志已经在之前分析过了，不需要重复分析
+                logger.info(
+                    "[statistics] 增量分析遇到锚点时间 %s（或更早），停止读取。已读取 %s 条新日志",
+                    start_time.isoformat(),
+                    len(entries),
+                )
                 break
 
             entries.append(entry)
@@ -463,7 +513,10 @@ def analyze_logs(
         raise
 
     # 并行统计阶段
-    total_requests = len(entries)
+    # 本次分析的新日志条目数（用于 analyzed_lines，反映本次实际分析的行数）
+    new_requests_count = len(entries)
+    # 用于统计的总请求数（增量分析时会合并历史数据）
+    total_requests = new_requests_count
 
     # 初始化全局统计结果
     ip_stats: Dict[str, int] = defaultdict(int)
@@ -592,21 +645,109 @@ def analyze_logs(
     duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
     ANALYSIS_STATE["last_duration_seconds"] = duration
     logger.info(
-        "[statistics] 日志分析完成，full=%s, time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
+        "[statistics] 日志分析完成，full=%s, time_range_hours=%s, 新条目数=%s, 总条目数=%s, 耗时=%.2fs",
         full,
         time_range_hours,
+        new_requests_count,
         total_requests,
         duration,
     )
 
+    # 增量分析：如果有历史缓存，需要合并数据
+    if not full and previous_cache and previous_cache.get("summary"):
+        logger.info(
+            "[statistics] 增量分析：开始合并历史数据（历史条目数=%s，新增条目数=%s）",
+            previous_cache.get("analyzed_lines", 0),
+            total_requests,
+        )
+        
+        # 合并 IP 统计
+        prev_ip_stats = {
+            item["ip"]: item["count"]
+            for item in previous_cache.get("top_ips", [])
+        }
+        for ip, count in prev_ip_stats.items():
+            ip_stats[ip] += count
+        
+        # 合并路径统计
+        prev_path_stats = {
+            item["path"]: item["count"]
+            for item in previous_cache.get("top_paths", [])
+        }
+        for path, count in prev_path_stats.items():
+            path_stats[path] += count
+        
+        # 合并状态码统计
+        prev_status_stats = previous_cache.get("status_distribution", {})
+        for status, count in prev_status_stats.items():
+            status_stats[int(status)] += count
+        
+        # 合并方法统计
+        prev_method_stats = previous_cache.get("method_distribution", {})
+        for method, count in prev_method_stats.items():
+            method_stats[method] += count
+        
+        # 合并攻击记录（保留最近的）
+        prev_attacks = previous_cache.get("attacks", [])
+        attack_details = (prev_attacks + attack_details)[:50]  # 最多保留50条
+        
+        # 合并 summary
+        prev_summary = previous_cache.get("summary", {})
+        total_requests += prev_summary.get("total_requests", 0)
+        attack_count += prev_summary.get("attack_count", 0)
+        
+        # 重新计算错误率和成功请求数（基于合并后的状态码统计）
+        # 注意：这里使用合并后的 total_requests 和 status_stats
+        pass  # 将在后面统一计算
+        
+        # 时间趋势需要重新计算（因为时间范围是动态的）
+        # 先合并历史的时间桶数据
+        prev_trend = previous_cache.get("hourly_trend", {})
+        prev_bucket_labels = prev_trend.get("hours", [])
+        prev_bucket_counts = prev_trend.get("counts", [])
+        prev_bucket_stats = dict(zip(prev_bucket_labels, prev_bucket_counts))
+        
+        # 合并时间桶
+        for bucket_key, count in prev_bucket_stats.items():
+            bucket_stats[bucket_key] += count
+        
+        # 移除超出时间范围的历史数据（只保留 end_time 之前的 time_range_hours 小时内的数据）
+        range_start = end_time - timedelta(hours=time_range_hours)
+        filtered_bucket_stats = {}
+        for bucket_key, count in bucket_stats.items():
+            try:
+                # 解析时间桶键
+                if time_range_hours <= 1:
+                    # 5分钟粒度：YYYY-MM-DD HH:MM
+                    bucket_dt = datetime.strptime(bucket_key, "%Y-%m-%d %H:%M")
+                elif time_range_hours >= 24 * 7:
+                    # 按天：YYYY-MM-DD
+                    bucket_dt = datetime.strptime(bucket_key, "%Y-%m-%d")
+                else:
+                    # 按小时：YYYY-MM-DD HH:00
+                    bucket_dt = datetime.strptime(bucket_key, "%Y-%m-%d %H:00")
+                
+                # 只保留在时间范围内的数据
+                if bucket_dt >= range_start:
+                    filtered_bucket_stats[bucket_key] = count
+            except Exception:
+                # 解析失败，保留数据（可能是新格式）
+                filtered_bucket_stats[bucket_key] = count
+        
+        bucket_stats = filtered_bucket_stats
+        logger.info(
+            "[statistics] 增量分析：数据合并完成，总条目数=%s，时间桶数=%s",
+            total_requests,
+            len(bucket_stats),
+        )
+
+    # 计算错误率和成功请求数（基于最终的状态码统计）
     error_requests = sum(
         count for status, count in status_stats.items() if status >= 400
     )
     success_requests = sum(
         count for status, count in status_stats.items() if 200 <= status < 300
     )
-
-    # 计算错误率
     error_rate = (error_requests / total_requests * 100) if total_requests > 0 else 0
 
     # 获取访问量前10的IP
@@ -626,27 +767,48 @@ def analyze_logs(
     if error_log_file.exists():
         try:
             error_lines = read_log_tail(error_log_file, max_lines=10000)
-            # 统计最近时间范围内的错误日志（全量分析时统计所有错误日志）
+            # 统计最近时间范围内的错误日志
+            # 全量分析时统计所有错误日志
+            # 增量分析时只统计新增的错误日志（从 start_time 开始）
             for line in error_lines:
                 log_date = parse_log_date(line)
                 if log_date:
-                    if full or (start_time and log_date >= start_time):
+                    if full or (start_time and log_date > start_time):
                         error_log_count += 1
         except Exception:
             pass
+    
+    # 增量分析：合并历史错误日志统计
+    if not full and previous_cache and previous_cache.get("summary"):
+        prev_error_log_count = previous_cache.get("summary", {}).get("error_log_count", 0)
+        error_log_count += prev_error_log_count
 
     # 计算状态字段
-    # “上次分析时间”：
+    # "上次分析时间"：
     #   1. 优先使用本次分析到的最新日志时间 last_entry_time（数据维度）
     #   2. 如果本次时间窗口内没有任何有效日志，则沿用上一次缓存中的 last_analysis_time
     #   3. 如果仍然没有可用时间，则回退到本次分析结束时间
     if last_entry_time is not None:
         last_analysis_time_iso = last_entry_time.isoformat()
+        logger.info(
+            "[statistics] 本次分析完成，最新日志时间=%s，新分析条目数=%s，合并后总条目数=%s",
+            last_entry_time.isoformat(),
+            new_requests_count,
+            total_requests,
+        )
     elif previous_last_analysis_time_str:
         last_analysis_time_iso = previous_last_analysis_time_str
+        logger.info(
+            "[statistics] 本次分析未找到新日志，沿用上次分析时间=%s",
+            previous_last_analysis_time_str,
+        )
     else:
         fallback_dt = ANALYSIS_STATE.get("last_end_time") or end_time
         last_analysis_time_iso = fallback_dt.isoformat()
+        logger.warning(
+            "[statistics] 本次分析未找到有效日志，且无历史时间，使用分析结束时间=%s",
+            fallback_dt.isoformat(),
+        )
 
     result = {
         "success": True,
@@ -658,8 +820,8 @@ def analyze_logs(
         "analysis_status_message": None,
         "is_analyzing": ANALYSIS_STATE.get("is_running", False),
         "last_analysis_time": last_analysis_time_iso,
-        # 分析任务处理的访问日志条数（任务分析行数）
-        "analyzed_lines": total_requests,
+        # 分析任务处理的访问日志条数（任务分析行数：本次实际分析的新日志行数）
+        "analyzed_lines": new_requests_count,
         "summary": {
             "total_requests": total_requests,
             "success_requests": success_requests,
