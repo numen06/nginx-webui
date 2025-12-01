@@ -1,7 +1,7 @@
 """
 数据库模型定义
 """
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -98,12 +98,26 @@ class GitRepository(Base):
 
 
 class StatisticsCache(Base):
-    """统计数据缓存"""
+    """统计数据缓存（1小时、1天等整数小时范围）"""
     __tablename__ = "statistics_cache"
 
     id = Column(Integer, primary_key=True, index=True)
-    time_range_hours = Column(Integer, nullable=False, index=True)  # 时间范围（小时）
+    time_range_hours = Column(Integer, nullable=False, index=True)  # 时间范围（小时，整数：1, 24等）
     cache_key = Column(String(100), unique=True, nullable=False, index=True)  # 缓存键：hours_timestamp
+    data = Column(Text, nullable=False)  # JSON格式的统计数据
+    start_time = Column(DateTime, nullable=False)  # 统计开始时间
+    end_time = Column(DateTime, nullable=False)  # 统计结束时间
+    last_log_position = Column(Integer, default=0)  # 上次读取的日志位置（行号）
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+class StatisticsCache5Min(Base):
+    """5分钟统计数据缓存（单独表）"""
+    __tablename__ = "statistics_cache_5min"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cache_key = Column(String(100), unique=True, nullable=False, index=True)  # 缓存键：5min_timestamp
     data = Column(Text, nullable=False)  # JSON格式的统计数据
     start_time = Column(DateTime, nullable=False)  # 统计开始时间
     end_time = Column(DateTime, nullable=False)  # 统计结束时间

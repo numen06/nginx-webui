@@ -193,23 +193,34 @@ async def startup_event():
         access_log_path = Path(_resolve_access_log_path())
 
         def _analyze_all_windows():
-            """当日志有新增内容时触发：按常用时间范围执行一次分析并写入缓存"""
-            for hours in [1, 24, 168]:
+            """当日志有新增内容时触发：按时间范围递进分析（5分钟 -> 1小时 -> 1天）"""
+            # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+            # 7天和30天的数据从1天的数据中聚合，不需要单独分析
+            # 5分钟数据使用单独的表，其他使用整数小时
+            analyze_tasks = [
+                (None, True, "5分钟"),  # 5分钟：使用 is_5min=True
+                (1, False, "1小时"),
+                (24, False, "1天"),
+            ]
+            
+            for hours, is_5min_flag, label in analyze_tasks:
                 try:
                     analyze_logs(
-                        time_range_hours=hours,
+                        time_range_hours=hours or 1,  # 5分钟时传入1作为占位符
+                        is_5min=is_5min_flag,
                         use_cache=False,
                         trigger="watcher",
                         save_cache=True,
                     )
+                    logging.info(f"✓ {label}时间范围分析完成")
                 except Exception as exc:
                     logging.warning(
-                        "基于日志监听触发的统计分析失败 (hours=%s): %s", hours, exc
+                        "基于日志监听触发的统计分析失败 (%s): %s", label, exc
                     )
 
-            # 定期清理过期缓存
+            # 定期清理超过30天的过期缓存
             try:
-                cleanup_old_cache(max_age_hours=24)
+                cleanup_old_cache(max_age_hours=30 * 24)  # 30天 = 30 * 24 小时
             except Exception as exc:
                 logging.warning("清理统计缓存失败: %s", exc)
 
@@ -233,20 +244,36 @@ async def startup_event():
 
         while True:
             try:
-                for hours in [1, 24, 168]:
+                # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+                # 7天和30天的数据从1天的数据中聚合，不需要单独分析
+                time_ranges = [
+                    (5 / 60, "5分钟"),  # 5分钟 = 5/60 小时
+                    (1, "1小时"),
+                    (24, "1天"),
+                ]
+                
+                # 5分钟数据使用单独的表，其他使用整数小时
+                analyze_tasks = [
+                    (None, True, "5分钟"),  # 5分钟：使用 is_5min=True
+                    (1, False, "1小时"),
+                    (24, False, "1天"),
+                ]
+                for hours, is_5min_flag, label in analyze_tasks:
                     try:
                         analyze_logs(
-                            time_range_hours=hours,
+                            time_range_hours=hours or 1,  # 5分钟时传入1作为占位符
+                            is_5min=is_5min_flag,
                             use_cache=False,
                             trigger="auto_fallback",
                             save_cache=True,
                         )
+                        logging.info(f"✓ 兜底定时分析完成 ({label})")
                     except Exception as exc:
-                        logging.warning("兜底定时分析失败 (hours=%s): %s", hours, exc)
+                        logging.warning("兜底定时分析失败 (%s): %s", label, exc)
 
-                # 定期清理统计缓存
+                # 定期清理超过30天的过期缓存
                 try:
-                    cleanup_old_cache(max_age_hours=24)
+                    cleanup_old_cache(max_age_hours=30 * 24)  # 30天 = 30 * 24 小时
                 except Exception as exc:
                     logging.warning("兜底定时清理统计缓存失败: %s", exc)
             except Exception as exc:

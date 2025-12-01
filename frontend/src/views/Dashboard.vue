@@ -728,7 +728,8 @@ const triggerAnalyzeNow = async () => {
 
   try {
     // 页面触发：默认执行全量分析（full=true）
-    const res = await statisticsApi.triggerAnalyze(timeRange.value, true)
+    // 一次分析会同时分析5分钟、1小时、1天三个时间范围，所以不需要传入 timeRange
+    const res = await statisticsApi.triggerAnalyze(true)
     if (res.success) {
       ElMessage.success(res.message || '统计分析已在后台启动')
       // 稍等几秒再刷新一次基础统计，更新状态和时间
@@ -762,11 +763,21 @@ const loadStatisticsTrend = async () => {
   
   try {
     const response = await statisticsApi.getTrend(timeRange.value)
-    if (response.success) {
+    if (response.success && response.hourly_trend) {
       stats.value.hourly_trend = response.hourly_trend
+      console.log(`[Dashboard] 趋势数据加载成功 (${timeRange.value}小时):`, {
+        hours: response.hourly_trend.hours?.length || 0,
+        counts: response.hourly_trend.counts?.length || 0,
+        firstFew: response.hourly_trend.hours?.slice(0, 3) || []
+      })
+    } else {
+      console.warn(`[Dashboard] 趋势数据为空 (${timeRange.value}小时):`, response.message || '未知错误')
+      // 如果数据为空，设置为空对象，避免图表报错
+      stats.value.hourly_trend = { hours: [], counts: [] }
     }
   } catch (error) {
     console.error('获取趋势数据失败:', error)
+    stats.value.hourly_trend = { hours: [], counts: [] }
   } finally {
     loadingTrend.value = false
   }
