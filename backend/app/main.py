@@ -42,7 +42,9 @@ from app.routers import (
 from app.routers import statistics, system
 from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
-from app.routers.statistics import analyze_logs
+from app.routers.statistics import analyze_logs, ANALYSIS_STATE
+from app.utils.log_watcher import start_log_watcher
+from app.routers.logs import _resolve_access_log_path
 
 # 配置全局日志（包含统计分析日志）
 logging.basicConfig(
@@ -185,39 +187,45 @@ async def startup_event():
         # 自动启动失败不影响应用启动
         print(f"⚠ 自动启动 Nginx 时出错: {str(e)}")
         print("   应用将继续启动，您可以稍后手动启动 Nginx")
-    
-    # 启动后台任务：定期更新统计缓存
-    def background_cache_updater_sync():
-        """后台任务：定期更新统计缓存（同步版本，在线程中运行）
 
-        要求：程序启动后立即开始后台分析，而不是等待较长延迟。
-        """
-        import time
-        while True:
+    # 启动访问日志监听：基于 pyinotify 动态触发统计分析（替代原来的定时任务）
+    try:
+        access_log_path = Path(_resolve_access_log_path())
+
+        def _analyze_all_windows():
+            """当日志有新增内容时触发：按常用时间范围执行一次分析并写入缓存"""
+            for hours in [1, 24, 168]:
+                try:
+                    analyze_logs(
+                        time_range_hours=hours,
+                        use_cache=False,
+                        trigger="watcher",
+                        save_cache=True,
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "基于日志监听触发的统计分析失败 (hours=%s): %s", hours, exc
+                    )
+
+            # 定期清理过期缓存
             try:
-                # 更新常用时间范围的缓存（1小时、24小时、7天）
-                for hours in [1, 24, 168]:
-                    try:
-                        analyze_logs(
-                            time_range_hours=hours,
-                            use_cache=False,
-                            trigger="auto",
-                        )
-                    except Exception as e:
-                        logging.warning(f"更新统计缓存失败 (hours={hours}): {e}")
-                
-                # 清理过期缓存（每天执行一次）
                 cleanup_old_cache(max_age_hours=24)
-            except Exception as e:
-                logging.error(f"后台缓存更新任务出错: {e}")
-            
-            # 每5分钟更新一次
-            time.sleep(300)
-    
-    # 在后台线程中启动缓存更新任务
-    cache_thread = threading.Thread(target=background_cache_updater_sync, daemon=True)
-    cache_thread.start()
-    print("✓ 统计缓存后台更新任务已启动")
+            except Exception as exc:
+                logging.warning("清理统计缓存失败: %s", exc)
+
+        watcher = start_log_watcher(
+            access_log_path, _analyze_all_windows, debounce_seconds=10
+        )
+        if watcher:
+            ANALYSIS_STATE["watcher_enabled"] = True
+            print(f"✓ 基于日志变化的统计分析监听已启用，文件: {access_log_path}")
+        else:
+            ANALYSIS_STATE["watcher_enabled"] = False
+            print("⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
+                  "将依赖手动触发全量分析")
+    except Exception as e:
+        ANALYSIS_STATE["watcher_enabled"] = False
+        logging.warning(f"初始化日志监听失败，将依赖手动触发分析: {e}")
 
 
 # 挂载静态文件目录（前端打包文件）

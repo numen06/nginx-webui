@@ -14,4 +14,5 @@ psutil==5.9.6
 crossplane>=0.5.8
 httpx==0.25.2
 beautifulsoup4==4.12.2
+pyinotify==0.9.6
 

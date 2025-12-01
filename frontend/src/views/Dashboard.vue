@@ -54,10 +54,30 @@
                 {{ analysisTagText }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="任务耗时" :span="2">
+            <el-descriptions-item label="监听状态" :span="2">
               <el-text type="info" size="small">
-                <span v-if="analysisDurationText">
-                  {{ analysisDurationText }}
+                <el-tag
+                  v-if="statsStatus.watcherEnabled"
+                  type="success"
+                  size="small"
+                  effect="plain"
+                >
+                  已启用
+                </el-tag>
+                <el-tag
+                  v-else
+                  type="info"
+                  size="small"
+                  effect="plain"
+                >
+                  未启用
+                </el-tag>
+              </el-text>
+            </el-descriptions-item>
+            <el-descriptions-item label="任务分析行数" :span="1">
+              <el-text type="info" size="small">
+                <span v-if="statsStatus.analyzedLines != null">
+                  {{ formatNumber(statsStatus.analyzedLines) }}
                 </span>
                 <span v-else class="text-muted">-</span>
               </el-text>
@@ -65,11 +85,6 @@
             <el-descriptions-item label="上次分析时间" :span="1">
               <el-text type="info" size="small">
                 {{ statsStatus.lastAnalysisTime ? formatDateTime(statsStatus.lastAnalysisTime) : '-' }}
-              </el-text>
-            </el-descriptions-item>
-            <el-descriptions-item label="下次预计分析时间" :span="1">
-              <el-text type="info" size="small">
-                {{ statsStatus.nextAnalysisTime ? formatDateTime(statsStatus.nextAnalysisTime) : '-' }}
               </el-text>
             </el-descriptions-item>
           </el-descriptions>
@@ -372,7 +387,6 @@ const systemVersion = ref({
 const statsStatus = ref({
   status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing' | 'failed'
   lastAnalysisTime: null,     // 上次分析到的日志时间（数据维度）
-  nextAnalysisTime: null,     // 下次预计分析时间（数据维度）
   isAnalyzing: false,         // 后台任务是否在执行
   lastJobStartTime: null,     // 最近一次任务开始时间
   lastJobEndTime: null,       // 最近一次任务结束时间
@@ -380,7 +394,9 @@ const statsStatus = ref({
   lastJobSuccess: null,       // 最近一次任务是否成功
   lastJobTrigger: null,       // 最近一次任务触发方式：auto / manual
   lastJobDurationSeconds: null,      // 最近一次任务总耗时（秒）
-  runningDurationSeconds: null       // 当前运行中任务耗时（秒）
+  runningDurationSeconds: null,      // 当前运行中任务耗时（秒）
+  analyzedLines: null,               // 任务分析行数
+  watcherEnabled: false              // 是否启用了日志监听
 })
 
 // 统计分析状态标签（保持固定宽度，避免布局抖动）
@@ -646,7 +662,6 @@ const loadStatisticsSummary = async () => {
       stats.value.summary = response.summary
       // 数据维度的时间信息
       statsStatus.value.lastAnalysisTime = response.last_analysis_time || response.end_time || null
-      statsStatus.value.nextAnalysisTime = response.next_analysis_time || null
 
       // 后台任务维度的状态信息
       const job = response.analysis_job || {}
@@ -658,6 +673,8 @@ const loadStatisticsSummary = async () => {
       statsStatus.value.lastJobTrigger = job.last_trigger || null
       statsStatus.value.lastJobDurationSeconds = job.last_duration_seconds ?? null
       statsStatus.value.runningDurationSeconds = job.running_duration_seconds ?? null
+      statsStatus.value.analyzedLines = response.analyzed_lines ?? null
+      statsStatus.value.watcherEnabled = !!job.watcher_enabled
 
       // 统计分析状态：优先展示“任务状态”
       if (statsStatus.value.isAnalyzing) {
@@ -672,7 +689,6 @@ const loadStatisticsSummary = async () => {
     } else {
       statsStatus.value.status = 'not_ready'
       statsStatus.value.lastAnalysisTime = null
-      statsStatus.value.nextAnalysisTime = null
       statsStatus.value.isAnalyzing = false
       statsStatus.value.lastJobStartTime = null
       statsStatus.value.lastJobEndTime = null
@@ -681,12 +697,13 @@ const loadStatisticsSummary = async () => {
       statsStatus.value.lastJobTrigger = null
       statsStatus.value.lastJobDurationSeconds = null
       statsStatus.value.runningDurationSeconds = null
+      statsStatus.value.analyzedLines = null
+      statsStatus.value.watcherEnabled = false
     }
   } catch (error) {
     console.error('获取基础统计数据失败:', error)
     statsStatus.value.status = 'not_ready'
     statsStatus.value.lastAnalysisTime = null
-    statsStatus.value.nextAnalysisTime = null
     statsStatus.value.isAnalyzing = false
     statsStatus.value.lastJobStartTime = null
     statsStatus.value.lastJobEndTime = null
@@ -695,6 +712,8 @@ const loadStatisticsSummary = async () => {
     statsStatus.value.lastJobTrigger = null
     statsStatus.value.lastJobDurationSeconds = null
     statsStatus.value.runningDurationSeconds = null
+    statsStatus.value.analyzedLines = null
+    statsStatus.value.watcherEnabled = false
   } finally {
     loadingSummary.value = false
   }

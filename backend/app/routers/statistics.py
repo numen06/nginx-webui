@@ -327,8 +327,9 @@ ANALYSIS_STATE: Dict[str, Any] = {
     "last_end_time": None,  # 最近一次分析任务结束时间
     "last_error": None,  # 最近一次分析错误信息（如果有）
     "last_success": None,  # 最近一次分析是否成功 True/False/None
-    "last_trigger": None,  # 最近一次分析触发方式：auto / manual
+    "last_trigger": None,  # 最近一次分析触发方式：auto / manual / watcher
     "last_duration_seconds": 0.0,  # 最近一次完整任务耗时（秒）
+    "watcher_enabled": False,  # 是否启用了基于日志变化的监听
 }
 
 
@@ -612,11 +613,6 @@ def analyze_logs(
     last_analysis_time = (
         last_entry_time or ANALYSIS_STATE.get("last_end_time") or end_time
     )
-    next_analysis_time = None
-    if last_analysis_time:
-        next_analysis_time = last_analysis_time + timedelta(
-            seconds=ANALYSIS_INTERVAL_SECONDS
-        )
 
     result = {
         "success": True,
@@ -630,9 +626,8 @@ def analyze_logs(
         "last_analysis_time": (
             last_analysis_time.isoformat() if last_analysis_time else None
         ),
-        "next_analysis_time": (
-            next_analysis_time.isoformat() if next_analysis_time else None
-        ),
+        # 分析任务处理的访问日志条数（任务分析行数）
+        "analyzed_lines": total_requests,
         "summary": {
             "total_requests": total_requests,
             "success_requests": success_requests,
@@ -772,6 +767,8 @@ async def get_statistics_summary(
                 "last_trigger": ANALYSIS_STATE.get("last_trigger"),
                 "last_duration_seconds": last_duration_seconds,
                 "running_duration_seconds": running_duration_seconds,
+                # 是否启用了基于日志变化的监听
+                "watcher_enabled": ANALYSIS_STATE.get("watcher_enabled", False),
             }
 
             return {
@@ -786,7 +783,9 @@ async def get_statistics_summary(
                 "is_analyzing": cached_data.get("is_analyzing", False),
                 "last_analysis_time": cached_data.get("last_analysis_time")
                 or cached_data.get("end_time"),
-                "next_analysis_time": cached_data.get("next_analysis_time"),
+                # 任务分析行数（如果缓存中没有单独字段，则回退为 summary.total_requests）
+                "analyzed_lines": cached_data.get("analyzed_lines")
+                or (cached_data.get("summary") or {}).get("total_requests"),
                 # 任务级状态（供前端展示“后台任务执行状态”）
                 "analysis_job": analysis_job,
             }
