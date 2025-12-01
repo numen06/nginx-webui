@@ -138,7 +138,7 @@ def detect_attack(log_entry: Dict) -> List[str]:
     return attacks
 
 
-def read_log_tail(file_path: Path, max_lines: int = 50000) -> List[str]:
+def read_log_tail(file_path: Path, max_lines: int = 2000) -> List[str]:
     """
     读取日志文件的最后N行（优化大文件读取）
 
@@ -231,8 +231,9 @@ def _parse_logs_in_range(time_range_hours: int = 24) -> List[Dict]:
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=time_range_hours)
 
-    # 优化：只读取最后N行日志
-    max_lines = min(100000, time_range_hours * 3600)
+    # 优化：只读取最后 N 行日志
+    # 约定：每小时最多分析约 1000 行，整体上限为 20,000 行，避免一次性处理过多日志导致内存/CPU 压力过大
+    max_lines = min(20000, time_range_hours * 1000)
 
     # 读取访问日志
     access_log_file = Path(access_log_path)
@@ -252,6 +253,63 @@ def _parse_logs_in_range(time_range_hours: int = 24) -> List[Dict]:
         log_entries.append(entry)
 
     return log_entries
+
+
+def iter_log_lines_from_tail(file_path: Path):
+    """
+    从文件尾部开始迭代日志行（从新到旧），按需一行行向前扫描，
+    避免一次性加载过多数据到内存。
+    """
+    if not file_path.exists():
+        return
+
+    try:
+        with open(file_path, "rb") as f:
+            f.seek(0, 2)
+            file_size = f.tell()
+
+            # 小文件直接读完再反向遍历
+            if file_size < 1024 * 1024:  # < 1MB
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f2:
+                    all_lines = [line.rstrip("\n") for line in f2.readlines()]
+                    for line in reversed(all_lines):
+                        yield line
+                return
+
+            buffer_size = min(8192, file_size)
+            position = file_size
+            buffer = b""
+
+            while position > 0:
+                read_size = min(buffer_size, position)
+                position -= read_size
+                f.seek(position)
+                chunk = f.read(read_size)
+                buffer = chunk + buffer
+
+                # 从缓冲区尾部开始拆行（从新到旧）
+                while b"\n" in buffer:
+                    line, buffer = buffer.rsplit(b"\n", 1)
+                    try:
+                        yield line.decode("utf-8", errors="ignore")
+                    except Exception:
+                        continue
+
+            # 处理文件开头剩余的一行
+            if buffer:
+                try:
+                    yield buffer.decode("utf-8", errors="ignore")
+                except Exception:
+                    pass
+    except Exception:
+        # 回退到简单读取（仍然是从新到旧逐行迭代）
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                all_lines = [line.rstrip("\n") for line in f.readlines()]
+                for line in reversed(all_lines):
+                    yield line
+        except Exception:
+            return
 
 
 def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
@@ -275,16 +333,10 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=time_range_hours)
 
-    # 优化：只读取最后N行日志（根据时间范围动态调整）
-    # 24小时约产生 86400 条日志（每秒1条），实际可能更多，设置一个合理的上限
-    max_lines = min(100000, time_range_hours * 3600)  # 最多10万行，或按时间范围估算
-
-    # 读取访问日志（优化版本）
     access_log_file = Path(access_log_path)
-    all_lines = read_log_tail(access_log_file, max_lines=max_lines)
 
-    # 解析日志
-    log_entries = []
+    # 解析日志（从尾部开始逐行向前扫描，直到时间边界，不一次性加载所有内容）
+    total_requests = 0
     ip_stats: Dict[str, int] = defaultdict(int)
     status_stats: Dict[int, int] = defaultdict(int)
     path_stats: Dict[str, int] = defaultdict(int)
@@ -294,16 +346,17 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
     attack_count = 0
     attack_details = []
 
-    for line in all_lines:
+    for line in iter_log_lines_from_tail(access_log_file):
         entry = parse_access_log_line(line.strip())
         if not entry or not entry.get("date"):
             continue
 
         # 过滤时间范围
         if entry["date"] < start_time:
-            continue
+            # 因为是从新到旧扫描，遇到早于时间边界的日志后可以直接停止
+            break
 
-        log_entries.append(entry)
+        total_requests += 1
 
         # 统计IP访问
         ip_stats[entry["ip"]] += 1
@@ -351,7 +404,6 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
                 }
             )
 
-    total_requests = len(log_entries)
     error_requests = sum(
         count for status, count in status_stats.items() if status >= 400
     )
@@ -421,7 +473,7 @@ def analyze_logs(time_range_hours: int = 24, use_cache: bool = True) -> Dict:
                 data=result,
                 start_time=start_time,
                 end_time=end_time,
-                last_log_position=len(all_lines),
+                last_log_position=0,
             )
         except Exception as e:
             # 缓存失败不影响返回结果
