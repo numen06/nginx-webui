@@ -218,6 +218,70 @@ async def reload_nginx_config(
     return result
 
 
+@router.post("/apply", summary="强制覆盖配置文件（不重载nginx）")
+async def apply_config(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    强制覆盖配置文件（应用工作副本到实际配置）
+    
+    功能：
+    1. 先测试配置有效性
+    2. 自动备份当前配置
+    3. 将工作副本覆盖到实际配置文件
+    4. 不重载nginx（需要手动重启nginx才能生效）
+    
+    适用场景：
+    - 需要修改配置但暂时不想重载nginx
+    - 准备在后续手动重启nginx时生效
+    - 批量修改配置时的中间步骤
+    """
+    # 先测试配置
+    test_result = test_config()
+    if not test_result["success"]:
+        return {
+            "success": False,
+            "message": "配置测试失败，无法覆盖",
+            "test_result": test_result,
+        }
+    
+    try:
+        # 创建备份
+        backup = create_backup(db, created_by_id=current_user.id)
+        
+        # 应用工作副本到实际配置文件
+        actual_config_path = apply_working_config()
+        
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_apply",
+            target="nginx",
+            details={
+                "backup_id": backup.id,
+                "config_path": str(actual_config_path),
+            },
+            ip_address=get_client_ip(request),
+        )
+        
+        return {
+            "success": True,
+            "message": "配置文件已覆盖，建议重启 Nginx 使配置生效",
+            "backup_id": backup.id,
+            "config_path": str(actual_config_path),
+            "need_restart": True,  # 标记需要重启
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"覆盖配置失败: {str(e)}",
+        }
+
+
 @router.get("/status", summary="获取 Nginx 运行状态")
 async def get_status(
     force_refresh: bool = False,

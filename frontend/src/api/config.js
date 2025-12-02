@@ -21,6 +21,11 @@ export const configApi = {
     return api.post('/config/reload')
   },
 
+  // 强制覆盖配置（不重载nginx）
+  applyConfig() {
+    return api.post('/config/apply')
+  },
+
   // 获取状态
   getStatus() {
     return api.get('/config/status')

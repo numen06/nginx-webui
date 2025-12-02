@@ -1269,8 +1269,8 @@ def get_nginx_status() -> Dict[str, Any]:
                             continue
                         
                         # 找到nginx主进程
-                        pid = proc.info["pid"]
-                        running = True
+                                pid = proc.info["pid"]
+                                running = True
                         
                         # 尝试从命令行获取可执行文件路径（用于后续操作）
                         if cmdline and len(cmdline) > 0:
@@ -1287,26 +1287,26 @@ def get_nginx_status() -> Dict[str, Any]:
                         except (psutil.AccessDenied, psutil.NoSuchProcess):
                             pass
 
-                        # 获取运行时间
-                        create_time = datetime.fromtimestamp(
-                            proc.info["create_time"]
-                        )
-                        now = datetime.now()
-                        uptime_delta = now - create_time
+                                # 获取运行时间
+                                create_time = datetime.fromtimestamp(
+                                    proc.info["create_time"]
+                                )
+                                now = datetime.now()
+                                uptime_delta = now - create_time
 
-                        days = uptime_delta.days
-                        hours, remainder = divmod(uptime_delta.seconds, 3600)
-                        minutes, seconds = divmod(remainder, 60)
+                                days = uptime_delta.days
+                                hours, remainder = divmod(uptime_delta.seconds, 3600)
+                                minutes, seconds = divmod(remainder, 60)
 
-                        if days > 0:
-                            uptime_str = f"{days}天{hours}小时{minutes}分钟"
-                        elif hours > 0:
-                            uptime_str = f"{hours}小时{minutes}分钟"
-                        elif minutes > 0:
-                            uptime_str = f"{minutes}分钟{seconds}秒"
-                        else:
-                            uptime_str = f"{seconds}秒"
-                        break
+                                if days > 0:
+                                    uptime_str = f"{days}天{hours}小时{minutes}分钟"
+                                elif hours > 0:
+                                    uptime_str = f"{hours}小时{minutes}分钟"
+                                elif minutes > 0:
+                                    uptime_str = f"{minutes}分钟{seconds}秒"
+                                else:
+                                    uptime_str = f"{seconds}秒"
+                                break
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
             except Exception:

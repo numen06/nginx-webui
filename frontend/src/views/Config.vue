@@ -21,6 +21,10 @@
               <el-icon><DocumentChecked /></el-icon>
               <span class="btn-label">保存</span>
             </el-button>
+            <el-button type="orange" @click="handleApply" :loading="applying">
+              <el-icon><Upload /></el-icon>
+              <span class="btn-label">强制覆盖</span>
+            </el-button>
             <el-button type="warning" @click="handleReload">
               <el-icon><Refresh /></el-icon>
               <span class="btn-label">重新装载</span>
@@ -140,7 +144,8 @@ import {
   Refresh,
   RefreshRight,
   DocumentAdd,
-  RefreshLeft
+  RefreshLeft,
+  Upload
 } from '@element-plus/icons-vue'
 
 const configContent = ref('')
@@ -159,6 +164,7 @@ const backupOptions = ref([])
 const selectedBackupId = ref(null)
 const backupLoading = ref(false)
 const saving = ref(false)
+const applying = ref(false)
 
 onMounted(async () => {
   await loadConfig()
@@ -369,6 +375,51 @@ const handleSaveShortcut = (event) => {
     if (!saving.value) {
       handleSave()
     }
+  }
+}
+
+const handleApply = async () => {
+  if (applying.value) return
+  
+  try {
+    await ElMessageBox.confirm(
+      '强制覆盖会将工作副本覆盖到实际配置文件，但不会重载 Nginx。建议在覆盖后手动重启 Nginx 使配置生效。是否继续？',
+      '强制覆盖确认',
+      {
+        confirmButtonText: '覆盖配置',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    applying.value = true
+    const response = await configApi.applyConfig()
+    
+    if (response.success) {
+      const backupInfo = response.backup_id ? `已创建备份 #${response.backup_id}，` : ''
+      
+      // 显示成功消息，并提示建议重启
+      await ElMessageBox.alert(
+        `${backupInfo}配置文件已成功覆盖。\n\n⚠️ 建议重启 Nginx 使新配置生效：\n1. 前往"Nginx 管理"页面\n2. 停止当前运行的版本\n3. 重新启动该版本`,
+        '覆盖成功',
+        {
+          confirmButtonText: '知道了',
+          type: 'success'
+        }
+      )
+      
+      configInfo.value.pending_changes = false
+      await loadConfig()
+      await handleLoadBackups()
+    } else {
+      ElMessage.error('强制覆盖失败: ' + response.message)
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.detail || error.message || '强制覆盖配置失败')
+    }
+  } finally {
+    applying.value = false
   }
 }
 

@@ -27,6 +27,126 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/statistics", tags=["statistics"])
 
 
+# ==================== 攻击检测 ====================
+def _detect_attack_types(parsed: Dict) -> list[str]:
+    """
+    检测并分类攻击类型
+
+    Args:
+        parsed: 解析后的日志记录
+
+    Returns:
+        攻击类型列表，如 ["SQL注入", "路径遍历"]
+    """
+    attack_types = []
+    path = parsed.get("request_path", "").lower()
+    status = parsed.get("status", 0)
+    method = parsed.get("request_method", "").upper()
+    user_agent = parsed.get("http_user_agent", "").lower()
+
+    # 1. SQL注入检测
+    sql_patterns = [
+        "union",
+        "select",
+        "insert",
+        "update",
+        "delete",
+        "drop",
+        "exec",
+        "script",
+        "javascript",
+        "onerror",
+        "onload",
+        "'; ",
+        "' or ",
+        "' and ",
+        "--",
+        "/*",
+        "*/",
+        "xp_",
+    ]
+    if any(pattern in path for pattern in sql_patterns):
+        attack_types.append("SQL注入")
+
+    # 2. 路径遍历攻击
+    if "../" in path or "..%2f" in path or "..%5c" in path:
+        attack_types.append("路径遍历")
+
+    # 3. 敏感文件访问
+    sensitive_files = [
+        ".env",
+        ".git",
+        ".svn",
+        ".htaccess",
+        ".htpasswd",
+        "web.config",
+        "phpinfo",
+        "config.php",
+        "wp-config",
+        "database.yml",
+        "credentials",
+        ".ssh",
+        "id_rsa",
+    ]
+    if any(sens in path for sens in sensitive_files):
+        attack_types.append("敏感文件")
+
+    # 4. 常见扫描器特征
+    scanner_patterns = [
+        "/admin",
+        "/phpmyadmin",
+        "/wp-admin",
+        "/manager",
+        "/console",
+        "/api/v1",
+        "/.well-known",
+        "/actuator",
+        "/shell",
+        "/webshell",
+        "/backup",
+        "/test",
+    ]
+    scanner_user_agents = [
+        "nmap",
+        "masscan",
+        "nikto",
+        "sqlmap",
+        "metasploit",
+        "burp",
+        "acunetix",
+        "nessus",
+        "openvas",
+        "scanner",
+    ]
+    if any(pattern in path for pattern in scanner_patterns):
+        attack_types.append("扫描探测")
+    if any(agent in user_agent for agent in scanner_user_agents):
+        attack_types.append("扫描工具")
+
+    # 5. 恶意User-Agent
+    bad_bots = ["masscan", "zgrab", "python-requests", "go-http-client"]
+    if any(bot in user_agent for bot in bad_bots) and status in [400, 403, 404]:
+        attack_types.append("恶意爬虫")
+
+    # 6. 根据HTTP状态码分类
+    if status == 400:
+        if not attack_types:  # 如果还没有其他攻击类型
+            attack_types.append("错误请求")
+    elif status == 401:
+        attack_types.append("未授权访问")
+    elif status == 403:
+        attack_types.append("禁止访问")
+    elif status == 404:
+        if not attack_types:  # 如果还没有其他攻击类型
+            attack_types.append("资源不存在")
+
+    # 7. 异常请求方法
+    if method not in ["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"]:
+        attack_types.append("异常方法")
+
+    return attack_types
+
+
 # ==================== 日志解析 ====================
 def parse_nginx_access_log(line: str) -> Optional[Dict]:
     """
@@ -279,13 +399,15 @@ def analyze_logs_simple(
                 bucket["path_stats"][parsed.get("request_path", "/")] += 1
 
                 # 检测攻击
-                if parsed.get("status", 0) in [400, 401, 403, 404]:
+                attack_types = _detect_attack_types(parsed)
+                if attack_types:
                     bucket["attacks"].append(
                         {
                             "time": log_time.isoformat(),
                             "ip": parsed.get("remote_addr", "unknown"),
                             "path": parsed.get("request_path", "/"),
                             "status": parsed.get("status", 0),
+                            "attacks": attack_types,  # 攻击类型列表
                         }
                     )
 
