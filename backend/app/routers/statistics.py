@@ -803,7 +803,9 @@ def analyze_logs(
         # 增量分析：使用上次分析时间作为起点
         # 为了确保不遗漏最近几分钟的数据，我们使用一个更早的时间点作为起点
         # 这样可以处理时间戳不准确或系统时间变化的情况
-        start_time = previous_last_analysis_time - timedelta(minutes=5)  # 往前推5分钟，确保不遗漏
+        start_time = previous_last_analysis_time - timedelta(
+            minutes=5
+        )  # 往前推5分钟，确保不遗漏
         logger.info(
             "[statistics] 增量分析模式：从上次分析时间 %s 往前推5分钟（%s）开始读取（锚点模式，容错处理）",
             previous_last_analysis_time.isoformat(),
@@ -964,8 +966,12 @@ def analyze_logs(
     try:
         # 全量分析：不使用 pygtail，直接从文件尾部读取（因为需要按时间范围过滤）
         # 增量分析：使用 pygtail 进行增量读取
+        # 注意：全量分析时，full=True 会让 iter_log_lines_from_tail 从文件尾部读取整个文件
+        # 但由于我们需要按时间范围过滤，所以不使用 full=True，而是使用从尾部读取的方式
         for line in iter_log_lines_from_tail(
-            access_log_file, use_pygtail=not full, full=False  # 全量分析也不使用 pygtail，因为需要按时间范围过滤
+            access_log_file,
+            use_pygtail=not full,
+            full=False,  # 全量分析也不使用 pygtail，因为需要按时间范围过滤
         ):
             entry = parse_access_log_line(line.strip())
             if not entry or not entry.get("date"):
@@ -975,36 +981,48 @@ def analyze_logs(
             # 增量分析（使用 pygtail）：pygtail 已经只读取了新增内容，但仍需要时间过滤
             #       因为 pygtail 是基于文件位置的，而我们需要基于时间戳的锚点
             if start_time:
-                # 只处理时间戳大于 start_time 的日志（即上次分析时间之后的日志）
-                # 如果遇到时间戳小于等于 start_time 的日志，说明已经读到了旧日志，可以停止
-                # 但要注意：由于日志是从新到旧读取的，如果遇到旧日志，说明后面的都是旧日志了
-                # 另外，为了容错，如果日志时间戳在未来（可能是系统时间问题），也继续处理
                 entry_time = entry["date"]
                 current_time = datetime.now()
-                
-                # 如果日志时间戳在未来（超过当前时间1小时），可能是系统时间问题，继续处理
+
+                # 如果日志时间戳在未来（超过当前时间1小时），可能是系统时间问题，跳过这条日志
                 if entry_time > current_time + timedelta(hours=1):
                     logger.warning(
-                        "[statistics] 检测到未来时间戳的日志：%s（当前时间：%s），继续处理",
+                        "[statistics] 检测到未来时间戳的日志：%s（当前时间：%s），跳过",
                         entry_time.isoformat(),
                         current_time.isoformat(),
                     )
-                elif entry_time < start_time:
-                    # 遇到早于 start_time 的日志，停止读取
-                    # 全量分析：已经读到了时间范围之外的数据
-                    # 增量分析：更早的日志已经在之前分析过了，不需要重复分析
-                    logger.info(
-                        "[statistics] %s遇到时间边界 %s（或更早），停止读取。已处理 %s 条日志",
-                        "全量分析" if full else "增量分析",
-                        start_time.isoformat(),
-                        total_parsed,
-                    )
-                    break
-                # 如果日志时间戳大于等于 start_time，继续处理
+                    continue
+
+                # 时间过滤逻辑
+                if full:
+                    # 全量分析：只处理时间范围内的日志（start_time <= entry_time <= end_time）
+                    # 日志从新到旧读取，跳过时间范围外的日志
+                    if entry_time < start_time or entry_time > end_time:
+                        continue
+                else:
+                    # 增量分析：遇到早于 start_time 的日志，停止读取
+                    # 因为更早的日志已经在之前分析过了
+                    if entry_time < start_time:
+                        logger.info(
+                            "[statistics] 增量分析：遇到时间边界 %s，停止读取。已处理 %s 条日志",
+                            start_time.isoformat(),
+                            total_parsed,
+                        )
+                        break
 
             # 记录最新的日志时间（用于"上次分析时间"展示）
             if (last_entry_time is None) or (entry["date"] > last_entry_time):
                 last_entry_time = entry["date"]
+
+            # 调试：记录前几条日志的时间戳（全量分析时）
+            if full and total_parsed < 3:
+                logger.debug(
+                    "[statistics] 全量分析：第 %s 条日志，时间=%s, 范围=[%s, %s]",
+                    total_parsed + 1,
+                    entry["date"].isoformat(),
+                    start_time.isoformat() if start_time else "None",
+                    end_time.isoformat(),
+                )
 
             # 统一处理：全量和增量分析都使用批次处理
             batch_entries.append(entry)
@@ -1985,17 +2003,23 @@ def analyze_logs(
                             # 5分钟粒度：YYYY-MM-DD HH:MM
                             sorted_buckets = sorted(bucket_stats.keys())
                             earliest_bucket = sorted_buckets[0]
-                            cache_start_time = datetime.strptime(earliest_bucket, "%Y-%m-%d %H:%M")
+                            cache_start_time = datetime.strptime(
+                                earliest_bucket, "%Y-%m-%d %H:%M"
+                            )
                         elif time_range_hours >= 24:
                             # 按天：YYYY-MM-DD
                             sorted_buckets = sorted(bucket_stats.keys())
                             earliest_bucket = sorted_buckets[0]
-                            cache_start_time = datetime.strptime(earliest_bucket, "%Y-%m-%d")
+                            cache_start_time = datetime.strptime(
+                                earliest_bucket, "%Y-%m-%d"
+                            )
                         else:
                             # 按小时：YYYY-MM-DD HH:00
                             sorted_buckets = sorted(bucket_stats.keys())
                             earliest_bucket = sorted_buckets[0]
-                            cache_start_time = datetime.strptime(earliest_bucket, "%Y-%m-%d %H:00")
+                            cache_start_time = datetime.strptime(
+                                earliest_bucket, "%Y-%m-%d %H:00"
+                            )
                         logger.info(
                             "[statistics] 全量分析：使用最早时间桶作为 start_time: %s",
                             cache_start_time.isoformat(),
@@ -2005,10 +2029,14 @@ def analyze_logs(
                             "[statistics] 全量分析：解析最早时间桶失败，使用时间范围起点: %s",
                             e,
                         )
-                        cache_start_time = end_time - timedelta(hours=actual_time_range_hours)
+                        cache_start_time = end_time - timedelta(
+                            hours=actual_time_range_hours
+                        )
                 else:
                     # 全量分析且没有找到日志时，使用时间范围起点
-                    cache_start_time = end_time - timedelta(hours=actual_time_range_hours)
+                    cache_start_time = end_time - timedelta(
+                        hours=actual_time_range_hours
+                    )
                     logger.debug(
                         "[statistics] 全量分析未找到日志，使用时间范围起点作为 start_time: %s",
                         cache_start_time.isoformat(),
@@ -2067,13 +2095,17 @@ async def get_statistics_overview(
             cached_end_time = cached.get("end_time")
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=hours)
-            
+
             # 判断是否需要过滤
             need_filter = True
             if cached_start_time and cached_end_time:
                 try:
-                    cached_start = datetime.fromisoformat(cached_start_time.replace("Z", "+00:00"))
-                    cached_end = datetime.fromisoformat(cached_end_time.replace("Z", "+00:00"))
+                    cached_start = datetime.fromisoformat(
+                        cached_start_time.replace("Z", "+00:00")
+                    )
+                    cached_end = datetime.fromisoformat(
+                        cached_end_time.replace("Z", "+00:00")
+                    )
                     if cached_start.tzinfo:
                         cached_start = cached_start.replace(tzinfo=None)
                     if cached_end.tzinfo:
@@ -2081,7 +2113,11 @@ async def get_statistics_overview(
                     # 如果查询时间范围的起点在缓存时间范围内，且缓存数据的时间范围足够大，不需要过滤
                     # 对于7天查询，缓存数据是24小时的，需要过滤
                     # 对于1小时和24小时查询，如果缓存数据的时间范围已经覆盖，可以直接使用
-                    if hours <= 24 and cached_start <= start_time and cached_end >= end_time:
+                    if (
+                        hours <= 24
+                        and cached_start <= start_time
+                        and cached_end >= end_time
+                    ):
                         need_filter = False
                         logger.debug(
                             "[statistics] 缓存数据时间范围已覆盖查询范围，直接使用，hours=%s, cached_range=[%s, %s], query_range=[%s, %s]",
@@ -2096,11 +2132,11 @@ async def get_statistics_overview(
                         "[statistics] 解析缓存时间范围失败，使用过滤模式: %s",
                         e,
                     )
-            
+
             if need_filter:
                 # 根据时间范围过滤数据
                 filtered_data = _filter_data_by_time_range(cached, hours, "all")
-                
+
                 # 合并过滤后的数据
                 result = cached.copy()
                 if filtered_data.get("summary"):
@@ -2116,14 +2152,14 @@ async def get_statistics_overview(
             else:
                 # 直接使用缓存数据，不需要过滤
                 result = cached.copy()
-            
+
             # 更新返回数据的时间范围，保持一致性
             result["time_range_hours"] = hours
-            
+
             # 更新时间范围
             result["start_time"] = start_time.isoformat()
             result["end_time"] = end_time.isoformat()
-            
+
             return result
 
         # 缓存尚未生成时返回占位结果，提示前端稍后重试
@@ -2203,14 +2239,18 @@ async def get_statistics_summary(
             cached_end_time = cached_data.get("end_time")
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=hours)
-            
+
             # 如果缓存数据的时间范围已经覆盖了查询时间范围，直接使用缓存数据
             # 否则需要过滤
             need_filter = False
             if cached_start_time and cached_end_time:
                 try:
-                    cached_start = datetime.fromisoformat(cached_start_time.replace("Z", "+00:00"))
-                    cached_end = datetime.fromisoformat(cached_end_time.replace("Z", "+00:00"))
+                    cached_start = datetime.fromisoformat(
+                        cached_start_time.replace("Z", "+00:00")
+                    )
+                    cached_end = datetime.fromisoformat(
+                        cached_end_time.replace("Z", "+00:00")
+                    )
                     if cached_start.tzinfo:
                         cached_start = cached_start.replace(tzinfo=None)
                     if cached_end.tzinfo:
@@ -2220,14 +2260,16 @@ async def get_statistics_summary(
                         need_filter = True
                 except Exception:
                     need_filter = True
-            
+
             if need_filter:
-                filtered_data = _filter_data_by_time_range(cached_data, hours, "summary")
+                filtered_data = _filter_data_by_time_range(
+                    cached_data, hours, "summary"
+                )
                 filtered_summary = filtered_data.get("summary", cached_data["summary"])
             else:
                 # 直接使用缓存数据，不需要过滤
                 filtered_summary = cached_data["summary"]
-            
+
             # 任务级状态（后台分析任务本身的状态）
             last_start = ANALYSIS_STATE.get("last_start_time")
             last_end = ANALYSIS_STATE.get("last_end_time")
@@ -2364,23 +2406,23 @@ def _filter_data_by_time_range(
 ) -> Dict:
     """
     根据时间范围过滤缓存数据
-    
+
     Args:
         cached_data: 缓存数据
         hours: 时间范围（小时）
         data_type: 数据类型（"summary", "top_ips", "top_paths", "status_distribution", "attacks", "all"）
-    
+
     Returns:
         过滤后的数据字典
     """
     if not cached_data:
         return {}
-    
+
     end_time = datetime.now()
     start_time = end_time - timedelta(hours=hours)
-    
+
     result = {}
-    
+
     # 过滤攻击记录（根据时间戳）
     if data_type in ("attacks", "all"):
         attacks = cached_data.get("attacks", [])
@@ -2397,14 +2439,14 @@ def _filter_data_by_time_range(
             result["attacks"] = filtered_attacks
         else:
             result["attacks"] = []
-    
+
     # 根据时间范围从hourly_trend重新计算summary
     if data_type in ("summary", "all"):
         trend_data = cached_data.get("hourly_trend", {})
         trend_hours = trend_data.get("hours", [])
         trend_counts = trend_data.get("counts", [])
         original_summary = cached_data.get("summary", {})
-        
+
         # 如果hourly_trend为空，直接使用原始summary（可能是缓存数据本身的时间范围已经符合要求）
         if not trend_hours or not trend_counts:
             logger.warning(
@@ -2428,9 +2470,11 @@ def _filter_data_by_time_range(
                     else:
                         # 按天：YYYY-MM-DD
                         hour_dt = datetime.strptime(hour_label, "%Y-%m-%d")
-                    
+
                     if start_time <= hour_dt <= end_time:
-                        total_requests += trend_counts[i] if i < len(trend_counts) else 0
+                        total_requests += (
+                            trend_counts[i] if i < len(trend_counts) else 0
+                        )
                         matched_count += 1
                 except (ValueError, TypeError) as e:
                     logger.debug(
@@ -2439,7 +2483,7 @@ def _filter_data_by_time_range(
                         e,
                     )
                     continue
-            
+
             # 如果没有任何匹配的时间桶，说明缓存数据的时间范围不包含查询时间范围
             # 这种情况下，如果查询时间范围大于缓存时间范围，返回空数据
             # 如果查询时间范围小于缓存时间范围，可能是时间标签格式问题，使用原始summary
@@ -2471,15 +2515,19 @@ def _filter_data_by_time_range(
             else:
                 # 从原始summary中获取其他信息（错误率等需要从状态码分布计算）
                 status_dist = cached_data.get("status_distribution", {})
-                
+
                 # 计算错误请求数和成功请求数（基于状态码分布）
                 error_requests = sum(
-                    int(count) for status, count in status_dist.items() if int(status) >= 400
+                    int(count)
+                    for status, count in status_dist.items()
+                    if int(status) >= 400
                 )
                 success_requests = sum(
-                    int(count) for status, count in status_dist.items() if 200 <= int(status) < 300
+                    int(count)
+                    for status, count in status_dist.items()
+                    if 200 <= int(status) < 300
                 )
-                
+
                 # 如果时间范围内的总数与原始总数不同，需要按比例调整
                 original_total = original_summary.get("total_requests", 0)
                 if original_total > 0 and total_requests != original_total:
@@ -2487,9 +2535,13 @@ def _filter_data_by_time_range(
                     ratio = total_requests / original_total if original_total > 0 else 0
                     error_requests = int(error_requests * ratio)
                     success_requests = int(success_requests * ratio)
-                
-                error_rate = (error_requests / total_requests * 100) if total_requests > 0 else 0.0
-                
+
+                error_rate = (
+                    (error_requests / total_requests * 100)
+                    if total_requests > 0
+                    else 0.0
+                )
+
                 # error_log_count 无法从hourly_trend重新计算，按比例调整
                 original_error_log_count = original_summary.get("error_log_count", 0)
                 if original_total > 0 and total_requests != original_total:
@@ -2498,7 +2550,7 @@ def _filter_data_by_time_range(
                     error_log_count = int(original_error_log_count * ratio)
                 else:
                     error_log_count = original_error_log_count
-                
+
                 result["summary"] = {
                     "total_requests": total_requests,
                     "success_requests": success_requests,
@@ -2507,7 +2559,7 @@ def _filter_data_by_time_range(
                     "attack_count": len(result.get("attacks", [])),
                     "error_log_count": error_log_count,
                 }
-    
+
     # Top IPs和Top Paths无法从hourly_trend重新计算，只能返回缓存中的汇总数据
     # 但至少可以确保返回的数据对应正确的时间范围
     if data_type in ("top_ips", "all"):
@@ -2518,7 +2570,7 @@ def _filter_data_by_time_range(
         result["status_distribution"] = cached_data.get("status_distribution", {})
     if data_type in ("method_distribution", "all"):
         result["method_distribution"] = cached_data.get("method_distribution", {})
-    
+
     return result
 
 
@@ -2719,7 +2771,7 @@ async def get_top_ips(
             # 根据时间范围过滤数据（虽然top_ips无法精确过滤，但至少确保时间范围正确）
             filtered_data = _filter_data_by_time_range(cached_data, hours, "top_ips")
             top_ips = filtered_data.get("top_ips", cached_data["top_ips"])
-            
+
             return {
                 "success": True,
                 "time_range_hours": hours,
@@ -2767,7 +2819,7 @@ async def get_top_paths(
             # 根据时间范围过滤数据（虽然top_paths无法精确过滤，但至少确保时间范围正确）
             filtered_data = _filter_data_by_time_range(cached_data, hours, "top_paths")
             top_paths = filtered_data.get("top_paths", cached_data["top_paths"])
-            
+
             return {
                 "success": True,
                 "time_range_hours": hours,
@@ -2812,9 +2864,13 @@ async def get_status_distribution(
             cached_data = get_cached_statistics(24, max_age_minutes=30)
         if cached_data and cached_data.get("status_distribution"):
             # 根据时间范围过滤数据（虽然status_distribution无法精确过滤，但至少确保时间范围正确）
-            filtered_data = _filter_data_by_time_range(cached_data, hours, "status_distribution")
-            status_distribution = filtered_data.get("status_distribution", cached_data["status_distribution"])
-            
+            filtered_data = _filter_data_by_time_range(
+                cached_data, hours, "status_distribution"
+            )
+            status_distribution = filtered_data.get(
+                "status_distribution", cached_data["status_distribution"]
+            )
+
             return {
                 "success": True,
                 "time_range_hours": hours,
@@ -2861,8 +2917,10 @@ async def get_attacks(
         if cached_data and cached_data.get("attacks") is not None:
             # 根据时间范围过滤攻击记录
             filtered_data = _filter_data_by_time_range(cached_data, hours, "attacks")
-            attacks_list = filtered_data.get("attacks", cached_data.get("attacks") or [])
-            
+            attacks_list = filtered_data.get(
+                "attacks", cached_data.get("attacks") or []
+            )
+
             return {
                 "success": True,
                 "time_range_hours": hours,
