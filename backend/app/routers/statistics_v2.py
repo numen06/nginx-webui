@@ -174,9 +174,11 @@ def analyze_logs_simple(
     # 性能优化：避免频繁触发
     state = _state_manager.get_state()
     if state["is_running"]:
-        logger.info("[statistics_v2] 任务正在运行中，跳过本次触发 (trigger=%s)", trigger)
+        logger.info(
+            "[statistics_v2] 任务正在运行中，跳过本次触发 (trigger=%s)", trigger
+        )
         return {"success": False, "message": "任务正在运行中"}
-    
+
     # 增量分析时，检查距离上次分析的时间间隔，避免过于频繁
     last_end = state.get("last_end_time")
     if last_end and not full:
@@ -185,10 +187,10 @@ def analyze_logs_simple(
             logger.info(
                 "[statistics_v2] 距离上次分析仅%.1f秒，跳过以避免频繁触发 (trigger=%s)",
                 seconds_since_last,
-                trigger
+                trigger,
             )
             return {"success": False, "message": "分析间隔太短，请稍后再试"}
-    
+
     _state_manager.start_task(trigger)
     access_log_path = Path(_resolve_access_log_path())
     error_log_path = Path(_resolve_error_log_path())
@@ -421,8 +423,19 @@ async def get_task_status(current_user: User = Depends(get_current_user)):
         else state["last_analyzed_lines"]
     )
 
+    # 计算状态（兼容前端显示）
+    if state["is_running"]:
+        task_status = "analyzing"
+    elif state["last_success"] is True:
+        task_status = "ready"
+    elif state["last_success"] is False:
+        task_status = "failed"
+    else:
+        task_status = "not_ready"
+
     return {
         "success": True,
+        "status": task_status,  # 前端需要的status字段
         "is_running": state["is_running"],
         "analyzed_lines": analyzed_lines,
         "last_trigger": state["last_trigger"],
@@ -447,6 +460,17 @@ async def trigger_analyze(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="当前已有分析任务在运行中",
         )
+
+    # 性能保护：增量分析时，检查距离上次分析的间隔
+    if not full:
+        last_end = state.get("last_end_time")
+        if last_end:
+            seconds_since_last = (datetime.now() - last_end).total_seconds()
+            if seconds_since_last < 10:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"分析过于频繁，请等待{int(10-seconds_since_last)}秒后再试",
+                )
 
     # 后台执行
     def run_analysis():

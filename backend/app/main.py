@@ -217,10 +217,10 @@ async def startup_event():
             except Exception as exc:
                 logging.warning("基于日志监听触发的分析失败: %s", exc)
 
-        # 增加防抖时间到60秒，避免频繁触发
-        # 结合5分钟的兜底定时任务，60秒防抖足够了
+        # 防抖时间30秒，避免频繁触发
+        # 结合5分钟的兜底定时任务和10秒API间隔保护
         watcher = start_log_watcher(
-            access_log_path, _analyze_all_windows, debounce_seconds=60
+            access_log_path, _analyze_all_windows, debounce_seconds=30
         )
         from app.routers.statistics_v2 import _state_manager
 
