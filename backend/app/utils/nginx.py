@@ -1121,12 +1121,14 @@ def get_nginx_status() -> Dict[str, Any]:
         {
             "running": bool,
             "pid": Optional[int],
+            "pid_file": Optional[str],  # PID文件路径
             "version": Optional[str],
             "uptime": Optional[str],
             "install_path": Optional[str]
         }
     """
     from datetime import datetime
+    import re
 
     config = get_config()
     active = get_active_version()
@@ -1139,10 +1141,41 @@ def get_nginx_status() -> Dict[str, Any]:
         pid = None
         running = False
         uptime_str = None
+        pid_file_path = None  # 实际使用的PID文件路径
+        
+        # 获取实际使用的PID文件路径（从配置或默认位置）
+        def _get_actual_pid_file() -> Optional[Path]:
+            """获取nginx实际使用的PID文件路径"""
+            if active is None:
+                return None
+            
+            install_path = active["install_path"]
+            
+            # 尝试从nginx.conf解析pid路径
+            try:
+                nginx_conf = install_path / "conf" / "nginx.conf"
+                if nginx_conf.exists():
+                    conf_content = nginx_conf.read_text(encoding="utf-8")
+                    pid_match = re.search(r"^\s*pid\s+([^;]+);", conf_content, re.MULTILINE)
+                    if pid_match:
+                        pid_path_str = pid_match.group(1).strip().strip('"').strip("'")
+                        pid_path = Path(pid_path_str)
+                        if not pid_path.is_absolute():
+                            pid_path = install_path / pid_path_str
+                        return pid_path
+            except Exception:
+                pass
+            
+            # 返回默认位置
+            return install_path / "logs" / "nginx.pid"
+        
+        actual_pid_file = _get_actual_pid_file()
+        if actual_pid_file:
+            pid_file_path = str(actual_pid_file)
 
         # 尝试从 pid 文件读取主进程 PID
         if active is not None:
-            pid_file = active["install_path"] / "logs" / "nginx.pid"
+            pid_file = actual_pid_file if actual_pid_file else active["install_path"] / "logs" / "nginx.pid"
         else:
             # 尝试从配置文件路径推断 pid 文件位置
             try:
@@ -1324,6 +1357,7 @@ def get_nginx_status() -> Dict[str, Any]:
         info: Dict[str, Any] = {
             "running": running,
             "pid": pid,
+            "pid_file": pid_file_path,  # 添加PID文件路径
             "version": version,
             "version_detail": version_detail,
             "uptime": uptime_str,
@@ -1345,6 +1379,7 @@ def get_nginx_status() -> Dict[str, Any]:
         return {
             "running": False,
             "pid": None,
+            "pid_file": None,
             "version": None,
             "uptime": None,
             "error": str(e),

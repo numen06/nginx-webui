@@ -58,6 +58,7 @@ class NginxVersionInfo(BaseModel):
     executable: str
     running: bool
     pid: Optional[int] = None
+    pid_file: Optional[str] = None  # PID文件路径
     source: Optional[str] = None  # download / upload / prebuilt
     error: Optional[str] = None
     # 是否已成功编译（即在 versions_root 下存在完整安装目录且包含 sbin/nginx）
@@ -977,16 +978,40 @@ def _compile_nginx_from_source(
 
 def _get_version_status(directory: str) -> NginxVersionInfo:
     """获取单个目录对应的版本状态信息"""
+    import re
+    
     # 内部使用绝对路径进行检测和编译
     install_path = _get_install_path(directory)
     executable = _get_nginx_executable(install_path)
     source_tar = _get_source_tar_path(directory)
 
-    # 对外返回时，安装路径使用相对于配置的 versions_root 的“原始路径”，避免在 API 中暴露绝对路径
+    # 对外返回时，安装路径使用相对于配置的 versions_root 的"原始路径"，避免在 API 中暴露绝对路径
     raw_root = _get_versions_root_raw()
     display_install_path = str(raw_root / directory)
     display_executable = str(raw_root / directory / "sbin" / "nginx")
     resolved_version = _resolve_version_label(directory, install_path, executable)
+    
+    # 获取PID文件路径（从配置或默认位置）
+    pid_file_path = None
+    try:
+        nginx_conf = install_path / "conf" / "nginx.conf"
+        if nginx_conf.exists():
+            conf_content = nginx_conf.read_text(encoding="utf-8")
+            pid_match = re.search(r"^\s*pid\s+([^;]+);", conf_content, re.MULTILINE)
+            if pid_match:
+                pid_path_str = pid_match.group(1).strip().strip('"').strip("'")
+                pid_path = Path(pid_path_str)
+                if not pid_path.is_absolute():
+                    # 相对路径，显示完整路径
+                    pid_file_path = str(install_path / pid_path_str)
+                else:
+                    pid_file_path = pid_path_str
+            else:
+                # 使用默认路径
+                pid_file_path = str(install_path / "logs" / "nginx.pid")
+    except Exception:
+        # 如果解析失败，使用默认路径
+        pid_file_path = str(install_path / "logs" / "nginx.pid")
 
     if not install_path.exists():
         return NginxVersionInfo(
@@ -995,6 +1020,7 @@ def _get_version_status(directory: str) -> NginxVersionInfo:
             install_path=display_install_path,
             executable=display_executable,
             running=False,
+            pid_file=pid_file_path,
             error=(
                 "install_path_not_found" if not source_tar.exists() else "not_compiled"
             ),
@@ -1009,6 +1035,7 @@ def _get_version_status(directory: str) -> NginxVersionInfo:
             install_path=display_install_path,
             executable=display_executable,
             running=False,
+            pid_file=pid_file_path,
             error="executable_not_found",
             compiled=False,
             has_source=source_tar.exists(),
@@ -1035,6 +1062,7 @@ def _get_version_status(directory: str) -> NginxVersionInfo:
         executable=display_executable,
         running=running,
         pid=pid,
+        pid_file=pid_file_path,
         compiled=executable.exists(),
         has_source=source_tar.exists(),
     )
@@ -1145,7 +1173,11 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
         }
 
     # 启动 Nginx（作为守护进程，由其自己在后台运行）
+    # 注意：使用 -p 参数指定prefix，确保配置文件中的相对路径（如 pid logs/nginx.pid）能正确解析
     try:
+        import logging
+        logger = logging.getLogger(__name__)
+        
         cmd = [
             str(executable),
             "-c",
@@ -1153,6 +1185,8 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
             "-p",
             str(install_path),
         ]
+        logger.info(f"[nginx_manager] 启动nginx命令: {' '.join(cmd)}")
+        
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -1161,12 +1195,15 @@ def _start_nginx_version_internal(version: str) -> Dict[str, any]:
         )
         if result.returncode != 0:
             output = result.stdout + result.stderr
+            logger.error(f"[nginx_manager] Nginx启动失败: {output}")
             return {
                 "success": False,
                 "message": f"Nginx 启动失败: {output}",
                 "version": None,
             }
+        logger.info(f"[nginx_manager] Nginx版本 {version} 启动成功")
     except Exception as e:
+        logger.error(f"[nginx_manager] Nginx启动异常: {str(e)}")
         return {
             "success": False,
             "message": f"Nginx 启动出错: {str(e)}",

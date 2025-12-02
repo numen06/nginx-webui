@@ -117,42 +117,37 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
     """
     查找指定版本nginx的PID
 
-    尝试多个可能的PID文件位置：
-    1. <install_path>/logs/nginx.pid (默认相对路径)
-    2. 从nginx.conf中解析pid指令
-    3. /var/run/nginx.pid (常见的绝对路径)
-    4. /run/nginx.pid (systemd风格)
+    优先级（遵循用户自定义配置）：
+    1. 从nginx.conf中解析pid指令（用户自定义配置优先）
+    2. <install_path>/logs/nginx.pid (默认相对路径)
+    3. /var/run/nginx.pid, /run/nginx.pid (常见的系统路径)
 
     Returns:
         运行中的nginx进程PID，如果未找到返回None
     """
-    # 1. 尝试默认位置
-    pid_file = _get_pid_file(install_path)
-    if pid_file.exists():
-        try:
-            content = pid_file.read_text(encoding="utf-8").strip()
-            if content:
-                pid = int(content)
-                if _check_process_running(pid):
-                    return pid
-        except Exception:
-            pass
+    import re
+    import subprocess
+    import logging
 
-    # 2. 尝试从配置文件解析PID路径
+    logger = logging.getLogger(__name__)
+
+    # 优先级1：从配置文件解析PID路径（遵循用户配置）
     try:
         nginx_conf = install_path / "conf" / "nginx.conf"
         if nginx_conf.exists():
             conf_content = nginx_conf.read_text(encoding="utf-8")
-            # 匹配 pid 指令（可能被注释）
-            import re
-
+            # 匹配未注释的 pid 指令
             pid_match = re.search(r"^\s*pid\s+([^;]+);", conf_content, re.MULTILINE)
             if pid_match:
                 pid_path_str = pid_match.group(1).strip().strip('"').strip("'")
-                # 如果是相对路径，相对于install_path解析
+                logger.info(f"[nginx_versions] 从配置文件解析到PID路径: {pid_path_str}")
+
+                # 解析相对/绝对路径
                 pid_path = Path(pid_path_str)
                 if not pid_path.is_absolute():
+                    # 相对路径相对于install_path解析
                     pid_path = install_path / pid_path_str
+                    logger.info(f"[nginx_versions] PID相对路径解析为: {pid_path}")
 
                 if pid_path.exists():
                     try:
@@ -160,13 +155,47 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                         if content:
                             pid = int(content)
                             if _check_process_running(pid):
+                                logger.info(
+                                    f"[nginx_versions] 从配置指定的PID文件找到运行中的进程: PID={pid}"
+                                )
                                 return pid
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                            else:
+                                logger.warning(
+                                    f"[nginx_versions] PID文件存在但进程不在运行: PID={pid}, 文件={pid_path}"
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"[nginx_versions] 读取PID文件失败: {pid_path}, 错误: {e}"
+                        )
+                else:
+                    logger.warning(
+                        f"[nginx_versions] 配置中指定的PID文件不存在: {pid_path}"
+                    )
+    except Exception as e:
+        logger.warning(f"[nginx_versions] 解析nginx.conf中的PID配置失败: {e}")
 
-    # 3. 尝试常见的绝对路径
+    # 优先级2：尝试默认位置
+    pid_file = _get_pid_file(install_path)
+    if pid_file.exists():
+        try:
+            content = pid_file.read_text(encoding="utf-8").strip()
+            if content:
+                pid = int(content)
+                if _check_process_running(pid):
+                    logger.info(
+                        f"[nginx_versions] 从默认位置找到运行中的进程: PID={pid}, 文件={pid_file}"
+                    )
+                    return pid
+                else:
+                    logger.warning(
+                        f"[nginx_versions] 默认PID文件存在但进程不在运行: PID={pid}"
+                    )
+        except Exception as e:
+            logger.warning(
+                f"[nginx_versions] 读取默认PID文件失败: {pid_file}, 错误: {e}"
+            )
+
+    # 优先级3：尝试常见的系统绝对路径（最后的备选）
     for common_pid_path in ["/var/run/nginx.pid", "/run/nginx.pid"]:
         pid_path = Path(common_pid_path)
         if pid_path.exists():
@@ -175,11 +204,8 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                 if content:
                     pid = int(content)
                     if _check_process_running(pid):
-                        # 还需要验证这个PID对应的nginx确实是这个版本的
-                        # 简单验证：检查可执行文件路径
+                        # 验证这个PID对应的nginx确实是这个版本的
                         try:
-                            import subprocess
-
                             result = subprocess.run(
                                 ["ps", "-p", str(pid), "-o", "command="],
                                 capture_output=True,
@@ -190,13 +216,23 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                                 cmd = result.stdout.strip()
                                 # 检查命令行是否包含这个install_path
                                 if str(install_path) in cmd:
+                                    logger.info(
+                                        f"[nginx_versions] 从系统路径找到匹配的进程: PID={pid}, 文件={pid_path}"
+                                    )
                                     return pid
-                        except Exception:
-                            # 如果无法验证，也返回这个PID（可能是对的）
-                            return pid
-            except Exception:
-                pass
+                                else:
+                                    logger.debug(
+                                        f"[nginx_versions] 系统PID文件中的进程不属于此版本: PID={pid}"
+                                    )
+                        except Exception as e:
+                            logger.warning(f"[nginx_versions] 验证系统PID失败: {e}")
+                            # 如果无法验证，谨慎起见不返回此PID
+            except Exception as e:
+                logger.warning(
+                    f"[nginx_versions] 读取系统PID文件失败: {pid_path}, 错误: {e}"
+                )
 
+    logger.warning(f"[nginx_versions] 未找到版本 {install_path.name} 的运行中进程")
     return None
 
 
