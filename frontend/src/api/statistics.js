@@ -56,10 +56,16 @@ export const statisticsApi = {
   },
 
   // 手动触发统计分析
+  // 一次分析会同时分析5分钟、1小时、1天三个时间范围，所以不需要 hours 参数
   // full = true 表示全量分析（适合手动从页面触发），false 为默认模式（后续可扩展为增量）
-  triggerAnalyze(hours = 24, full = true) {
+  triggerAnalyze(full = true) {
     return api.post("/statistics/analyze", null, {
-      params: { hours, full },
+      params: { full },
     });
+  },
+
+  // 获取分析任务状态（独立接口，不依赖时间范围）
+  getTaskStatus() {
+    return api.get("/statistics/task-status");
   },
 };

@@ -167,25 +167,38 @@ def read_log_file(
                         chunk = f.read(read_size)
                         buffer = chunk + buffer
 
-                        while b"\n" in buffer and len(lines_buf) < max_lines:
-                            line, buffer = buffer.rsplit(b"\n", 1)
-                            try:
-                                lines_buf.insert(
-                                    0, line.decode("utf-8", errors="ignore")
-                                )
-                            except Exception:
-                                pass
+                        # 从右到左处理所有完整的行（以 \n 结尾的行）
+                        while len(lines_buf) < max_lines:
+                            # 找到最后一个换行符的位置
+                            last_newline = buffer.rfind(b"\n")
+                            if last_newline == -1:
+                                # 没有换行符，说明这一块还没有读完，继续读取
+                                break
+                            
+                            # 提取最后一个换行符之后的内容作为一行
+                            line_bytes = buffer[last_newline + 1:]
+                            buffer = buffer[:last_newline]
+                            
+                            if line_bytes:
+                                try:
+                                    line = line_bytes.decode("utf-8", errors="ignore").rstrip("\n\r")
+                                    if line:  # 只添加非空行
+                                        lines_buf.insert(0, line)
+                                except Exception:
+                                    pass
 
                         if position == 0:
+                            # 文件开头剩余的内容（可能没有换行符）
                             if buffer:
                                 try:
-                                    lines_buf.insert(
-                                        0, buffer.decode("utf-8", errors="ignore")
-                                    )
+                                    line = buffer.decode("utf-8", errors="ignore").rstrip("\n\r")
+                                    if line:  # 只添加非空行
+                                        lines_buf.insert(0, line)
                                 except Exception:
                                     pass
                             break
 
+                    # 如果读取的行数超过限制，只返回最后 max_lines 行
                     return (
                         lines_buf[-max_lines:]
                         if len(lines_buf) > max_lines

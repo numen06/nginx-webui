@@ -39,10 +39,9 @@ from app.routers import (
     users,
     git,
 )
-from app.routers import statistics, system
+from app.routers import statistics_v2 as statistics, system
 from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
-from app.routers.statistics import analyze_logs, ANALYSIS_STATE, reset_analysis_state
 from app.utils.log_watcher import start_log_watcher
 from app.routers.logs import _resolve_access_log_path
 
@@ -88,12 +87,15 @@ app.include_router(system.router)
 @app.on_event("startup")
 async def startup_event():
     """应用启动时打印核心配置信息并自动启动nginx"""
-    # 启动前重置统计分析任务状态，避免沿用上一次进程中的“分析中”等状态
-    try:
-        reset_analysis_state()
-    except Exception:
-        # 即使重置失败也不影响应用启动，只在日志中记录
-        logging.warning("重置统计分析状态失败，将使用默认状态")
+    # 重置分析任务状态，确保重启后状态正确
+    from app.routers.statistics_v2 import _state_manager
+
+    _state_manager.reset()
+    logging.info(
+        "[statistics] 分析任务状态已重置，is_running=%s",
+        _state_manager.get_state()["is_running"],
+    )
+
     cfg = get_config()
     nginx_available = is_nginx_available()
 
@@ -199,62 +201,66 @@ async def startup_event():
         access_log_path = Path(_resolve_access_log_path())
 
         def _analyze_all_windows():
-            """当日志有新增内容时触发：按常用时间范围执行一次分析并写入缓存"""
-            for hours in [1, 24, 168]:
-                try:
-                    analyze_logs(
-                        time_range_hours=hours,
-                        use_cache=False,
-                        trigger="watcher",
-                        save_cache=True,
-                    )
-                except Exception as exc:
-                    logging.warning(
-                        "基于日志监听触发的统计分析失败 (hours=%s): %s", hours, exc
-                    )
+            """当日志有新增内容时触发：按时间范围递进分析（5分钟 -> 1小时 -> 1天）"""
+            # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+            # 5分钟分析：读取日志文件
+            # 1小时分析：从5分钟缓存聚合
+            # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
+            # 7天和30天的数据从1天的数据中聚合，不需要单独分析
 
-            # 定期清理过期缓存
+            # V2版本：使用简化的analyze_logs_simple
             try:
-                cleanup_old_cache(max_age_hours=24)
-            except Exception as exc:
-                logging.warning("清理统计缓存失败: %s", exc)
+                from app.routers.statistics_v2 import analyze_logs_simple
 
+                analyze_logs_simple(hours=1, full=False, trigger="watcher")
+                logging.info("✓ 统计分析完成（V2）")
+            except Exception as exc:
+                logging.warning("基于日志监听触发的分析失败: %s", exc)
+
+        # 增加防抖时间到60秒，避免频繁触发
+        # 结合5分钟的兜底定时任务，60秒防抖足够了
         watcher = start_log_watcher(
-            access_log_path, _analyze_all_windows, debounce_seconds=30
+            access_log_path, _analyze_all_windows, debounce_seconds=60
         )
+        from app.routers.statistics_v2 import _state_manager
+
         if watcher:
-            ANALYSIS_STATE["watcher_enabled"] = True
+            state = _state_manager.get_state()
+            state["watcher_enabled"] = True
             print(f"✓ 基于日志变化的统计分析监听已启用，文件: {access_log_path}")
         else:
-            ANALYSIS_STATE["watcher_enabled"] = False
-            print("⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
-                  "将依赖手动触发全量分析")
+            # watcher disabled
+            print(
+                "⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
+                "将依赖手动触发全量分析"
+            )
     except Exception as e:
-        ANALYSIS_STATE["watcher_enabled"] = False
         logging.warning(f"初始化日志监听失败，将依赖手动触发分析: {e}")
 
     # 兜底：每 5 分钟定时触发一次分析，防止极端情况下监听失效或长时间无请求却仍需刷新统计
     def fallback_analyzer():
         import time
 
+        # 重启后先等待一个周期（5分钟），再开始第一次分析
+        print("✓ 统计分析兜底定时任务已启动，将在 5 分钟后开始第一次分析")
+        time.sleep(300)  # 等待5分钟
+
         while True:
             try:
-                for hours in [1, 24, 168]:
-                    try:
-                        analyze_logs(
-                            time_range_hours=hours,
-                            use_cache=False,
-                            trigger="auto_fallback",
-                            save_cache=True,
-                        )
-                    except Exception as exc:
-                        logging.warning("兜底定时分析失败 (hours=%s): %s", hours, exc)
+                # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+                # 5分钟分析：读取日志文件
+                # 1小时分析：从5分钟缓存聚合
+                # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
+                # 7天和30天的数据从1天的数据中聚合，不需要单独分析
 
-                # 定期清理统计缓存
+                # V2版本：使用简化的analyze_logs_simple
                 try:
-                    cleanup_old_cache(max_age_hours=24)
+                    from app.routers.statistics_v2 import analyze_logs_simple
+
+                    analyze_logs_simple(hours=1, full=False, trigger="auto_fallback")
+                    logging.info("✓ 兜底定时分析完成（V2）")
                 except Exception as exc:
-                    logging.warning("兜底定时清理统计缓存失败: %s", exc)
+                    logging.warning("兜底定时分析失败: %s", exc)
             except Exception as exc:
                 logging.error("兜底定时分析线程异常: %s", exc)
 
@@ -262,7 +268,6 @@ async def startup_event():
             time.sleep(300)
 
     threading.Thread(target=fallback_analyzer, daemon=True).start()
-    print("✓ 统计分析兜底定时任务已启动（每 5 分钟一次）")
 
 
 # 挂载静态文件目录（前端打包文件）
@@ -320,16 +325,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     errors = exc.errors()
     error_details = []
     for error in errors:
-        error_details.append({
-            "loc": error.get("loc"),
-            "msg": error.get("msg"),
-            "type": error.get("type")
-        })
-    
+        error_details.append(
+            {
+                "loc": error.get("loc"),
+                "msg": error.get("msg"),
+                "type": error.get("type"),
+            }
+        )
+
     # 记录详细的验证错误信息
     print(f"\n[验证错误] {request.method} {request.url}")
     print(f"[验证错误] 错误详情: {error_details}")
-    
+
     # 尝试读取请求体（如果可能）
     try:
         body = await request.body()
@@ -337,10 +344,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             print(f"[验证错误] 请求体: {body.decode('utf-8', errors='ignore')}")
     except Exception:
         pass
-    
+
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": error_details}
+        content={"detail": error_details},
     )
 
 
