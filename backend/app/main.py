@@ -42,7 +42,7 @@ from app.routers import (
 from app.routers import statistics, system
 from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
-from app.routers.statistics import analyze_logs, ANALYSIS_STATE
+from app.routers.statistics import analyze_logs, ANALYSIS_STATE, reset_analysis_state
 from app.utils.log_watcher import start_log_watcher
 from app.routers.logs import _resolve_access_log_path
 
@@ -88,6 +88,9 @@ app.include_router(system.router)
 @app.on_event("startup")
 async def startup_event():
     """应用启动时打印核心配置信息并自动启动nginx"""
+    # 重置分析任务状态，确保重启后状态正确
+    reset_analysis_state()
+    
     cfg = get_config()
     nginx_available = is_nginx_available()
 
@@ -195,28 +198,58 @@ async def startup_event():
         def _analyze_all_windows():
             """当日志有新增内容时触发：按时间范围递进分析（5分钟 -> 1小时 -> 1天）"""
             # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+            # 5分钟分析：读取日志文件
+            # 1小时分析：从5分钟缓存聚合
+            # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
             # 7天和30天的数据从1天的数据中聚合，不需要单独分析
-            # 5分钟数据使用单独的表，其他使用整数小时
-            analyze_tasks = [
-                (None, True, "5分钟"),  # 5分钟：使用 is_5min=True
-                (1, False, "1小时"),
-                (24, False, "1天"),
-            ]
-            
-            for hours, is_5min_flag, label in analyze_tasks:
-                try:
-                    analyze_logs(
-                        time_range_hours=hours or 1,  # 5分钟时传入1作为占位符
-                        is_5min=is_5min_flag,
-                        use_cache=False,
-                        trigger="watcher",
-                        save_cache=True,
-                    )
-                    logging.info(f"✓ {label}时间范围分析完成")
-                except Exception as exc:
-                    logging.warning(
-                        "基于日志监听触发的统计分析失败 (%s): %s", label, exc
-                    )
+
+            # 先执行5分钟分析（读取日志文件）
+            try:
+                analyze_logs(
+                    time_range_hours=1,  # 占位符
+                    is_5min=True,
+                    use_cache=False,
+                    trigger="watcher",
+                    save_cache=True,
+                )
+                logging.info("✓ 5分钟时间范围分析完成")
+            except Exception as exc:
+                logging.warning("基于日志监听触发的5分钟分析失败: %s", exc)
+                return  # 如果5分钟分析失败，不继续执行后续分析
+
+            # 等待5秒，确保5分钟分析有足够时间完成并保存到缓存
+            import time
+
+            time.sleep(5)
+
+            # 执行1小时分析（从5分钟缓存聚合）
+            try:
+                analyze_logs(
+                    time_range_hours=1,
+                    is_5min=False,
+                    use_cache=False,
+                    trigger="watcher",
+                    save_cache=True,
+                )
+                logging.info("✓ 1小时时间范围分析完成（从5分钟缓存聚合）")
+            except Exception as exc:
+                logging.warning("基于日志监听触发的1小时分析失败: %s", exc)
+
+            # 再等待5秒，确保1小时分析有足够时间完成并保存到缓存
+            time.sleep(5)
+
+            # 执行1天分析（从1小时缓存聚合）
+            try:
+                analyze_logs(
+                    time_range_hours=24,
+                    is_5min=False,
+                    use_cache=False,
+                    trigger="watcher",
+                    save_cache=True,
+                )
+                logging.info("✓ 1天时间范围分析完成（从1小时缓存聚合）")
+            except Exception as exc:
+                logging.warning("基于日志监听触发的1天分析失败: %s", exc)
 
             # 定期清理超过30天的过期缓存
             try:
@@ -232,8 +265,10 @@ async def startup_event():
             print(f"✓ 基于日志变化的统计分析监听已启用，文件: {access_log_path}")
         else:
             ANALYSIS_STATE["watcher_enabled"] = False
-            print("⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
-                  "将依赖手动触发全量分析")
+            print(
+                "⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
+                "将依赖手动触发全量分析"
+            )
     except Exception as e:
         ANALYSIS_STATE["watcher_enabled"] = False
         logging.warning(f"初始化日志监听失败，将依赖手动触发分析: {e}")
@@ -245,31 +280,58 @@ async def startup_event():
         while True:
             try:
                 # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+                # 5分钟分析：读取日志文件
+                # 1小时分析：从5分钟缓存聚合
+                # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
                 # 7天和30天的数据从1天的数据中聚合，不需要单独分析
-                time_ranges = [
-                    (5 / 60, "5分钟"),  # 5分钟 = 5/60 小时
-                    (1, "1小时"),
-                    (24, "1天"),
-                ]
-                
-                # 5分钟数据使用单独的表，其他使用整数小时
-                analyze_tasks = [
-                    (None, True, "5分钟"),  # 5分钟：使用 is_5min=True
-                    (1, False, "1小时"),
-                    (24, False, "1天"),
-                ]
-                for hours, is_5min_flag, label in analyze_tasks:
-                    try:
-                        analyze_logs(
-                            time_range_hours=hours or 1,  # 5分钟时传入1作为占位符
-                            is_5min=is_5min_flag,
-                            use_cache=False,
-                            trigger="auto_fallback",
-                            save_cache=True,
-                        )
-                        logging.info(f"✓ 兜底定时分析完成 ({label})")
-                    except Exception as exc:
-                        logging.warning("兜底定时分析失败 (%s): %s", label, exc)
+
+                # 先执行5分钟分析（读取日志文件）
+                try:
+                    analyze_logs(
+                        time_range_hours=1,  # 占位符
+                        is_5min=True,
+                        use_cache=False,
+                        trigger="auto_fallback",
+                        save_cache=True,
+                    )
+                    logging.info("✓ 兜底定时分析完成（5分钟）")
+                except Exception as exc:
+                    logging.warning("兜底定时5分钟分析失败: %s", exc)
+                    # 如果5分钟分析失败，等待一段时间后继续下一轮
+                    time.sleep(300)
+                    continue
+
+                # 等待5秒，确保5分钟分析有足够时间完成并保存到缓存
+                time.sleep(5)
+
+                # 执行1小时分析（从5分钟缓存聚合）
+                try:
+                    analyze_logs(
+                        time_range_hours=1,
+                        is_5min=False,
+                        use_cache=False,
+                        trigger="auto_fallback",
+                        save_cache=True,
+                    )
+                    logging.info("✓ 兜底定时分析完成（1小时，从5分钟缓存聚合）")
+                except Exception as exc:
+                    logging.warning("兜底定时1小时分析失败: %s", exc)
+
+                # 再等待5秒，确保1小时分析有足够时间完成并保存到缓存
+                time.sleep(5)
+
+                # 执行1天分析（从1小时缓存聚合）
+                try:
+                    analyze_logs(
+                        time_range_hours=24,
+                        is_5min=False,
+                        use_cache=False,
+                        trigger="auto_fallback",
+                        save_cache=True,
+                    )
+                    logging.info("✓ 兜底定时分析完成（1天，从1小时缓存聚合）")
+                except Exception as exc:
+                    logging.warning("兜底定时1天分析失败: %s", exc)
 
                 # 定期清理超过30天的过期缓存
                 try:
@@ -341,16 +403,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     errors = exc.errors()
     error_details = []
     for error in errors:
-        error_details.append({
-            "loc": error.get("loc"),
-            "msg": error.get("msg"),
-            "type": error.get("type")
-        })
-    
+        error_details.append(
+            {
+                "loc": error.get("loc"),
+                "msg": error.get("msg"),
+                "type": error.get("type"),
+            }
+        )
+
     # 记录详细的验证错误信息
     print(f"\n[验证错误] {request.method} {request.url}")
     print(f"[验证错误] 错误详情: {error_details}")
-    
+
     # 尝试读取请求体（如果可能）
     try:
         body = await request.body()
@@ -358,10 +422,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             print(f"[验证错误] 请求体: {body.decode('utf-8', errors='ignore')}")
     except Exception:
         pass
-    
+
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": error_details}
+        content={"detail": error_details},
     )
 
 

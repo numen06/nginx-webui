@@ -13,13 +13,22 @@
                   刷新
                 </el-button>
                 <el-button
+                  type="success"
+                  text
+                  :disabled="taskStatus.is_running"
+                  @click="triggerIncrementalAnalyze"
+                >
+                  <el-icon style="margin-right: 4px;"><DataAnalysis /></el-icon>
+                  增量分析
+                </el-button>
+                <el-button
                   type="primary"
                   text
-                  :disabled="statsStatus.status === 'analyzing' || analyzingManual"
+                  :disabled="taskStatus.is_running"
                   @click="triggerAnalyzeNow"
                 >
                   <el-icon style="margin-right: 4px;"><DataAnalysis /></el-icon>
-                  立即分析
+                  全量分析
                 </el-button>
               </div>
             </div>
@@ -57,7 +66,7 @@
             <el-descriptions-item label="监听状态" :span="2">
               <el-text type="info" size="small">
                 <el-tag
-                  v-if="statsStatus.watcherEnabled"
+                  v-if="taskStatus.watcher_enabled"
                   type="success"
                   size="small"
                   effect="plain"
@@ -76,15 +85,15 @@
             </el-descriptions-item>
             <el-descriptions-item label="任务分析行数" :span="1">
               <el-text type="info" size="small">
-                <span v-if="statsStatus.analyzedLines != null">
-                  {{ formatNumber(statsStatus.analyzedLines) }}
+                <span v-if="taskStatus.analyzed_lines != null && taskStatus.analyzed_lines > 0">
+                  {{ formatNumber(taskStatus.analyzed_lines) }}
                 </span>
                 <span v-else class="text-muted">-</span>
               </el-text>
             </el-descriptions-item>
             <el-descriptions-item label="上次分析时间" :span="1">
               <el-text type="info" size="small">
-                {{ statsStatus.lastAnalysisTime ? formatDateTime(statsStatus.lastAnalysisTime) : '-' }}
+                {{ taskStatus.last_analysis_time ? formatDateTime(taskStatus.last_analysis_time) : '-' }}
               </el-text>
             </el-descriptions-item>
           </el-descriptions>
@@ -383,25 +392,25 @@ const systemVersion = ref({
   build_time_formatted: null
 })
 
-// 统计分析状态
-const statsStatus = ref({
+// 统计分析任务状态（从独立接口获取，不依赖时间范围）
+const taskStatus = ref({
   status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing' | 'failed'
-  lastAnalysisTime: null,     // 上次分析到的日志时间（数据维度）
-  isAnalyzing: false,         // 后台任务是否在执行
-  lastJobStartTime: null,     // 最近一次任务开始时间
-  lastJobEndTime: null,       // 最近一次任务结束时间
-  lastJobError: null,         // 最近一次任务错误
-  lastJobSuccess: null,       // 最近一次任务是否成功
-  lastJobTrigger: null,       // 最近一次任务触发方式：auto / manual
-  lastJobDurationSeconds: null,      // 最近一次任务总耗时（秒）
-  runningDurationSeconds: null,      // 当前运行中任务耗时（秒）
-  analyzedLines: null,               // 任务分析行数
-  watcherEnabled: false              // 是否启用了日志监听
+  is_running: false,          // 后台任务是否在执行
+  last_analysis_time: null,   // 上次分析到的日志时间
+  analyzed_lines: 0,          // 任务分析行数
+  watcher_enabled: false,     // 是否启用了日志监听
+  last_start_time: null,      // 最近一次任务开始时间
+  last_end_time: null,        // 最近一次任务结束时间
+  last_error: null,           // 最近一次任务错误
+  last_success: null,         // 最近一次任务是否成功
+  last_trigger: null,         // 最近一次任务触发方式
+  last_duration_seconds: 0,  // 最近一次任务总耗时（秒）
+  running_duration_seconds: null  // 当前运行中任务耗时（秒）
 })
 
 // 统计分析状态标签（保持固定宽度，避免布局抖动）
 const analysisTagType = computed(() => {
-  const s = statsStatus.value.status
+  const s = taskStatus.value.status
   if (s === 'analyzing') return 'info'
   if (s === 'ready') return 'success'
   if (s === 'failed') return 'danger'
@@ -410,7 +419,7 @@ const analysisTagType = computed(() => {
 })
 
 const analysisTagText = computed(() => {
-  const s = statsStatus.value.status
+  const s = taskStatus.value.status
   if (s === 'analyzing') return '分析中'
   if (s === 'ready') return '正常'
   if (s === 'failed') return '失败'
@@ -418,27 +427,6 @@ const analysisTagText = computed(() => {
   return '未知'
 })
 
-// 分析任务耗时展示文本
-const analysisDurationText = computed(() => {
-  const s = statsStatus.value
-  // 正在分析时，优先展示当前已运行时长
-  if (s.isAnalyzing && s.runningDurationSeconds != null) {
-    const sec = s.runningDurationSeconds
-    if (sec < 60) return `当前耗时：${sec.toFixed(1)} 秒`
-    const min = sec / 60
-    return `当前耗时：${min.toFixed(1)} 分钟`
-  }
-
-  // 最近一次完成任务的耗时
-  if (!s.isAnalyzing && s.lastJobDurationSeconds != null && s.lastJobDurationSeconds > 0) {
-    const sec = s.lastJobDurationSeconds
-    if (sec < 60) return `最近耗时：${sec.toFixed(1)} 秒`
-    const min = sec / 60
-    return `最近耗时：${min.toFixed(1)} 分钟`
-  }
-
-  return ''
-})
 
 // 访问趋势时间范围（单位：小时）
 // 1 小时：后端按 5 分钟粒度聚合
@@ -446,7 +434,6 @@ const analysisDurationText = computed(() => {
 // 168 小时（7 天）：按天聚合
 const timeRange = ref(1)
 const loading = ref(false)
-const analyzingManual = ref(false)
 
 // 仪表盘分块加载的各区域 loading 状态
 const loadingSummary = ref(false)       // 顶部统计卡片
@@ -651,7 +638,32 @@ const loadNginxStatus = async () => {
   }
 }
 
-// 加载基础统计数据（优先加载，轻量级）
+// 加载任务状态（独立接口，不依赖时间范围）
+const loadTaskStatus = async () => {
+  try {
+    const response = await statisticsApi.getTaskStatus()
+    if (response.success) {
+      taskStatus.value = {
+        status: response.status || 'unknown',
+        is_running: response.is_running || false,
+        last_analysis_time: response.last_analysis_time || null,
+        analyzed_lines: response.analyzed_lines || 0,
+        watcher_enabled: response.watcher_enabled || false,
+        last_start_time: response.last_start_time || null,
+        last_end_time: response.last_end_time || null,
+        last_error: response.last_error || null,
+        last_success: response.last_success,
+        last_trigger: response.last_trigger || null,
+        last_duration_seconds: response.last_duration_seconds || 0,
+        running_duration_seconds: response.running_duration_seconds || null
+      }
+    }
+  } catch (error) {
+    console.error('获取任务状态失败:', error)
+  }
+}
+
+// 加载基础统计数据（只返回统计数据，不包含任务状态）
 const loadStatisticsSummary = async () => {
   if (loadingSummary.value) return
   loadingSummary.value = true
@@ -660,99 +672,69 @@ const loadStatisticsSummary = async () => {
     const response = await statisticsApi.getSummary(timeRange.value)
     if (response.success) {
       stats.value.summary = response.summary
-      // 数据维度的时间信息
-      statsStatus.value.lastAnalysisTime = response.last_analysis_time || response.end_time || null
-
-      // 后台任务维度的状态信息
-      const job = response.analysis_job || {}
-      statsStatus.value.isAnalyzing = !!job.is_running
-      statsStatus.value.lastJobStartTime = job.last_start_time || null
-      statsStatus.value.lastJobEndTime = job.last_end_time || null
-      statsStatus.value.lastJobError = job.last_error || null
-      statsStatus.value.lastJobSuccess = job.last_success
-      statsStatus.value.lastJobTrigger = job.last_trigger || null
-      statsStatus.value.lastJobDurationSeconds = job.last_duration_seconds ?? null
-      statsStatus.value.runningDurationSeconds = job.running_duration_seconds ?? null
-      statsStatus.value.analyzedLines = response.analyzed_lines ?? null
-      statsStatus.value.watcherEnabled = !!job.watcher_enabled
-
-      // 统计分析状态：优先展示“任务状态”
-      if (statsStatus.value.isAnalyzing) {
-        statsStatus.value.status = 'analyzing'
-      } else if (statsStatus.value.lastJobSuccess === false || statsStatus.value.lastJobError) {
-        statsStatus.value.status = 'failed'
-      } else if (statsStatus.value.lastJobEndTime) {
-        statsStatus.value.status = 'ready'
-      } else {
-        statsStatus.value.status = 'not_ready'
-      }
-    } else {
-      statsStatus.value.status = 'not_ready'
-      statsStatus.value.lastAnalysisTime = null
-      statsStatus.value.isAnalyzing = false
-      statsStatus.value.lastJobStartTime = null
-      statsStatus.value.lastJobEndTime = null
-      statsStatus.value.lastJobError = null
-      statsStatus.value.lastJobSuccess = null
-      statsStatus.value.lastJobTrigger = null
-      statsStatus.value.lastJobDurationSeconds = null
-      statsStatus.value.runningDurationSeconds = null
-      statsStatus.value.analyzedLines = null
-      statsStatus.value.watcherEnabled = false
     }
   } catch (error) {
     console.error('获取基础统计数据失败:', error)
-    statsStatus.value.status = 'not_ready'
-    statsStatus.value.lastAnalysisTime = null
-    statsStatus.value.isAnalyzing = false
-    statsStatus.value.lastJobStartTime = null
-    statsStatus.value.lastJobEndTime = null
-    statsStatus.value.lastJobError = null
-    statsStatus.value.lastJobSuccess = null
-    statsStatus.value.lastJobTrigger = null
-    statsStatus.value.lastJobDurationSeconds = null
-    statsStatus.value.runningDurationSeconds = null
-    statsStatus.value.analyzedLines = null
-    statsStatus.value.watcherEnabled = false
   } finally {
     loadingSummary.value = false
   }
 }
 
-// 手动触发统计分析
-const triggerAnalyzeNow = async () => {
-  if (analyzingManual.value || statsStatus.value.status === 'analyzing') return
-  analyzingManual.value = true
-  statsStatus.value.status = 'analyzing'
-  statsStatus.value.isAnalyzing = true
+// 手动触发增量分析
+const triggerIncrementalAnalyze = async () => {
+  if (taskStatus.value.is_running) return
 
   try {
-    // 页面触发：默认执行全量分析（full=true）
-    // 一次分析会同时分析5分钟、1小时、1天三个时间范围，所以不需要传入 timeRange
+    // 页面触发：执行增量分析（full=false）
+    // 一次分析会同时分析5分钟、1小时、1天三个时间范围
+    const res = await statisticsApi.triggerAnalyze(false)
+    if (res.success) {
+      ElMessage.success(res.message || '增量分析已在后台启动')
+      // 立即刷新任务状态
+      loadTaskStatus()
+      // 稍等几秒再刷新一次任务状态和统计数据
+      setTimeout(() => {
+        loadTaskStatus()
+        loadStatisticsSummary()
+      }, 3000)
+    } else {
+      ElMessage.warning(res.message || '增量分析启动失败')
+      loadTaskStatus()
+    }
+  } catch (error) {
+    console.error('触发增量分析失败:', error)
+    ElMessage.error('触发增量分析失败: ' + (error.message || '未知错误'))
+    loadTaskStatus()
+  }
+}
+
+// 手动触发全量统计分析
+const triggerAnalyzeNow = async () => {
+  if (taskStatus.value.is_running) return
+
+  try {
+    // 页面触发：执行全量分析（full=true）
+    // 一次分析会同时分析5分钟、1小时、1天三个时间范围
     const res = await statisticsApi.triggerAnalyze(true)
     if (res.success) {
-      ElMessage.success(res.message || '统计分析已在后台启动')
-      // 稍等几秒再刷新一次基础统计，更新状态和时间
+      ElMessage.success(res.message || '全量分析已在后台启动')
+      // 立即刷新任务状态
+      loadTaskStatus()
+      // 稍等几秒再刷新一次任务状态和统计数据
       setTimeout(() => {
+        loadTaskStatus()
         loadStatisticsSummary()
       }, 5000)
     } else {
       if (res.message) {
         ElMessage.warning(res.message)
       }
-      // 如果后端提示已在分析中，则保持 analyzing 状态；否则回退为 not_ready
-      if (!res.is_analyzing) {
-        statsStatus.value.status = 'not_ready'
-        statsStatus.value.isAnalyzing = false
-      }
+      loadTaskStatus()
     }
   } catch (error) {
     console.error('手动触发统计分析失败:', error)
     ElMessage.error('手动触发统计分析失败: ' + (error.detail || error.message || '未知错误'))
-    statsStatus.value.status = 'not_ready'
-    statsStatus.value.isAnalyzing = false
-  } finally {
-    analyzingManual.value = false
+    loadTaskStatus()
   }
 }
 
@@ -853,7 +835,8 @@ const loadAttacks = async () => {
 
 // 加载所有统计数据（按优先级分批加载）
 const loadStatistics = async () => {
-  // 第一批：基础统计（立即加载，最轻量）
+  // 第一批：任务状态和基础统计（立即加载，最轻量）
+  loadTaskStatus()
   loadStatisticsSummary()
   
   // 第二批：图表数据（稍后加载）
@@ -908,6 +891,7 @@ const loadSystemVersion = async () => {
 // 刷新状态
 const refreshStatus = () => {
   loadNginxStatus()
+  loadTaskStatus()
   loadStatistics()
   loadSystemResources()
   loadSystemVersion()
@@ -916,13 +900,15 @@ const refreshStatus = () => {
 // 组件挂载
 onMounted(() => {
   loadNginxStatus()
+  loadTaskStatus()
   loadStatistics()
   loadSystemResources()
   loadSystemVersion()
   
-  // 每30秒自动刷新
+  // 每30秒自动刷新（任务状态和统计数据）
   refreshTimer = setInterval(() => {
     loadNginxStatus()
+    loadTaskStatus()
     loadStatistics()
     loadSystemResources()
     // 版本信息不需要频繁刷新，只在初始加载时获取

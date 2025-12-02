@@ -63,4 +63,9 @@ export const statisticsApi = {
       params: { full },
     });
   },
+
+  // 获取分析任务状态（独立接口，不依赖时间范围）
+  getTaskStatus() {
+    return api.get("/statistics/task-status");
+  },
 };

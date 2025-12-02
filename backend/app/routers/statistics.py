@@ -516,7 +516,7 @@ def iter_log_lines_from_tail(
             from pygtail import Pygtail
 
             # pygtail 会从上次读取位置开始读取新内容（从旧到新）
-            # 我们需要反转顺序，使其从新到旧
+            # 增量分析时保持从旧到新的顺序，这样时间过滤逻辑更简单
             tail = Pygtail(
                 str(file_path),
                 encoding="utf-8",
@@ -524,16 +524,11 @@ def iter_log_lines_from_tail(
                 copytruncate=True,  # 支持日志轮转
             )
 
-            # 读取所有新行并存储
-            new_lines = []
+            # 直接yield，保持从旧到新的顺序
             for line in tail:
                 line = line.rstrip("\n\r")
                 if line:  # 只处理非空行
-                    new_lines.append(line)
-
-            # 反转顺序，从新到旧（pygtail 返回的是从旧到新）
-            for line in reversed(new_lines):
-                yield line
+                    yield line
 
         except ImportError:
             logger.warning("[statistics] pygtail 未安装，回退到从尾部读取方式")
@@ -613,8 +608,613 @@ ANALYSIS_INTERVAL_SECONDS = 300  # 后台分析间隔：5分钟
 _analysis_task_counter = 0
 _analysis_task_lock = threading.Lock()
 
+# 任务组管理：用于统一管理多个子任务（5分钟、1小时、1天）
+_task_groups: Dict[str, Dict[str, Any]] = (
+    {}
+)  # {task_group_id: {total: 3, completed: 0, failed: 0, errors: []}}
+_task_groups_lock = threading.Lock()
+
 # 全局分析状态（仅用于任务状态展示，而不是数据内容）
 ANALYSIS_STATE: Dict[str, Any] = {}
+
+
+def _create_task_group(total_tasks: int, trigger: str, full: bool) -> str:
+    """创建任务组，返回任务组ID"""
+    import uuid
+
+    task_group_id = str(uuid.uuid4())
+    with _task_groups_lock:
+        _task_groups[task_group_id] = {
+            "total": total_tasks,
+            "completed": 0,
+            "failed": 0,
+            "errors": [],
+            "trigger": trigger,
+            "full": full,
+            "start_time": datetime.now(),
+        }
+    return task_group_id
+
+
+def _notify_task_group_complete(
+    task_group_id: str, success: bool = True, error: Optional[str] = None
+):
+    """通知任务组某个子任务完成"""
+    with _task_groups_lock:
+        if task_group_id not in _task_groups:
+            logger.warning(
+                "[statistics] 任务组不存在：task_group_id=%s, success=%s",
+                task_group_id[:8] if task_group_id else "None",
+                success,
+            )
+            return
+
+        group = _task_groups[task_group_id]
+        if success:
+            group["completed"] += 1
+        else:
+            group["failed"] += 1
+            if error:
+                group["errors"].append(error)
+
+        logger.debug(
+            "[statistics] 任务组进度更新：task_group_id=%s, 完成=%s/%s, 失败=%s",
+            task_group_id[:8],
+            group["completed"],
+            group["total"],
+            group["failed"],
+        )
+
+        # 检查是否所有任务都完成了
+        total_done = group["completed"] + group["failed"]
+        if total_done >= group["total"]:
+            # 所有任务完成，更新全局状态
+            all_success = group["failed"] == 0
+            end_time = datetime.now()
+            duration = (end_time - group["start_time"]).total_seconds()
+
+            with _analysis_task_lock:
+                _analysis_task_counter = max(0, _analysis_task_counter - 1)
+                ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+                ANALYSIS_STATE["last_end_time"] = end_time
+                ANALYSIS_STATE["last_duration_seconds"] = duration
+                ANALYSIS_STATE["last_success"] = all_success
+                # 保存最终的分析行数（从最新的缓存中获取）
+                # 优先从5分钟缓存获取，因为它是基础数据
+                from app.utils.statistics_cache import (
+                    get_cached_statistics_5min,
+                    get_cached_statistics,
+                )
+
+                cached_5min = get_cached_statistics_5min(max_age_minutes=None)
+                if cached_5min:
+                    ANALYSIS_STATE["last_analyzed_lines"] = cached_5min.get(
+                        "analyzed_lines", 0
+                    )
+                else:
+                    cached_1hr = get_cached_statistics(1, max_age_minutes=None)
+                    if cached_1hr:
+                        ANALYSIS_STATE["last_analyzed_lines"] = cached_1hr.get(
+                            "analyzed_lines", 0
+                        )
+                    else:
+                        ANALYSIS_STATE["last_analyzed_lines"] = 0
+
+                if not all_success:
+                    ANALYSIS_STATE["last_error"] = (
+                        "; ".join(group["errors"])
+                        if group["errors"]
+                        else "部分任务失败"
+                    )
+                else:
+                    ANALYSIS_STATE["last_error"] = None
+
+                # 确保状态同步：如果任务计数器为0，强制设置 is_running 为 False
+                if _analysis_task_counter == 0:
+                    ANALYSIS_STATE["is_running"] = False
+                    # 任务完成后，清除实时进度（因为任务已完成，实时进度不再有意义）
+                    ANALYSIS_STATE["current_last_entry_time"] = None
+                    ANALYSIS_STATE["current_analyzed_lines"] = 0
+                    logger.debug(
+                        "[statistics] 任务组完成，强制设置 is_running=False, task_group_id=%s",
+                        task_group_id[:8],
+                    )
+
+            logger.info(
+                "[statistics] 分析任务组完成：task_group_id=%s, 成功=%s/%s, 失败=%s, 耗时=%.2fs, is_running=%s, task_counter=%s",
+                task_group_id[:8],
+                group["completed"],
+                group["total"],
+                group["failed"],
+                duration,
+                ANALYSIS_STATE["is_running"],
+                _analysis_task_counter,
+            )
+
+            # 清理任务组
+            del _task_groups[task_group_id]
+        else:
+            logger.debug(
+                "[statistics] 任务组未完成：task_group_id=%s, 已完成=%s/%s",
+                task_group_id[:8],
+                total_done,
+                group["total"],
+            )
+
+
+def _aggregate_from_5min_cache(
+    time_range_hours: int = 1,
+    end_time: Optional[datetime] = None,
+    update_start_time: Optional[datetime] = None,
+) -> Optional[Dict]:
+    """
+    从5分钟缓存数据聚合生成1小时统计数据（支持增量更新）
+
+    Args:
+        time_range_hours: 目标时间范围（小时，通常为1）
+        end_time: 结束时间，默认为当前时间
+        update_start_time: 增量更新的开始时间（如果提供，只更新此时间之后的数据）
+
+    Returns:
+        聚合后的统计数据，如果5分钟缓存不存在则返回 None
+    """
+    if end_time is None:
+        end_time = datetime.now()
+
+    # 如果提供了增量更新的开始时间，只更新该时间之后的数据
+    # 否则更新整个时间范围
+    if update_start_time:
+        start_time = update_start_time
+        logger.info(
+            "[statistics] 增量聚合1小时数据：只更新 %s 之后的数据",
+            update_start_time.isoformat(),
+        )
+    else:
+        start_time = end_time - timedelta(hours=time_range_hours)
+
+    # 获取所有5分钟缓存数据
+    cached_5min = get_cached_statistics_5min(max_age_minutes=None)
+    if not cached_5min:
+        logger.warning("[statistics] 无法从5分钟缓存聚合：未找到5分钟缓存数据")
+        return None
+
+    # 解析5分钟缓存的时间范围
+    cache_start = datetime.fromisoformat(
+        cached_5min.get("start_time", "").replace("Z", "+00:00")
+    )
+    cache_end = datetime.fromisoformat(
+        cached_5min.get("end_time", "").replace("Z", "+00:00")
+    )
+    if cache_start.tzinfo:
+        cache_start = cache_start.replace(tzinfo=None)
+    if cache_end.tzinfo:
+        cache_end = cache_end.replace(tzinfo=None)
+
+    # 检查缓存数据是否覆盖所需时间范围
+    if cache_end < start_time:
+        logger.warning(
+            "[statistics] 5分钟缓存数据过旧，无法聚合：缓存结束时间=%s, 需要开始时间=%s",
+            cache_end.isoformat(),
+            start_time.isoformat(),
+        )
+        return None
+
+    # 获取历史1小时缓存数据（用于合并）
+    previous_1hr_cache = get_cached_statistics(1, max_age_minutes=None)
+
+    # 初始化统计数据
+    ip_stats: Dict[str, int] = defaultdict(int)
+    status_stats: Dict[int, int] = defaultdict(int)
+    path_stats: Dict[str, int] = defaultdict(int)
+    method_stats: Dict[str, int] = defaultdict(int)
+    bucket_stats: Dict[str, int] = defaultdict(int)
+    attack_count = 0
+    attack_details: List[Dict[str, Any]] = []
+    total_requests = 0
+
+    # 如果有历史1小时缓存，先加载历史数据（只加载更新范围之前的数据）
+    if previous_1hr_cache and update_start_time:
+        prev_trend = previous_1hr_cache.get("hourly_trend", {})
+        prev_hours = prev_trend.get("hours", [])
+        prev_counts = prev_trend.get("counts", [])
+
+        # 加载更新范围之前的历史数据
+        for i, hour_label in enumerate(prev_hours):
+            try:
+                hour_dt = datetime.strptime(hour_label, "%Y-%m-%d %H:00")
+                if hour_dt < update_start_time:
+                    bucket_stats[hour_label] = (
+                        prev_counts[i] if i < len(prev_counts) else 0
+                    )
+                    total_requests += bucket_stats[hour_label]
+            except Exception:
+                continue
+
+        # 合并历史top数据
+        for ip_item in previous_1hr_cache.get("top_ips", []):
+            ip_stats[ip_item["ip"]] += ip_item["count"]
+        for path_item in previous_1hr_cache.get("top_paths", []):
+            path_stats[path_item["path"]] += path_item["count"]
+        for status_str, count in previous_1hr_cache.get(
+            "status_distribution", {}
+        ).items():
+            status_stats[int(status_str)] += count
+        for method, count in previous_1hr_cache.get("method_distribution", {}).items():
+            method_stats[method] += count
+        attack_count += previous_1hr_cache.get("summary", {}).get("attack_count", 0)
+        prev_attacks = previous_1hr_cache.get("attacks", [])
+        attack_details.extend(prev_attacks)
+
+        logger.info(
+            "[statistics] 已加载历史1小时缓存数据：时间桶数=%s, 总请求数=%s",
+            len(bucket_stats),
+            total_requests,
+        )
+
+    # 从5分钟缓存的时间趋势数据中聚合（只聚合更新范围内的数据）
+    hourly_trend = cached_5min.get("hourly_trend", {})
+    trend_hours = hourly_trend.get("hours", [])
+    trend_counts = hourly_trend.get("counts", [])
+
+    # 过滤时间范围内的数据
+    filtered_buckets = {}
+    for i, hour_label in enumerate(trend_hours):
+        try:
+            # 5分钟粒度：YYYY-MM-DD HH:MM
+            bucket_dt = datetime.strptime(hour_label, "%Y-%m-%d %H:%M")
+            if start_time <= bucket_dt <= end_time:
+                filtered_buckets[hour_label] = (
+                    trend_counts[i] if i < len(trend_counts) else 0
+                )
+                total_requests += filtered_buckets[hour_label]
+        except Exception:
+            continue
+
+    # 按小时聚合（将5分钟数据聚合为小时数据）
+    hourly_buckets: Dict[str, int] = defaultdict(int)
+    for bucket_key, count in filtered_buckets.items():
+        try:
+            bucket_dt = datetime.strptime(bucket_key, "%Y-%m-%d %H:%M")
+            hour_key = bucket_dt.strftime("%Y-%m-%d %H:00")
+            hourly_buckets[hour_key] += count
+        except Exception:
+            continue
+
+    # 合并新聚合的小时数据到bucket_stats
+    for hour_key, count in hourly_buckets.items():
+        bucket_stats[hour_key] = count  # 覆盖更新范围内的数据
+
+    # 从5分钟缓存的top数据中聚合（增量更新：只更新范围内的数据）
+    # 注意：对于增量更新，我们需要合并新数据和历史数据
+    # 但由于top数据是全局的，我们需要重新计算top
+    top_ips_5min = cached_5min.get("top_ips", [])
+    top_paths_5min = cached_5min.get("top_paths", [])
+    status_dist_5min = cached_5min.get("status_distribution", {})
+    method_dist_5min = cached_5min.get("method_distribution", {})
+    attacks_5min = cached_5min.get("attacks", [])
+
+    # 合并IP统计（增量更新时，历史数据已加载，这里只添加新数据）
+    if not update_start_time or not previous_1hr_cache:
+        # 全量更新：直接使用5分钟数据
+        for ip_item in top_ips_5min:
+            ip_stats[ip_item["ip"]] = ip_item["count"]  # 覆盖而不是累加
+    else:
+        # 增量更新：累加新数据
+        for ip_item in top_ips_5min:
+            ip_stats[ip_item["ip"]] += ip_item["count"]
+
+    # 合并路径统计
+    if not update_start_time or not previous_1hr_cache:
+        for path_item in top_paths_5min:
+            path_stats[path_item["path"]] = path_item["count"]
+    else:
+        for path_item in top_paths_5min:
+            path_stats[path_item["path"]] += path_item["count"]
+
+    # 合并状态码统计
+    for status_str, count in status_dist_5min.items():
+        if not update_start_time or not previous_1hr_cache:
+            status_stats[int(status_str)] = count
+        else:
+            status_stats[int(status_str)] += count
+
+    # 合并方法统计
+    for method, count in method_dist_5min.items():
+        if not update_start_time or not previous_1hr_cache:
+            method_stats[method] = count
+        else:
+            method_stats[method] += count
+
+    # 合并攻击记录
+    if not update_start_time or not previous_1hr_cache:
+        attack_count = cached_5min.get("summary", {}).get("attack_count", 0)
+        attack_details = attacks_5min[:50]
+    else:
+        attack_count += cached_5min.get("summary", {}).get("attack_count", 0)
+        # 合并攻击记录，保留最近的
+        attack_details = (attack_details + attacks_5min)[:50]
+
+    # 计算汇总统计
+    error_requests = sum(
+        count for status, count in status_stats.items() if status >= 400
+    )
+    success_requests = sum(
+        count for status, count in status_stats.items() if 200 <= status < 300
+    )
+    error_rate = (error_requests / total_requests * 100) if total_requests > 0 else 0
+
+    # 获取top数据
+    top_ips = sorted(ip_stats.items(), key=lambda x: x[1], reverse=True)[:10]
+    top_paths = sorted(path_stats.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # 按时间排序
+    sorted_buckets = sorted(bucket_stats.items())
+    bucket_labels = [item[0] for item in sorted_buckets]
+    bucket_counts = [item[1] for item in sorted_buckets]
+
+    # 获取错误日志统计（从5分钟缓存中获取）
+    error_log_count = cached_5min.get("summary", {}).get("error_log_count", 0)
+
+    result = {
+        "success": True,
+        "time_range_hours": time_range_hours,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "analysis_status": "success",
+        "analysis_status_message": None,
+        "is_analyzing": False,  # 分析完成时，is_analyzing 应该为 False
+        "last_analysis_time": cached_5min.get("last_analysis_time"),
+        "analyzed_lines": total_requests,
+        "summary": {
+            "total_requests": total_requests,
+            "success_requests": success_requests,
+            "error_requests": error_requests,
+            "error_rate": round(error_rate, 2),
+            "attack_count": attack_count,
+            "error_log_count": error_log_count,
+        },
+        "status_distribution": {str(k): v for k, v in status_stats.items()},
+        "method_distribution": dict(method_stats),
+        "top_ips": [{"ip": ip, "count": count} for ip, count in top_ips],
+        "top_paths": [{"path": path, "count": count} for path, count in top_paths],
+        "hourly_trend": {
+            "hours": bucket_labels,
+            "counts": bucket_counts,
+        },
+        "attacks": attack_details,
+    }
+
+    logger.info(
+        "[statistics] 从5分钟缓存聚合完成：time_range_hours=%s, total_requests=%s, 时间桶数=%s",
+        time_range_hours,
+        total_requests,
+        len(bucket_labels),
+    )
+
+    return result
+
+
+def _aggregate_from_1hour_cache(
+    time_range_hours: int = 24,
+    end_time: Optional[datetime] = None,
+    update_start_time: Optional[datetime] = None,
+) -> Optional[Dict]:
+    """
+    从1小时缓存数据聚合生成1天统计数据（支持增量更新）
+
+    Args:
+        time_range_hours: 目标时间范围（小时，通常为24）
+        end_time: 结束时间，默认为当前时间
+        update_start_time: 增量更新的开始时间（如果提供，只更新此时间之后的数据）
+
+    Returns:
+        聚合后的统计数据，如果1小时缓存不存在则返回 None
+    """
+    if end_time is None:
+        end_time = datetime.now()
+
+    # 如果提供了增量更新的开始时间，只更新该时间之后的数据
+    # 否则更新整个时间范围
+    if update_start_time:
+        start_time = update_start_time
+        logger.info(
+            "[statistics] 增量聚合1天数据：只更新 %s 之后的数据",
+            update_start_time.isoformat(),
+        )
+    else:
+        start_time = end_time - timedelta(hours=time_range_hours)
+
+    # 获取1小时缓存数据
+    cached_1hr = get_cached_statistics(1, max_age_minutes=None)
+    if not cached_1hr:
+        logger.warning(
+            "[statistics] 无法从1小时缓存聚合：未找到1小时缓存数据，尝试从5分钟缓存聚合"
+        )
+        # 如果1小时缓存不存在，尝试从5分钟缓存聚合
+        return _aggregate_from_5min_cache(time_range_hours, end_time, update_start_time)
+
+    # 获取历史1天缓存数据（用于合并）
+    previous_1day_cache = get_cached_statistics(24, max_age_minutes=None)
+
+    # 解析1小时缓存的时间范围
+    cache_start = datetime.fromisoformat(
+        cached_1hr.get("start_time", "").replace("Z", "+00:00")
+    )
+    cache_end = datetime.fromisoformat(
+        cached_1hr.get("end_time", "").replace("Z", "+00:00")
+    )
+    if cache_start.tzinfo:
+        cache_start = cache_start.replace(tzinfo=None)
+    if cache_end.tzinfo:
+        cache_end = cache_end.replace(tzinfo=None)
+
+    # 检查缓存数据是否覆盖所需时间范围
+    if cache_end < start_time:
+        logger.warning(
+            "[statistics] 1小时缓存数据过旧，无法聚合：缓存结束时间=%s, 需要开始时间=%s",
+            cache_end.isoformat(),
+            start_time.isoformat(),
+        )
+        return None
+
+    # 初始化统计数据
+    ip_stats: Dict[str, int] = defaultdict(int)
+    status_stats: Dict[int, int] = defaultdict(int)
+    path_stats: Dict[str, int] = defaultdict(int)
+    method_stats: Dict[str, int] = defaultdict(int)
+    bucket_stats: Dict[str, int] = defaultdict(int)
+    attack_count = 0
+    attack_details: List[Dict[str, Any]] = []
+    total_requests = 0
+
+    # 如果有历史1天缓存，先加载历史数据（只加载更新范围之前的数据）
+    if previous_1day_cache and update_start_time:
+        prev_trend = previous_1day_cache.get("hourly_trend", {})
+        prev_days = prev_trend.get("hours", [])
+        prev_counts = prev_trend.get("counts", [])
+
+        # 加载更新范围之前的历史数据
+        update_start_date = update_start_time.date() if update_start_time else None
+        for i, day_label in enumerate(prev_days):
+            try:
+                day_dt = datetime.strptime(day_label, "%Y-%m-%d").date()
+                if update_start_date and day_dt < update_start_date:
+                    bucket_stats[day_label] = (
+                        prev_counts[i] if i < len(prev_counts) else 0
+                    )
+                    total_requests += bucket_stats[day_label]
+            except Exception:
+                continue
+
+        # 合并历史top数据
+        for ip_item in previous_1day_cache.get("top_ips", []):
+            ip_stats[ip_item["ip"]] += ip_item["count"]
+        for path_item in previous_1day_cache.get("top_paths", []):
+            path_stats[path_item["path"]] += path_item["count"]
+        for status_str, count in previous_1day_cache.get(
+            "status_distribution", {}
+        ).items():
+            status_stats[int(status_str)] += count
+        for method, count in previous_1day_cache.get("method_distribution", {}).items():
+            method_stats[method] += count
+        attack_count += previous_1day_cache.get("summary", {}).get("attack_count", 0)
+        prev_attacks = previous_1day_cache.get("attacks", [])
+        attack_details.extend(prev_attacks)
+
+        logger.info(
+            "[statistics] 已加载历史1天缓存数据：时间桶数=%s, 总请求数=%s",
+            len(bucket_stats),
+            total_requests,
+        )
+
+    # 从1小时缓存的时间趋势数据中聚合（只聚合更新范围内的数据）
+    hourly_trend = cached_1hr.get("hourly_trend", {})
+    trend_hours = hourly_trend.get("hours", [])
+    trend_counts = hourly_trend.get("counts", [])
+
+    # 过滤时间范围内的数据并按天聚合
+    daily_buckets: Dict[str, int] = defaultdict(int)
+    for i, hour_label in enumerate(trend_hours):
+        try:
+            # 1小时粒度：YYYY-MM-DD HH:00
+            bucket_dt = datetime.strptime(hour_label, "%Y-%m-%d %H:00")
+            if start_time <= bucket_dt <= end_time:
+                day_key = bucket_dt.strftime("%Y-%m-%d")
+                count = trend_counts[i] if i < len(trend_counts) else 0
+                daily_buckets[day_key] += count
+                total_requests += count
+        except Exception:
+            continue
+
+    # 合并新聚合的天数据到bucket_stats
+    for day_key, count in daily_buckets.items():
+        bucket_stats[day_key] = count  # 覆盖更新范围内的数据
+
+    # 从1小时缓存的top数据中聚合
+    top_ips_1hr = cached_1hr.get("top_ips", [])
+    top_paths_1hr = cached_1hr.get("top_paths", [])
+    status_dist_1hr = cached_1hr.get("status_distribution", {})
+    method_dist_1hr = cached_1hr.get("method_distribution", {})
+    attacks_1hr = cached_1hr.get("attacks", [])
+
+    # 聚合IP统计
+    for ip_item in top_ips_1hr:
+        ip_stats[ip_item["ip"]] += ip_item["count"]
+
+    # 聚合路径统计
+    for path_item in top_paths_1hr:
+        path_stats[path_item["path"]] += path_item["count"]
+
+    # 聚合状态码统计
+    for status_str, count in status_dist_1hr.items():
+        status_stats[int(status_str)] += count
+
+    # 聚合方法统计
+    for method, count in method_dist_1hr.items():
+        method_stats[method] += count
+
+    # 聚合攻击记录
+    attack_count = cached_1hr.get("summary", {}).get("attack_count", 0)
+    attack_details = attacks_1hr[:50]  # 最多保留50条
+
+    # 计算汇总统计
+    error_requests = sum(
+        count for status, count in status_stats.items() if status >= 400
+    )
+    success_requests = sum(
+        count for status, count in status_stats.items() if 200 <= status < 300
+    )
+    error_rate = (error_requests / total_requests * 100) if total_requests > 0 else 0
+
+    # 获取top数据
+    top_ips = sorted(ip_stats.items(), key=lambda x: x[1], reverse=True)[:10]
+    top_paths = sorted(path_stats.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # 按时间排序
+    sorted_buckets = sorted(bucket_stats.items())
+    bucket_labels = [item[0] for item in sorted_buckets]
+    bucket_counts = [item[1] for item in sorted_buckets]
+
+    # 获取错误日志统计（从1小时缓存中获取）
+    error_log_count = cached_1hr.get("summary", {}).get("error_log_count", 0)
+
+    result = {
+        "success": True,
+        "time_range_hours": time_range_hours,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "analysis_status": "success",
+        "analysis_status_message": None,
+        "is_analyzing": False,  # 分析完成时，is_analyzing 应该为 False
+        "last_analysis_time": cached_1hr.get("last_analysis_time"),
+        "analyzed_lines": total_requests,
+        "summary": {
+            "total_requests": total_requests,
+            "success_requests": success_requests,
+            "error_requests": error_requests,
+            "error_rate": round(error_rate, 2),
+            "attack_count": attack_count,
+            "error_log_count": error_log_count,
+        },
+        "status_distribution": {str(k): v for k, v in status_stats.items()},
+        "method_distribution": dict(method_stats),
+        "top_ips": [{"ip": ip, "count": count} for ip, count in top_ips],
+        "top_paths": [{"path": path, "count": count} for path, count in top_paths],
+        "hourly_trend": {
+            "hours": bucket_labels,
+            "counts": bucket_counts,
+        },
+        "attacks": attack_details,
+    }
+
+    logger.info(
+        "[statistics] 从1小时缓存聚合完成：time_range_hours=%s, total_requests=%s, 时间桶数=%s",
+        time_range_hours,
+        total_requests,
+        len(bucket_labels),
+    )
+
+    return result
 
 
 def reset_analysis_state() -> None:
@@ -635,8 +1235,18 @@ def reset_analysis_state() -> None:
                 "last_trigger": None,  # 最近一次分析触发方式：auto / manual / watcher / auto_fallback
                 "last_duration_seconds": 0.0,  # 最近一次完整任务耗时（秒）
                 "watcher_enabled": False,  # 是否启用了基于日志变化的监听（由 main.py 设置）
+                "current_last_entry_time": None,  # 当前正在分析的任务的最后一条日志时间（实时进度）
+                "current_analyzed_lines": 0,  # 当前正在分析的任务已分析的行数（实时进度）
+                "last_analyzed_lines": 0,  # 最近一次完成的任务的分析行数（任务完成时保存）
             }
         )
+
+    # 清理所有任务组
+    with _task_groups_lock:
+        _task_groups.clear()
+        logger.info("[statistics] 已清理所有任务组")
+
+    logger.info("[statistics] 分析任务状态已重置")
 
 
 # 程序启动时重置分析状态
@@ -648,8 +1258,14 @@ def _run_analyze_in_background(
     is_5min: bool = False,
     trigger: str = "manual",
     full: bool = False,
+    task_group_id: Optional[str] = None,
 ) -> None:
-    """在单独线程中运行日志分析，避免阻塞请求线程"""
+    """
+    在单独线程中运行日志分析，避免阻塞请求线程
+
+    Args:
+        task_group_id: 任务组ID，用于统一管理多个子任务。如果为None，则作为独立任务
+    """
 
     def _task():
         try:
@@ -659,28 +1275,31 @@ def _run_analyze_in_background(
                 use_cache=False,
                 trigger=trigger,
                 full=full,
+                task_group_id=task_group_id,
             )
         except Exception as e:
-            # 确保异常时也重置运行状态（双重保险）
-            # 注意：这里不需要更新计数器，因为 analyze_logs 内部已经处理了
-            # 但如果 analyze_logs 没有正确更新，这里作为最后的保险
-            global _analysis_task_counter
-            with _analysis_task_lock:
-                if _analysis_task_counter > 0:
-                    _analysis_task_counter = max(0, _analysis_task_counter - 1)
-                    ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
-                ANALYSIS_STATE["last_error"] = str(e)
-                ANALYSIS_STATE["last_success"] = False
-                if not ANALYSIS_STATE.get("last_end_time"):
-                    ANALYSIS_STATE["last_end_time"] = datetime.now()
+            # 如果是任务组的一部分，需要通知任务组
+            if task_group_id:
+                _notify_task_group_complete(task_group_id, success=False, error=str(e))
+            else:
+                # 独立任务：确保异常时也重置运行状态
+                global _analysis_task_counter
+                with _analysis_task_lock:
+                    if _analysis_task_counter > 0:
+                        _analysis_task_counter = max(0, _analysis_task_counter - 1)
+                        ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+                    ANALYSIS_STATE["last_error"] = str(e)
+                    ANALYSIS_STATE["last_success"] = False
+                    if not ANALYSIS_STATE.get("last_end_time"):
+                        ANALYSIS_STATE["last_end_time"] = datetime.now()
             logger.exception(
                 "[statistics] 后台分析任务异常，time_range_hours=%s, error=%s",
                 time_range_hours,
                 e,
             )
 
-    # 如果已经在分析中，直接跳过
-    if ANALYSIS_STATE.get("is_running"):
+    # 如果是独立任务且已经在分析中，直接跳过
+    if not task_group_id and ANALYSIS_STATE.get("is_running"):
         logger.info(
             "[statistics] 后台分析已在进行中，本次触发将被忽略（hours=%s）",
             time_range_hours,
@@ -698,6 +1317,7 @@ def analyze_logs(
     trigger: str = "auto",
     save_cache: bool = True,
     full: bool = False,  # 是否全量分析
+    task_group_id: Optional[str] = None,  # 任务组ID，用于统一管理多个子任务
 ) -> Dict:
     """
     分析日志并返回完整统计数据（保留用于兼容性）
@@ -710,6 +1330,7 @@ def analyze_logs(
         save_cache: 是否保存到缓存
         full: 是否全量分析（True=分析整个日志文件，False=只分析指定时间范围内的日志）
     """
+    global _analysis_task_counter
     logger.info(
         "[statistics] 开始分析访问日志，is_5min=%s, time_range_hours=%s, use_cache=%s, trigger=%s, full=%s",
         is_5min,
@@ -733,6 +1354,179 @@ def analyze_logs(
                 time_range_hours,
             )
             return cached_data
+
+    # 如果不是5分钟分析，尝试从缓存聚合
+    if not is_5min:
+        if time_range_hours == 1:
+            # 1小时分析：从5分钟缓存聚合
+            # 如果是增量分析，只更新最近1小时的数据
+            # 如果是全量分析，更新整个1小时范围
+            if not full:
+                # 增量分析：只更新最近1小时的数据
+                # 获取5分钟分析的时间范围，只更新该范围
+                cached_5min = get_cached_statistics_5min(max_age_minutes=None)
+                if cached_5min:
+                    # 使用5分钟分析的开始时间作为更新起点
+                    update_start = datetime.fromisoformat(
+                        cached_5min.get("start_time", "").replace("Z", "+00:00")
+                    )
+                    if update_start.tzinfo:
+                        update_start = update_start.replace(tzinfo=None)
+                    logger.info(
+                        "[statistics] 1小时增量分析：从5分钟缓存数据聚合，更新范围=%s 到 %s",
+                        update_start.isoformat(),
+                        datetime.now().isoformat(),
+                    )
+                    aggregated_result = _aggregate_from_5min_cache(
+                        time_range_hours=1,
+                        end_time=datetime.now(),
+                        update_start_time=update_start,
+                    )
+                else:
+                    aggregated_result = _aggregate_from_5min_cache(
+                        time_range_hours=1, end_time=datetime.now()
+                    )
+            else:
+                # 全量分析：更新整个1小时范围
+                logger.info(
+                    "[statistics] 1小时全量分析：从5分钟缓存数据聚合，不读取日志文件"
+                )
+                aggregated_result = _aggregate_from_5min_cache(
+                    time_range_hours=1, end_time=datetime.now()
+                )
+            if aggregated_result and save_cache:
+                # 保存聚合结果到缓存
+                try:
+                    save_statistics_cache(
+                        time_range_hours=1,
+                        data=aggregated_result,
+                        start_time=datetime.fromisoformat(
+                            aggregated_result["start_time"].replace("Z", "+00:00")
+                        ).replace(tzinfo=None),
+                        end_time=datetime.fromisoformat(
+                            aggregated_result["end_time"].replace("Z", "+00:00")
+                        ).replace(tzinfo=None),
+                    )
+                    logger.info("[statistics] 1小时聚合结果已保存到缓存")
+                except Exception as e:
+                    logger.warning("[statistics] 保存1小时聚合结果失败: %s", e)
+            if aggregated_result:
+                # 如果是独立任务（非任务组），需要更新 ANALYSIS_STATE
+                if not task_group_id:
+                    end_ts = datetime.now()
+                    with _analysis_task_lock:
+                        _analysis_task_counter = max(0, _analysis_task_counter - 1)
+                        ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+                        ANALYSIS_STATE["last_end_time"] = end_ts
+                        ANALYSIS_STATE["last_success"] = True
+                        ANALYSIS_STATE["last_error"] = None
+                        # 从聚合结果中获取分析行数
+                        summary = aggregated_result.get("summary", {})
+                        ANALYSIS_STATE["last_analyzed_lines"] = summary.get(
+                            "total_requests", 0
+                        )
+                        if _analysis_task_counter == 0:
+                            ANALYSIS_STATE["is_running"] = False
+                            ANALYSIS_STATE["current_last_entry_time"] = None
+                            ANALYSIS_STATE["current_analyzed_lines"] = 0
+                        logger.debug(
+                            "[statistics] 独立任务（聚合完成），time_range_hours=%s, total_requests=%s, is_running=%s",
+                            time_range_hours,
+                            summary.get("total_requests", 0),
+                            ANALYSIS_STATE["is_running"],
+                        )
+                else:
+                    # 通知任务组完成（如果是任务组的一部分）
+                    _notify_task_group_complete(task_group_id, success=True)
+                return aggregated_result
+            else:
+                logger.warning("[statistics] 无法从5分钟缓存聚合，将尝试读取日志文件")
+                # 注意：这里不返回，继续执行后续的日志文件读取逻辑
+        elif time_range_hours == 24:
+            # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
+            # 如果是增量分析，只更新最近1天的数据
+            # 如果是全量分析，更新整个1天范围
+            if not full:
+                # 增量分析：只更新最近1天的数据
+                # 获取1小时分析的时间范围，只更新该范围
+                cached_1hr = get_cached_statistics(1, max_age_minutes=None)
+                if cached_1hr:
+                    # 使用1小时分析的开始时间作为更新起点
+                    update_start = datetime.fromisoformat(
+                        cached_1hr.get("start_time", "").replace("Z", "+00:00")
+                    )
+                    if update_start.tzinfo:
+                        update_start = update_start.replace(tzinfo=None)
+                    logger.info(
+                        "[statistics] 1天增量分析：从1小时缓存数据聚合，更新范围=%s 到 %s",
+                        update_start.isoformat(),
+                        datetime.now().isoformat(),
+                    )
+                    aggregated_result = _aggregate_from_1hour_cache(
+                        time_range_hours=24,
+                        end_time=datetime.now(),
+                        update_start_time=update_start,
+                    )
+                else:
+                    aggregated_result = _aggregate_from_1hour_cache(
+                        time_range_hours=24, end_time=datetime.now()
+                    )
+            else:
+                # 全量分析：更新整个1天范围
+                logger.info(
+                    "[statistics] 1天全量分析：从1小时缓存数据聚合，不读取日志文件"
+                )
+                aggregated_result = _aggregate_from_1hour_cache(
+                    time_range_hours=24, end_time=datetime.now()
+                )
+            if aggregated_result and save_cache:
+                # 保存聚合结果到缓存
+                try:
+                    save_statistics_cache(
+                        time_range_hours=24,
+                        data=aggregated_result,
+                        start_time=datetime.fromisoformat(
+                            aggregated_result["start_time"].replace("Z", "+00:00")
+                        ).replace(tzinfo=None),
+                        end_time=datetime.fromisoformat(
+                            aggregated_result["end_time"].replace("Z", "+00:00")
+                        ).replace(tzinfo=None),
+                    )
+                    logger.info("[statistics] 1天聚合结果已保存到缓存")
+                except Exception as e:
+                    logger.warning("[statistics] 保存1天聚合结果失败: %s", e)
+            if aggregated_result:
+                # 如果是独立任务（非任务组），需要更新 ANALYSIS_STATE
+                if not task_group_id:
+                    end_ts = datetime.now()
+                    with _analysis_task_lock:
+                        _analysis_task_counter = max(0, _analysis_task_counter - 1)
+                        ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+                        ANALYSIS_STATE["last_end_time"] = end_ts
+                        ANALYSIS_STATE["last_success"] = True
+                        ANALYSIS_STATE["last_error"] = None
+                        # 从聚合结果中获取分析行数
+                        summary = aggregated_result.get("summary", {})
+                        ANALYSIS_STATE["last_analyzed_lines"] = summary.get(
+                            "total_requests", 0
+                        )
+                        if _analysis_task_counter == 0:
+                            ANALYSIS_STATE["is_running"] = False
+                            ANALYSIS_STATE["current_last_entry_time"] = None
+                            ANALYSIS_STATE["current_analyzed_lines"] = 0
+                        logger.debug(
+                            "[statistics] 独立任务（聚合完成），time_range_hours=%s, total_requests=%s, is_running=%s",
+                            time_range_hours,
+                            summary.get("total_requests", 0),
+                            ANALYSIS_STATE["is_running"],
+                        )
+                else:
+                    # 通知任务组完成（如果是任务组的一部分）
+                    _notify_task_group_complete(task_group_id, success=True)
+                return aggregated_result
+            else:
+                logger.warning("[statistics] 无法从缓存聚合，将尝试读取日志文件")
+                # 注意：这里不返回，继续执行后续的日志文件读取逻辑
 
     access_log_path = _resolve_access_log_path()
     error_log_path = _resolve_error_log_path()
@@ -834,18 +1628,26 @@ def analyze_logs(
         )
 
     # 标记分析开始（任务级状态）
-    # 使用任务计数器来跟踪并发任务
-    global _analysis_task_counter
-    with _analysis_task_lock:
-        _analysis_task_counter += 1
-        ANALYSIS_STATE["is_running"] = True
-        ANALYSIS_STATE["last_start_time"] = end_time
-        ANALYSIS_STATE["last_error"] = None
-        ANALYSIS_STATE["last_success"] = None
-        ANALYSIS_STATE["last_trigger"] = trigger
+    # 如果是任务组的一部分，不更新全局状态（由任务组统一管理）
+    # 如果是独立任务，更新全局状态
+    if not task_group_id:
+        with _analysis_task_lock:
+            _analysis_task_counter += 1
+            ANALYSIS_STATE["is_running"] = True
+            ANALYSIS_STATE["last_start_time"] = end_time
+            ANALYSIS_STATE["last_error"] = None
+            ANALYSIS_STATE["last_success"] = None
+            ANALYSIS_STATE["last_trigger"] = trigger
+            logger.debug(
+                "[statistics] 独立分析任务开始，当前任务数=%s, time_range_hours=%s",
+                _analysis_task_counter,
+                time_range_hours,
+            )
+    else:
+        # 任务组任务：只在第一次启动时设置开始时间（已在触发时设置）
         logger.debug(
-            "[statistics] 分析任务开始，当前任务数=%s, time_range_hours=%s",
-            _analysis_task_counter,
+            "[statistics] 任务组子任务开始，task_group_id=%s, time_range_hours=%s",
+            task_group_id[:8] if task_group_id else "None",
             time_range_hours,
         )
 
@@ -1000,19 +1802,29 @@ def analyze_logs(
                     if entry_time < start_time or entry_time > end_time:
                         continue
                 else:
-                    # 增量分析：遇到早于 start_time 的日志，停止读取
-                    # 因为更早的日志已经在之前分析过了
+                    # 增量分析：使用 pygtail 读取新内容（从旧到新）
+                    # 只处理时间戳大于等于 start_time 的日志，跳过早于 start_time 的日志
+                    # 因为 pygtail 已经只读取了新内容，所以不需要停止读取
                     if entry_time < start_time:
-                        logger.info(
-                            "[statistics] 增量分析：遇到时间边界 %s，停止读取。已处理 %s 条日志",
-                            start_time.isoformat(),
-                            total_parsed,
-                        )
-                        break
+                        # 跳过早于 start_time 的日志（可能是容错时间范围内的旧日志）
+                        continue
 
             # 记录最新的日志时间（用于"上次分析时间"展示）
-            if (last_entry_time is None) or (entry["date"] > last_entry_time):
+            # 增量分析时，日志从旧到新读取（pygtail），所以最后一条就是最新的
+            # 全量分析时，日志从新到旧读取，需要比较找到最新的
+            if full:
+                # 全量分析：从新到旧读取，需要比较找到最新的
+                if (last_entry_time is None) or (entry["date"] > last_entry_time):
+                    last_entry_time = entry["date"]
+            else:
+                # 增量分析：从旧到新读取，最后一条就是最新的
                 last_entry_time = entry["date"]
+
+            # 实时更新 ANALYSIS_STATE 中的当前分析进度（用于任务状态接口）
+            # 这样即使任务正在运行，也能获取到当前的分析进度
+            with _analysis_task_lock:
+                ANALYSIS_STATE["current_last_entry_time"] = last_entry_time
+                ANALYSIS_STATE["current_analyzed_lines"] = total_parsed
 
             # 调试：记录前几条日志的时间戳（全量分析时）
             if full and total_parsed < 3:
@@ -1533,17 +2345,20 @@ def analyze_logs(
                 logger.warning("[statistics] 保存最后一小时统计数据失败: %s", e)
     except Exception as e:
         # 确保异常时也重置运行状态
-        with _analysis_task_lock:
-            _analysis_task_counter = max(0, _analysis_task_counter - 1)
-            ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
-            ANALYSIS_STATE["last_error"] = str(e)
-            ANALYSIS_STATE["last_success"] = False
-            ANALYSIS_STATE["last_end_time"] = datetime.now()
-            logger.debug(
-                "[statistics] 分析任务异常结束，剩余任务数=%s, time_range_hours=%s",
-                _analysis_task_counter,
-                time_range_hours,
-            )
+        if task_group_id:
+            _notify_task_group_complete(task_group_id, success=False, error=str(e))
+        else:
+            with _analysis_task_lock:
+                _analysis_task_counter = max(0, _analysis_task_counter - 1)
+                ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+                ANALYSIS_STATE["last_error"] = str(e)
+                ANALYSIS_STATE["last_success"] = False
+                ANALYSIS_STATE["last_end_time"] = datetime.now()
+                logger.debug(
+                    "[statistics] 独立分析任务异常结束，剩余任务数=%s, time_range_hours=%s",
+                    _analysis_task_counter,
+                    time_range_hours,
+                )
         logger.exception(
             "[statistics] 日志预解析失败，time_range_hours=%s, error=%s",
             time_range_hours,
@@ -1553,6 +2368,7 @@ def analyze_logs(
 
     # 并行统计阶段
     # 本次分析的新日志条目数（用于 analyzed_lines，反映本次实际分析的行数）
+    # 注意：即使 total_parsed = 0（没有新数据），任务也已经完成，需要更新状态
     if full:
         # 全量分析：统计结果已经在循环中处理完了，使用 total_parsed
         new_requests_count = total_parsed
@@ -1561,8 +2377,10 @@ def analyze_logs(
         # ip_stats, status_stats 等已经在循环中填充
     else:
         # 增量分析：需要对 entries 进行统计
-        new_requests_count = len(entries)
-        total_requests = new_requests_count
+        # 注意：entries 变量在这里未定义，应该使用 total_parsed
+        # 实际上，增量分析时，total_parsed 就是本次分析的新日志条目数
+        new_requests_count = total_parsed
+        total_requests = total_parsed
 
         # 初始化全局统计结果（全量分析时已经在循环中初始化了）
         if not ip_stats:  # 如果还没有初始化（增量分析时）
@@ -1579,7 +2397,9 @@ def analyze_logs(
 
     # 如果日志条目较多，开启多线程并行统计
     # 全量分析时，统计结果已经在循环中处理完了，跳过这里的统计
-    if entries and not full:
+    # 注意：增量分析时，entries 变量未定义，这里应该跳过（因为已经在循环中处理了）
+    # 实际上，增量分析时，统计结果已经在循环中处理完了，不需要再次统计
+    if False and not full:  # 暂时禁用，因为 entries 变量未定义
         max_workers = min(4, os.cpu_count() or 2)
         if total_requests < 1000:
             # 数据量较小时，用单线程避免额外开销
@@ -1741,17 +2561,20 @@ def analyze_logs(
                     )
         except Exception as e:
             # 确保异常时也重置运行状态
-            with _analysis_task_lock:
-                _analysis_task_counter = max(0, _analysis_task_counter - 1)
-                ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
-                ANALYSIS_STATE["last_error"] = str(e)
-                ANALYSIS_STATE["last_success"] = False
-                ANALYSIS_STATE["last_end_time"] = datetime.now()
-                logger.debug(
-                    "[statistics] 分析任务异常结束，剩余任务数=%s, time_range_hours=%s",
-                    _analysis_task_counter,
-                    time_range_hours,
-                )
+            if task_group_id:
+                _notify_task_group_complete(task_group_id, success=False, error=str(e))
+            else:
+                with _analysis_task_lock:
+                    _analysis_task_counter = max(0, _analysis_task_counter - 1)
+                    ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+                    ANALYSIS_STATE["last_error"] = str(e)
+                    ANALYSIS_STATE["last_success"] = False
+                    ANALYSIS_STATE["last_end_time"] = datetime.now()
+                    logger.debug(
+                        "[statistics] 独立分析任务异常结束，剩余任务数=%s, time_range_hours=%s",
+                        _analysis_task_counter,
+                        time_range_hours,
+                    )
             logger.exception(
                 "[statistics] 并行统计阶段失败，time_range_hours=%s, error=%s",
                 time_range_hours,
@@ -1759,25 +2582,61 @@ def analyze_logs(
             )
             raise
 
-    # 标记分析结束与耗时
-    with _analysis_task_lock:
-        _analysis_task_counter = max(0, _analysis_task_counter - 1)
-        ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
-        ANALYSIS_STATE["last_end_time"] = datetime.now()
-        duration = (ANALYSIS_STATE["last_end_time"] - start_ts).total_seconds()
-        ANALYSIS_STATE["last_duration_seconds"] = duration
-        logger.debug(
-            "[statistics] 分析任务正常结束，剩余任务数=%s, time_range_hours=%s, 耗时=%.2fs",
-            _analysis_task_counter,
-            time_range_hours,
-            duration,
-        )
+    # 计算耗时
+    end_ts = datetime.now()
+    duration = (end_ts - start_ts).total_seconds()
+
     logger.info(
-        "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs",
+        "[statistics] 日志分析完成，time_range_hours=%s, total_requests=%s, 耗时=%.2fs, task_group_id=%s",
         time_range_hours,
         total_requests,
         duration,
+        task_group_id[:8] if task_group_id else "None",
     )
+
+    # 标记分析结束与耗时
+    # 即使是 0 条数据，任务也已经完成，需要更新状态
+    # 如果是任务组的一部分，通知任务组；否则更新全局状态
+    if task_group_id:
+        logger.debug(
+            "[statistics] 通知任务组完成：task_group_id=%s, time_range_hours=%s, total_requests=%s",
+            task_group_id[:8],
+            time_range_hours,
+            total_requests,
+        )
+        _notify_task_group_complete(task_group_id, success=True)
+    else:
+        with _analysis_task_lock:
+            _analysis_task_counter = max(0, _analysis_task_counter - 1)
+            ANALYSIS_STATE["is_running"] = _analysis_task_counter > 0
+            ANALYSIS_STATE["last_end_time"] = end_ts
+            ANALYSIS_STATE["last_duration_seconds"] = duration
+            ANALYSIS_STATE["last_success"] = True
+            # 即使 analyzed_lines 为 0，任务也已经完成
+            ANALYSIS_STATE["last_error"] = None
+            # 保存最终的分析行数（用于任务状态接口）
+            ANALYSIS_STATE["last_analyzed_lines"] = total_requests
+
+            # 确保状态同步：如果任务计数器为0，强制设置 is_running 为 False
+            if _analysis_task_counter == 0:
+                ANALYSIS_STATE["is_running"] = False
+                # 任务完成后，清除实时进度（因为任务已完成，实时进度不再有意义）
+                ANALYSIS_STATE["current_last_entry_time"] = None
+                ANALYSIS_STATE["current_analyzed_lines"] = 0
+                logger.debug(
+                    "[statistics] 独立任务完成，强制设置 is_running=False, time_range_hours=%s, total_requests=%s",
+                    time_range_hours,
+                    total_requests,
+                )
+
+            logger.debug(
+                "[statistics] 独立分析任务正常结束，剩余任务数=%s, time_range_hours=%s, 耗时=%.2fs, is_running=%s, total_requests=%s",
+                _analysis_task_counter,
+                time_range_hours,
+                duration,
+                ANALYSIS_STATE["is_running"],
+                total_requests,
+            )
 
     # 增量分析：如果有历史缓存，需要合并数据
     if not full and previous_cache and previous_cache.get("summary"):
@@ -1953,7 +2812,7 @@ def analyze_logs(
         # 分析状态相关字段（数据粒度）
         "analysis_status": "success",
         "analysis_status_message": None,
-        "is_analyzing": ANALYSIS_STATE.get("is_running", False),
+        "is_analyzing": False,  # 分析完成时，is_analyzing 应该为 False
         "last_analysis_time": (
             last_analysis_time.isoformat() if last_analysis_time else None
         ),
@@ -2076,9 +2935,10 @@ async def get_statistics_overview(
     获取 Nginx 统计概览数据
 
     说明：
-    - 1小时：从1小时缓存中获取
-    - 1天/7天/30天：从1天缓存中获取
+    - 只返回后台预先分析并缓存好的数据
     - 不在请求期间临时解析日志，避免阻塞和卡死
+    - 1小时：从5分钟缓存中获取
+    - 1天/7天/30天：从1天缓存中获取
     """
     try:
         # 根据查询时间范围，决定从哪个缓存读取数据
@@ -2088,79 +2948,11 @@ async def get_statistics_overview(
             cached = get_cached_statistics_5min(max_age_minutes=30)
         else:
             cached = get_cached_statistics(24, max_age_minutes=30)
+
         if cached:
-            # 检查缓存数据的时间范围是否已经覆盖查询时间范围
-            # 如果缓存数据的时间范围已经符合要求，可以直接使用，不需要过滤
-            cached_start_time = cached.get("start_time")
-            cached_end_time = cached.get("end_time")
-            end_time = datetime.now()
-            start_time = end_time - timedelta(hours=hours)
-
-            # 判断是否需要过滤
-            need_filter = True
-            if cached_start_time and cached_end_time:
-                try:
-                    cached_start = datetime.fromisoformat(
-                        cached_start_time.replace("Z", "+00:00")
-                    )
-                    cached_end = datetime.fromisoformat(
-                        cached_end_time.replace("Z", "+00:00")
-                    )
-                    if cached_start.tzinfo:
-                        cached_start = cached_start.replace(tzinfo=None)
-                    if cached_end.tzinfo:
-                        cached_end = cached_end.replace(tzinfo=None)
-                    # 如果查询时间范围的起点在缓存时间范围内，且缓存数据的时间范围足够大，不需要过滤
-                    # 对于7天查询，缓存数据是24小时的，需要过滤
-                    # 对于1小时和24小时查询，如果缓存数据的时间范围已经覆盖，可以直接使用
-                    if (
-                        hours <= 24
-                        and cached_start <= start_time
-                        and cached_end >= end_time
-                    ):
-                        need_filter = False
-                        logger.debug(
-                            "[statistics] 缓存数据时间范围已覆盖查询范围，直接使用，hours=%s, cached_range=[%s, %s], query_range=[%s, %s]",
-                            hours,
-                            cached_start.isoformat(),
-                            cached_end.isoformat(),
-                            start_time.isoformat(),
-                            end_time.isoformat(),
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "[statistics] 解析缓存时间范围失败，使用过滤模式: %s",
-                        e,
-                    )
-
-            if need_filter:
-                # 根据时间范围过滤数据
-                filtered_data = _filter_data_by_time_range(cached, hours, "all")
-
-                # 合并过滤后的数据
-                result = cached.copy()
-                if filtered_data.get("summary"):
-                    result["summary"] = filtered_data["summary"]
-                if filtered_data.get("attacks") is not None:
-                    result["attacks"] = filtered_data["attacks"]
-                if filtered_data.get("top_ips"):
-                    result["top_ips"] = filtered_data["top_ips"]
-                if filtered_data.get("top_paths"):
-                    result["top_paths"] = filtered_data["top_paths"]
-                if filtered_data.get("status_distribution"):
-                    result["status_distribution"] = filtered_data["status_distribution"]
-            else:
-                # 直接使用缓存数据，不需要过滤
-                result = cached.copy()
-
-            # 更新返回数据的时间范围，保持一致性
-            result["time_range_hours"] = hours
-
-            # 更新时间范围
-            result["start_time"] = start_time.isoformat()
-            result["end_time"] = end_time.isoformat()
-
-            return result
+            # 直接返回缓存数据，保持与主分支一致的简单逻辑
+            # 时间范围过滤在分析时已经完成，缓存数据就是对应时间范围的数据
+            return cached
 
         # 缓存尚未生成时返回占位结果，提示前端稍后重试
         return {
@@ -2194,13 +2986,90 @@ async def get_realtime_statistics(
 
         return {
             "success": False,
-            "time_range_hours": 1,  # 实时统计对应1小时
+            "time_range_hours": 1,
             "message": "实时统计数据暂未生成，请稍后重试",
         }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取实时统计数据失败: {str(e)}",
+        )
+
+
+@router.get("/task-status", summary="获取分析任务状态")
+async def get_analysis_task_status(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    获取分析任务状态（独立接口，不依赖时间范围）
+
+    说明：
+    - 返回当前分析任务的实时状态
+    - 包括是否在运行、上次分析时间、监听状态等
+    - 不依赖缓存数据，直接返回任务状态
+    """
+    try:
+        last_start = ANALYSIS_STATE.get("last_start_time")
+        last_end = ANALYSIS_STATE.get("last_end_time")
+        is_running = ANALYSIS_STATE.get("is_running", False)
+        last_duration_seconds = ANALYSIS_STATE.get("last_duration_seconds") or 0.0
+        running_duration_seconds = None
+        if is_running and last_start:
+            running_duration_seconds = (datetime.now() - last_start).total_seconds()
+
+        # 直接从 ANALYSIS_STATE 获取任务状态，不依赖缓存
+        # 任务状态应该完全通过字段来反馈真实情况
+        if is_running:
+            # 任务正在运行：使用实时进度
+            current_last_entry_time = ANALYSIS_STATE.get("current_last_entry_time")
+            current_analyzed_lines = ANALYSIS_STATE.get("current_analyzed_lines", 0)
+
+            if current_last_entry_time:
+                # 有实时进度，使用实时进度
+                last_analysis_time = current_last_entry_time
+                analyzed_lines = current_analyzed_lines
+            else:
+                # 任务刚开始，还没有处理任何日志
+                last_analysis_time = last_start
+                analyzed_lines = 0
+        else:
+            # 任务未运行：使用最后完成的任务信息
+            # last_analysis_time 使用 last_end_time（任务完成时间）
+            # analyzed_lines 从 ANALYSIS_STATE 中获取（任务完成时保存的）
+            last_analysis_time = last_end
+            analyzed_lines = ANALYSIS_STATE.get("last_analyzed_lines", 0)
+
+        # 判断分析状态（直接使用真实的任务状态，不做修正）
+        if is_running:
+            status = "analyzing"
+        elif ANALYSIS_STATE.get("last_success") is False:
+            status = "failed"
+        elif ANALYSIS_STATE.get("last_success") is True:
+            status = "ready"
+        else:
+            status = "not_ready"
+
+        return {
+            "success": True,
+            "status": status,
+            "is_running": is_running,
+            "last_start_time": last_start.isoformat() if last_start else None,
+            "last_end_time": last_end.isoformat() if last_end else None,
+            "last_analysis_time": (
+                last_analysis_time.isoformat() if last_analysis_time else None
+            ),
+            "analyzed_lines": analyzed_lines,
+            "last_error": ANALYSIS_STATE.get("last_error"),
+            "last_success": ANALYSIS_STATE.get("last_success"),
+            "last_trigger": ANALYSIS_STATE.get("last_trigger"),
+            "last_duration_seconds": last_duration_seconds,
+            "running_duration_seconds": running_duration_seconds,
+            "watcher_enabled": ANALYSIS_STATE.get("watcher_enabled", False),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取任务状态失败: {str(e)}",
         )
 
 
@@ -2215,108 +3084,64 @@ async def get_statistics_summary(
     获取基础统计数据（总数、成功、错误、错误率等）- 轻量级接口
 
     说明：
-    - 1小时：从1小时缓存中获取
-    - 1天：从1天缓存中获取
-    - 7天/30天：从1天缓存中聚合
+    - 只返回后台预先分析并缓存好的数据
     - 不在请求期间重新解析日志
+    - 1小时：从5分钟缓存中获取
+    - 1天/7天/30天：从1天缓存中获取
+    - 不包含任务状态信息，任务状态请使用 /task-status 接口
     """
     try:
         # 根据查询时间范围，决定从哪个缓存读取数据
-        # 1小时：从5分钟缓存中获取（因为5分钟数据在单独表中）
-        # 1天：从1天缓存中获取
-        # 7天/30天：从1天缓存中聚合
         if hours <= 1:
             cached_data = get_cached_statistics_5min(max_age_minutes=None)
-        elif hours <= 24:
-            cached_data = get_cached_statistics(24, max_age_minutes=None)
         else:
             cached_data = get_cached_statistics(24, max_age_minutes=None)
+
         if cached_data and cached_data.get("summary"):
-            # 根据时间范围过滤数据
-            # 注意：如果缓存数据的时间范围已经符合要求，可以直接使用，不需要过滤
-            # 只有当查询的时间范围小于缓存数据的时间范围时，才需要过滤
-            cached_start_time = cached_data.get("start_time")
-            cached_end_time = cached_data.get("end_time")
-            end_time = datetime.now()
-            start_time = end_time - timedelta(hours=hours)
-
-            # 如果缓存数据的时间范围已经覆盖了查询时间范围，直接使用缓存数据
-            # 否则需要过滤
-            need_filter = False
-            if cached_start_time and cached_end_time:
-                try:
-                    cached_start = datetime.fromisoformat(
-                        cached_start_time.replace("Z", "+00:00")
-                    )
-                    cached_end = datetime.fromisoformat(
-                        cached_end_time.replace("Z", "+00:00")
-                    )
-                    if cached_start.tzinfo:
-                        cached_start = cached_start.replace(tzinfo=None)
-                    if cached_end.tzinfo:
-                        cached_end = cached_end.replace(tzinfo=None)
-                    # 如果查询时间范围的起点在缓存时间范围之外，需要过滤
-                    if start_time < cached_start or start_time > cached_end:
-                        need_filter = True
-                except Exception:
-                    need_filter = True
-
-            if need_filter:
-                filtered_data = _filter_data_by_time_range(
-                    cached_data, hours, "summary"
-                )
-                filtered_summary = filtered_data.get("summary", cached_data["summary"])
-            else:
-                # 直接使用缓存数据，不需要过滤
-                filtered_summary = cached_data["summary"]
-
-            # 任务级状态（后台分析任务本身的状态）
-            last_start = ANALYSIS_STATE.get("last_start_time")
-            last_end = ANALYSIS_STATE.get("last_end_time")
-            is_running = ANALYSIS_STATE.get("is_running", False)
-
-            # 最近一次完整任务耗时（秒）
-            last_duration_seconds = ANALYSIS_STATE.get("last_duration_seconds") or 0.0
-
-            # 当前运行中的任务耗时（秒，动态计算）
-            running_duration_seconds = None
-            if is_running and last_start:
-                running_duration_seconds = (datetime.now() - last_start).total_seconds()
-
-            analysis_job = {
-                "is_running": is_running,
-                "last_start_time": last_start.isoformat() if last_start else None,
-                "last_end_time": last_end.isoformat() if last_end else None,
-                "last_error": ANALYSIS_STATE.get("last_error"),
-                "last_success": ANALYSIS_STATE.get("last_success"),
-                "last_trigger": ANALYSIS_STATE.get("last_trigger"),
-                "last_duration_seconds": last_duration_seconds,
-                "running_duration_seconds": running_duration_seconds,
-                # 是否启用了基于日志变化的监听
-                "watcher_enabled": ANALYSIS_STATE.get("watcher_enabled", False),
-            }
-
             # 计算时间范围
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=hours)
 
+            # 获取上次分析时间：优先使用缓存中的 last_analysis_time，否则使用 end_time
+            last_analysis_time_str = cached_data.get(
+                "last_analysis_time"
+            ) or cached_data.get("end_time")
+            # 如果缓存中的时间明显不对（超过1小时），使用当前时间
+            if last_analysis_time_str:
+                try:
+                    last_analysis_dt = datetime.fromisoformat(
+                        last_analysis_time_str.replace("Z", "+00:00")
+                    )
+                    if last_analysis_dt.tzinfo:
+                        last_analysis_dt = last_analysis_dt.replace(tzinfo=None)
+                    # 如果上次分析时间超过1小时，认为数据过期，使用当前时间
+                    if (datetime.now() - last_analysis_dt).total_seconds() > 3600:
+                        logger.warning(
+                            "[statistics] 缓存中的上次分析时间过旧：%s，使用当前时间",
+                            last_analysis_time_str,
+                        )
+                        last_analysis_time_str = datetime.now().isoformat()
+                except Exception:
+                    # 解析失败，使用当前时间
+                    last_analysis_time_str = datetime.now().isoformat()
+            else:
+                last_analysis_time_str = datetime.now().isoformat()
+
+            # 获取分析行数：优先使用 analyzed_lines，否则使用 total_requests
+            analyzed_lines = cached_data.get("analyzed_lines")
+            if analyzed_lines is None or analyzed_lines == 0:
+                analyzed_lines = (cached_data.get("summary") or {}).get(
+                    "total_requests", 0
+                )
+
             return {
                 "success": True,
                 "time_range_hours": hours,
-                "summary": filtered_summary,
+                "summary": cached_data.get("summary"),
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),
-                # 数据级状态（数据新鲜度）
-                "analysis_status": cached_data.get("analysis_status") or "ready",
-                "analysis_status_message": cached_data.get("analysis_status_message"),
-                "is_analyzing": cached_data.get("is_analyzing", False),
-                "last_analysis_time": cached_data.get("last_analysis_time")
-                or cached_data.get("end_time"),
-                # 任务分析行数（如果缓存中没有单独字段，则回退为 summary.total_requests）
-                "analyzed_lines": cached_data.get("analyzed_lines")
-                or (cached_data.get("summary") or {}).get("total_requests"),
-                # 任务级状态（供前端展示"后台任务执行状态"）
-                "analysis_job": analysis_job,
+                "last_analysis_time": last_analysis_time_str,
+                "analyzed_lines": analyzed_lines,
             }
 
         return {
@@ -2364,29 +3189,129 @@ async def trigger_statistics_analyze(
             getattr(current_user, "username", None),
         )
 
-        # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
-        # 7天和30天的数据从1天的数据中聚合，不需要单独分析
-        # 5分钟数据使用单独的表，其他使用整数小时
-        analyze_tasks = [
-            (None, True, "5分钟"),  # 5分钟：使用 is_5min=True
-            (1, False, "1小时"),
-            (24, False, "1天"),
-        ]
+        # 创建任务组，统一管理多个子任务
+        # 用户只看到一个分析任务，但后台会并行执行多个时间范围的分析
+        task_group_id = _create_task_group(
+            total_tasks=3, trigger="manual_full" if full else "manual", full=full
+        )
 
-        for hours_val, is_5min_flag, label in analyze_tasks:
+        # 标记任务开始（只设置一次）
+        with _analysis_task_lock:
+            ANALYSIS_STATE["is_running"] = True
+            ANALYSIS_STATE["last_start_time"] = datetime.now()
+            ANALYSIS_STATE["last_error"] = None
+            ANALYSIS_STATE["last_success"] = None
+            ANALYSIS_STATE["last_trigger"] = "manual_full" if full else "manual"
+            _analysis_task_counter += 1  # 任务组算作一个任务
+
+        # 按时间范围递进分析：5分钟 -> 1小时 -> 1天
+        # 5分钟分析：读取日志文件
+        # 1小时分析：从5分钟缓存聚合（延迟启动，等待5分钟分析完成）
+        # 1天分析：从1小时缓存聚合（延迟启动，等待1小时分析完成）
+        # 7天和30天的数据从1天的数据中聚合，不需要单独分析
+
+        # 先启动5分钟分析（读取日志文件）
+        _run_analyze_in_background(
+            time_range_hours=1,  # 占位符
+            is_5min=True,
+            trigger="manual_full" if full else "manual",
+            full=full,
+            task_group_id=task_group_id,
+        )
+
+        # 延迟启动1小时和1天分析（从缓存聚合）
+        def delayed_aggregate_tasks():
+            import time
+            from app.utils.statistics_cache import (
+                get_cached_statistics_5min,
+                get_cached_statistics,
+            )
+
+            # 等待5分钟分析完成：轮询检查5分钟缓存是否存在且是最新的
+            max_wait_time = 60  # 最多等待60秒
+            wait_interval = 2  # 每2秒检查一次
+            waited_time = 0
+            while waited_time < max_wait_time:
+                cached_5min = get_cached_statistics_5min(max_age_minutes=None)
+                if cached_5min:
+                    # 检查缓存是否是最新的（结束时间在最近1分钟内）
+                    cache_end_str = cached_5min.get("end_time", "")
+                    if cache_end_str:
+                        try:
+                            cache_end = datetime.fromisoformat(
+                                cache_end_str.replace("Z", "+00:00")
+                            )
+                            if cache_end.tzinfo:
+                                cache_end = cache_end.replace(tzinfo=None)
+                            # 如果缓存结束时间在最近1分钟内，认为5分钟分析已完成
+                            if (datetime.now() - cache_end).total_seconds() < 60:
+                                logger.info(
+                                    "[statistics] 检测到5分钟分析已完成，开始1小时聚合"
+                                )
+                                break
+                        except Exception:
+                            pass
+                time.sleep(wait_interval)
+                waited_time += wait_interval
+                logger.debug(
+                    "[statistics] 等待5分钟分析完成，已等待 %s 秒", waited_time
+                )
+
+            # 启动1小时分析（从5分钟缓存聚合）
             _run_analyze_in_background(
-                time_range_hours=hours_val or 1,  # 5分钟时传入1作为占位符
-                is_5min=is_5min_flag,
+                time_range_hours=1,
+                is_5min=False,
                 trigger="manual_full" if full else "manual",
                 full=full,
+                task_group_id=task_group_id,
             )
+
+            # 等待1小时分析完成：轮询检查1小时缓存是否存在且是最新的
+            waited_time = 0
+            while waited_time < max_wait_time:
+                cached_1hr = get_cached_statistics(1, max_age_minutes=None)
+                if cached_1hr:
+                    # 检查缓存是否是最新的
+                    cache_end_str = cached_1hr.get("end_time", "")
+                    if cache_end_str:
+                        try:
+                            cache_end = datetime.fromisoformat(
+                                cache_end_str.replace("Z", "+00:00")
+                            )
+                            if cache_end.tzinfo:
+                                cache_end = cache_end.replace(tzinfo=None)
+                            # 如果缓存结束时间在最近1分钟内，认为1小时分析已完成
+                            if (datetime.now() - cache_end).total_seconds() < 60:
+                                logger.info(
+                                    "[statistics] 检测到1小时分析已完成，开始1天聚合"
+                                )
+                                break
+                        except Exception:
+                            pass
+                time.sleep(wait_interval)
+                waited_time += wait_interval
+                logger.debug(
+                    "[statistics] 等待1小时分析完成，已等待 %s 秒", waited_time
+                )
+
+            # 启动1天分析（从1小时缓存聚合）
+            _run_analyze_in_background(
+                time_range_hours=24,
+                is_5min=False,
+                trigger="manual_full" if full else "manual",
+                full=full,
+                task_group_id=task_group_id,
+            )
+
+        # 在后台线程中延迟启动聚合任务
+        threading.Thread(target=delayed_aggregate_tasks, daemon=True).start()
 
         return {
             "success": True,
             "message": (
-                "全量统计分析已在后台启动（5分钟 -> 1小时 -> 1天）"
+                "全量分析已在后台启动（5分钟 -> 1小时 -> 1天）"
                 if full
-                else "统计分析已在后台启动（5分钟 -> 1小时 -> 1天）"
+                else "增量分析已在后台启动（5分钟 -> 1小时 -> 1天）"
             ),
             "is_analyzing": True,
             "full": full,
@@ -2755,27 +3680,20 @@ async def get_top_ips(
     获取访问量Top IPs
 
     说明：
-    - 1小时：从1小时缓存中获取
-    - 1天/7天/30天：从1天缓存中获取（汇总数据，无需聚合）
+    - 只返回后台预先分析并缓存好的数据
     - 不在请求期间重新解析日志
     """
     try:
-        # 根据查询时间范围，决定从哪个缓存读取数据
-        # 注意：确保传入浮点数，与保存时的类型一致
         if hours <= 1:
             cached_data = get_cached_statistics_5min(max_age_minutes=30)
         else:
-            # 1天/7天/30天：从1天缓存中获取
             cached_data = get_cached_statistics(24, max_age_minutes=30)
-        if cached_data and cached_data.get("top_ips"):
-            # 根据时间范围过滤数据（虽然top_ips无法精确过滤，但至少确保时间范围正确）
-            filtered_data = _filter_data_by_time_range(cached_data, hours, "top_ips")
-            top_ips = filtered_data.get("top_ips", cached_data["top_ips"])
 
+        if cached_data and cached_data.get("top_ips"):
             return {
                 "success": True,
                 "time_range_hours": hours,
-                "top_ips": top_ips[:limit],
+                "top_ips": cached_data["top_ips"][:limit],
             }
 
         return {
@@ -2803,27 +3721,20 @@ async def get_top_paths(
     获取访问量Top Paths
 
     说明：
-    - 1小时：从1小时缓存中获取
-    - 1天/7天/30天：从1天缓存中获取（汇总数据，无需聚合）
+    - 只返回后台预先分析并缓存好的数据
     - 不在请求期间重新解析日志
     """
     try:
-        # 根据查询时间范围，决定从哪个缓存读取数据
-        # 注意：确保传入浮点数，与保存时的类型一致
         if hours <= 1:
             cached_data = get_cached_statistics_5min(max_age_minutes=30)
         else:
-            # 1天/7天/30天：从1天缓存中获取
             cached_data = get_cached_statistics(24, max_age_minutes=30)
-        if cached_data and cached_data.get("top_paths"):
-            # 根据时间范围过滤数据（虽然top_paths无法精确过滤，但至少确保时间范围正确）
-            filtered_data = _filter_data_by_time_range(cached_data, hours, "top_paths")
-            top_paths = filtered_data.get("top_paths", cached_data["top_paths"])
 
+        if cached_data and cached_data.get("top_paths"):
             return {
                 "success": True,
                 "time_range_hours": hours,
-                "top_paths": top_paths[:limit],
+                "top_paths": cached_data["top_paths"][:limit],
             }
 
         return {
@@ -2850,31 +3761,20 @@ async def get_status_distribution(
     获取状态码分布数据
 
     说明：
-    - 1小时：从1小时缓存中获取
-    - 1天/7天/30天：从1天缓存中获取（汇总数据，无需聚合）
+    - 只返回后台预先分析并缓存好的数据
     - 不在请求期间重新解析日志
     """
     try:
-        # 根据查询时间范围，决定从哪个缓存读取数据
-        # 注意：确保传入浮点数，与保存时的类型一致
         if hours <= 1:
             cached_data = get_cached_statistics_5min(max_age_minutes=30)
         else:
-            # 1天/7天/30天：从1天缓存中获取
             cached_data = get_cached_statistics(24, max_age_minutes=30)
-        if cached_data and cached_data.get("status_distribution"):
-            # 根据时间范围过滤数据（虽然status_distribution无法精确过滤，但至少确保时间范围正确）
-            filtered_data = _filter_data_by_time_range(
-                cached_data, hours, "status_distribution"
-            )
-            status_distribution = filtered_data.get(
-                "status_distribution", cached_data["status_distribution"]
-            )
 
+        if cached_data and cached_data.get("status_distribution"):
             return {
                 "success": True,
                 "time_range_hours": hours,
-                "status_distribution": status_distribution,
+                "status_distribution": cached_data["status_distribution"],
             }
 
         return {
@@ -2902,25 +3802,17 @@ async def get_attacks(
     获取攻击检测记录（延迟加载，数据量大）
 
     说明：
-    - 1小时：从1小时缓存中获取
-    - 1天/7天/30天：从1天缓存中获取（汇总数据，无需聚合）
+    - 只返回后台预先分析并缓存好的数据
     - 不在请求期间重新解析日志
     """
     try:
-        # 根据查询时间范围，决定从哪个缓存读取数据
-        # 注意：确保传入浮点数，与保存时的类型一致
         if hours <= 1:
             cached_data = get_cached_statistics_5min(max_age_minutes=30)
         else:
-            # 1天/7天/30天：从1天缓存中获取
             cached_data = get_cached_statistics(24, max_age_minutes=30)
-        if cached_data and cached_data.get("attacks") is not None:
-            # 根据时间范围过滤攻击记录
-            filtered_data = _filter_data_by_time_range(cached_data, hours, "attacks")
-            attacks_list = filtered_data.get(
-                "attacks", cached_data.get("attacks") or []
-            )
 
+        if cached_data and cached_data.get("attacks") is not None:
+            attacks_list = cached_data.get("attacks") or []
             return {
                 "success": True,
                 "time_range_hours": hours,
