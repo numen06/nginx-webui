@@ -116,13 +116,13 @@ def _resolve_version_label(directory: str, install_path: Path) -> Optional[str]:
 def _find_pid_for_version(install_path: Path) -> Optional[int]:
     """
     查找指定版本nginx的PID
-    
+
     尝试多个可能的PID文件位置：
     1. <install_path>/logs/nginx.pid (默认相对路径)
     2. 从nginx.conf中解析pid指令
     3. /var/run/nginx.pid (常见的绝对路径)
     4. /run/nginx.pid (systemd风格)
-    
+
     Returns:
         运行中的nginx进程PID，如果未找到返回None
     """
@@ -137,7 +137,7 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                     return pid
         except Exception:
             pass
-    
+
     # 2. 尝试从配置文件解析PID路径
     try:
         nginx_conf = install_path / "conf" / "nginx.conf"
@@ -145,14 +145,15 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
             conf_content = nginx_conf.read_text(encoding="utf-8")
             # 匹配 pid 指令（可能被注释）
             import re
-            pid_match = re.search(r'^\s*pid\s+([^;]+);', conf_content, re.MULTILINE)
+
+            pid_match = re.search(r"^\s*pid\s+([^;]+);", conf_content, re.MULTILINE)
             if pid_match:
                 pid_path_str = pid_match.group(1).strip().strip('"').strip("'")
                 # 如果是相对路径，相对于install_path解析
                 pid_path = Path(pid_path_str)
                 if not pid_path.is_absolute():
                     pid_path = install_path / pid_path_str
-                
+
                 if pid_path.exists():
                     try:
                         content = pid_path.read_text(encoding="utf-8").strip()
@@ -164,7 +165,7 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                         pass
     except Exception:
         pass
-    
+
     # 3. 尝试常见的绝对路径
     for common_pid_path in ["/var/run/nginx.pid", "/run/nginx.pid"]:
         pid_path = Path(common_pid_path)
@@ -178,11 +179,12 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                         # 简单验证：检查可执行文件路径
                         try:
                             import subprocess
+
                             result = subprocess.run(
                                 ["ps", "-p", str(pid), "-o", "command="],
                                 capture_output=True,
                                 text=True,
-                                timeout=2
+                                timeout=2,
                             )
                             if result.returncode == 0:
                                 cmd = result.stdout.strip()
@@ -194,7 +196,7 @@ def _find_pid_for_version(install_path: Path) -> Optional[int]:
                             return pid
             except Exception:
                 pass
-    
+
     return None
 
 
@@ -227,7 +229,7 @@ def get_active_version() -> Optional[Dict[str, Any]]:
             continue
 
         install_path = _get_install_path(child.name)
-        
+
         # 使用改进的PID查找逻辑
         pid = _find_pid_for_version(install_path)
         if pid is None:
@@ -235,7 +237,9 @@ def get_active_version() -> Optional[Dict[str, Any]]:
 
         # 找到一个运行中的版本，即视为当前活动版本
         executable = install_path / "sbin" / "nginx"
-        resolved_version = _resolve_version_label(child.name, install_path) or child.name
+        resolved_version = (
+            _resolve_version_label(child.name, install_path) or child.name
+        )
         active = {
             "directory": child.name,
             "version": resolved_version,
@@ -246,5 +250,3 @@ def get_active_version() -> Optional[Dict[str, Any]]:
         break
 
     return active
-
-
