@@ -685,6 +685,11 @@ const triggerIncrementalAnalyze = async () => {
   if (taskStatus.value.is_running) return
 
   try {
+    // 任务开始时立即重置 analyzed_lines 为 0
+    taskStatus.value.analyzed_lines = 0
+    taskStatus.value.is_running = true
+    taskStatus.value.status = 'analyzing'
+    
     // 页面触发：执行增量分析（full=false）
     // 一次分析会同时分析5分钟、1小时、1天三个时间范围
     const res = await statisticsApi.triggerAnalyze(false)
@@ -713,6 +718,11 @@ const triggerAnalyzeNow = async () => {
   if (taskStatus.value.is_running) return
 
   try {
+    // 任务开始时立即重置 analyzed_lines 为 0
+    taskStatus.value.analyzed_lines = 0
+    taskStatus.value.is_running = true
+    taskStatus.value.status = 'analyzing'
+    
     // 页面触发：执行全量分析（full=true）
     // 一次分析会同时分析5分钟、1小时、1天三个时间范围
     const res = await statisticsApi.triggerAnalyze(true)

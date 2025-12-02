@@ -39,10 +39,9 @@ from app.routers import (
     users,
     git,
 )
-from app.routers import statistics, system
+from app.routers import statistics_v2 as statistics, system
 from app.utils.version import APP_VERSION
 from app.utils.statistics_cache import cleanup_old_cache
-from app.routers.statistics import analyze_logs, ANALYSIS_STATE, reset_analysis_state
 from app.utils.log_watcher import start_log_watcher
 from app.routers.logs import _resolve_access_log_path
 
@@ -89,14 +88,14 @@ app.include_router(system.router)
 async def startup_event():
     """应用启动时打印核心配置信息并自动启动nginx"""
     # 重置分析任务状态，确保重启后状态正确
-    reset_analysis_state()
-    from app.routers.statistics import _state_manager
+    from app.routers.statistics_v2 import _state_manager
+
+    _state_manager.reset()
     logging.info(
-        "[statistics] 分析任务状态已重置，is_running=%s, watcher_enabled=%s",
-        _state_manager.is_running,
-        _state_manager.get("watcher_enabled"),
+        "[statistics] 分析任务状态已重置，is_running=%s",
+        _state_manager.get_state()["is_running"],
     )
-    
+
     cfg = get_config()
     nginx_available = is_nginx_available()
 
@@ -209,85 +208,38 @@ async def startup_event():
             # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
             # 7天和30天的数据从1天的数据中聚合，不需要单独分析
 
-            # 先执行5分钟分析（读取日志文件）
+            # V2版本：使用简化的analyze_logs_simple
             try:
-                analyze_logs(
-                    time_range_hours=1,  # 占位符
-                    is_5min=True,
-                    use_cache=False,
-                    trigger="watcher",
-                    save_cache=True,
-                )
-                logging.info("✓ 5分钟时间范围分析完成")
+                from app.routers.statistics_v2 import analyze_logs_simple
+
+                analyze_logs_simple(hours=1, full=False, trigger="watcher")
+                logging.info("✓ 统计分析完成（V2）")
             except Exception as exc:
-                logging.warning("基于日志监听触发的5分钟分析失败: %s", exc)
-                return  # 如果5分钟分析失败，不继续执行后续分析
-
-            # 等待5秒，确保5分钟分析有足够时间完成并保存到缓存
-            import time
-
-            time.sleep(5)
-
-            # 执行1小时分析（从5分钟缓存聚合）
-            try:
-                analyze_logs(
-                    time_range_hours=1,
-                    is_5min=False,
-                    use_cache=False,
-                    trigger="watcher",
-                    save_cache=True,
-                )
-                logging.info("✓ 1小时时间范围分析完成（从5分钟缓存聚合）")
-            except Exception as exc:
-                logging.warning("基于日志监听触发的1小时分析失败: %s", exc)
-
-            # 再等待5秒，确保1小时分析有足够时间完成并保存到缓存
-            time.sleep(5)
-
-            # 执行1天分析（从1小时缓存聚合）
-            try:
-                analyze_logs(
-                    time_range_hours=24,
-                    is_5min=False,
-                    use_cache=False,
-                    trigger="watcher",
-                    save_cache=True,
-                )
-                logging.info("✓ 1天时间范围分析完成（从1小时缓存聚合）")
-            except Exception as exc:
-                logging.warning("基于日志监听触发的1天分析失败: %s", exc)
-
-            # 定期清理超过7天的过期缓存
-            try:
-                cleanup_old_cache(max_age_hours=7 * 24)  # 7天 = 7 * 24 小时
-            except Exception as exc:
-                logging.warning("清理统计缓存失败: %s", exc)
+                logging.warning("基于日志监听触发的分析失败: %s", exc)
 
         watcher = start_log_watcher(
             access_log_path, _analyze_all_windows, debounce_seconds=30
         )
-        from app.routers.statistics import _state_manager
+        from app.routers.statistics_v2 import _state_manager
+
         if watcher:
-            _state_manager.set_watcher_enabled(True)
+            state = _state_manager.get_state()
+            state["watcher_enabled"] = True
             print(f"✓ 基于日志变化的统计分析监听已启用，文件: {access_log_path}")
         else:
-            _state_manager.set_watcher_enabled(False)
+            # watcher disabled
             print(
                 "⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
                 "将依赖手动触发全量分析"
             )
     except Exception as e:
-        from app.routers.statistics import _state_manager
-        _state_manager.set_watcher_enabled(False)
         logging.warning(f"初始化日志监听失败，将依赖手动触发分析: {e}")
 
     # 兜底：每 5 分钟定时触发一次分析，防止极端情况下监听失效或长时间无请求却仍需刷新统计
     def fallback_analyzer():
         import time
 
-        # 重启后先等待一个周期（5分钟），再开始第一次分析，确保任务状态正确
-        from app.routers.statistics import _state_manager
-        logging.info("[statistics] 重启后等待下一个周期（5分钟）再开始分析，当前任务状态: is_running=%s", _state_manager.is_running)
+        # 重启后先等待一个周期（5分钟），再开始第一次分析
         print("✓ 统计分析兜底定时任务已启动，将在 5 分钟后开始第一次分析")
         time.sleep(300)  # 等待5分钟
 
@@ -299,59 +251,14 @@ async def startup_event():
                 # 1天分析：从1小时缓存聚合（如果不存在则从5分钟缓存聚合）
                 # 7天和30天的数据从1天的数据中聚合，不需要单独分析
 
-                # 先执行5分钟分析（读取日志文件）
+                # V2版本：使用简化的analyze_logs_simple
                 try:
-                    analyze_logs(
-                        time_range_hours=1,  # 占位符
-                        is_5min=True,
-                        use_cache=False,
-                        trigger="auto_fallback",
-                        save_cache=True,
-                    )
-                    logging.info("✓ 兜底定时分析完成（5分钟）")
+                    from app.routers.statistics_v2 import analyze_logs_simple
+
+                    analyze_logs_simple(hours=1, full=False, trigger="auto_fallback")
+                    logging.info("✓ 兜底定时分析完成（V2）")
                 except Exception as exc:
-                    logging.warning("兜底定时5分钟分析失败: %s", exc)
-                    # 如果5分钟分析失败，等待一段时间后继续下一轮
-                    time.sleep(300)
-                    continue
-
-                # 等待5秒，确保5分钟分析有足够时间完成并保存到缓存
-                time.sleep(5)
-
-                # 执行1小时分析（从5分钟缓存聚合）
-                try:
-                    analyze_logs(
-                        time_range_hours=1,
-                        is_5min=False,
-                        use_cache=False,
-                        trigger="auto_fallback",
-                        save_cache=True,
-                    )
-                    logging.info("✓ 兜底定时分析完成（1小时，从5分钟缓存聚合）")
-                except Exception as exc:
-                    logging.warning("兜底定时1小时分析失败: %s", exc)
-
-                # 再等待5秒，确保1小时分析有足够时间完成并保存到缓存
-                time.sleep(5)
-
-                # 执行1天分析（从1小时缓存聚合）
-                try:
-                    analyze_logs(
-                        time_range_hours=24,
-                        is_5min=False,
-                        use_cache=False,
-                        trigger="auto_fallback",
-                        save_cache=True,
-                    )
-                    logging.info("✓ 兜底定时分析完成（1天，从1小时缓存聚合）")
-                except Exception as exc:
-                    logging.warning("兜底定时1天分析失败: %s", exc)
-
-                # 定期清理超过7天的过期缓存
-                try:
-                    cleanup_old_cache(max_age_hours=7 * 24)  # 7天 = 7 * 24 小时
-                except Exception as exc:
-                    logging.warning("兜底定时清理统计缓存失败: %s", exc)
+                    logging.warning("兜底定时分析失败: %s", exc)
             except Exception as exc:
                 logging.error("兜底定时分析线程异常: %s", exc)
 

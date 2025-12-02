@@ -98,30 +98,104 @@ class GitRepository(Base):
 
 
 class StatisticsCache(Base):
-    """统计数据缓存（1小时、1天等整数小时范围）"""
+    """统计数据缓存（1小时、1天等整数小时范围）- 旧表，保留兼容"""
     __tablename__ = "statistics_cache"
 
     id = Column(Integer, primary_key=True, index=True)
-    time_range_hours = Column(Integer, nullable=False, index=True)  # 时间范围（小时，整数：1, 24等）
-    cache_key = Column(String(100), unique=True, nullable=False, index=True)  # 缓存键：hours_timestamp
-    data = Column(Text, nullable=False)  # JSON格式的统计数据
-    start_time = Column(DateTime, nullable=False)  # 统计开始时间
-    end_time = Column(DateTime, nullable=False)  # 统计结束时间
-    last_log_position = Column(Integer, default=0)  # 上次读取的日志位置（行号）
+    time_range_hours = Column(Integer, nullable=False, index=True)
+    cache_key = Column(String(100), unique=True, nullable=False, index=True)
+    data = Column(Text, nullable=False)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=False)
+    last_log_position = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
 
 
 class StatisticsCache5Min(Base):
-    """5分钟统计数据缓存（单独表）"""
+    """5分钟统计数据缓存（单独表）- 旧表，保留兼容"""
     __tablename__ = "statistics_cache_5min"
 
     id = Column(Integer, primary_key=True, index=True)
-    cache_key = Column(String(100), unique=True, nullable=False, index=True)  # 缓存键：5min_timestamp
-    data = Column(Text, nullable=False)  # JSON格式的统计数据
-    start_time = Column(DateTime, nullable=False)  # 统计开始时间
-    end_time = Column(DateTime, nullable=False)  # 统计结束时间
-    last_log_position = Column(Integer, default=0)  # 上次读取的日志位置（行号）
+    cache_key = Column(String(100), unique=True, nullable=False, index=True)
+    data = Column(Text, nullable=False)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=False)
+    last_log_position = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+# 新的统计架构：按时间粒度分表存储，支持SQL聚合
+class Statistics5Min(Base):
+    """5分钟粒度统计（如7:00-7:05）"""
+    __tablename__ = "statistics_5min"
+
+    id = Column(Integer, primary_key=True, index=True)
+    time_bucket = Column(DateTime, unique=True, nullable=False, index=True)  # 时间桶：YYYY-MM-DD HH:mm:00
+    
+    # 基础统计
+    total_requests = Column(Integer, default=0)
+    success_requests = Column(Integer, default=0)
+    error_requests = Column(Integer, default=0)
+    attack_count = Column(Integer, default=0)
+    error_log_count = Column(Integer, default=0)  # 错误日志数量
+    
+    # 详细数据（JSON）
+    status_distribution = Column(Text, nullable=True)  # {"200": 100, "404": 20}
+    method_distribution = Column(Text, nullable=True)  # {"GET": 80, "POST": 20}
+    top_ips = Column(Text, nullable=True)  # [{"ip": "1.2.3.4", "count": 10}]
+    top_paths = Column(Text, nullable=True)  # [{"path": "/api", "count": 50}]
+    attacks = Column(Text, nullable=True)  # 攻击记录
+    
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+class StatisticsHourly(Base):
+    """小时粒度统计（如7:00-8:00）"""
+    __tablename__ = "statistics_hourly"
+
+    id = Column(Integer, primary_key=True, index=True)
+    time_bucket = Column(DateTime, unique=True, nullable=False, index=True)  # 时间桶：YYYY-MM-DD HH:00:00
+    
+    # 基础统计
+    total_requests = Column(Integer, default=0)
+    success_requests = Column(Integer, default=0)
+    error_requests = Column(Integer, default=0)
+    attack_count = Column(Integer, default=0)
+    
+    # 详细数据（JSON）
+    status_distribution = Column(Text, nullable=True)
+    method_distribution = Column(Text, nullable=True)
+    top_ips = Column(Text, nullable=True)
+    top_paths = Column(Text, nullable=True)
+    attacks = Column(Text, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+class StatisticsDaily(Base):
+    """天粒度统计（如2025-12-02）"""
+    __tablename__ = "statistics_daily"
+
+    id = Column(Integer, primary_key=True, index=True)
+    time_bucket = Column(DateTime, unique=True, nullable=False, index=True)  # 时间桶：YYYY-MM-DD 00:00:00
+    
+    # 基础统计
+    total_requests = Column(Integer, default=0)
+    success_requests = Column(Integer, default=0)
+    error_requests = Column(Integer, default=0)
+    attack_count = Column(Integer, default=0)
+    
+    # 详细数据（JSON）
+    status_distribution = Column(Text, nullable=True)
+    method_distribution = Column(Text, nullable=True)
+    top_ips = Column(Text, nullable=True)
+    top_paths = Column(Text, nullable=True)
+    attacks = Column(Text, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
 
