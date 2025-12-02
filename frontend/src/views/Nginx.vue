@@ -63,6 +63,12 @@
           >
             配置文件：{{ pinnedVersion.install_path ? pinnedVersion.install_path + '/conf/nginx.conf' : '-' }}
           </div>
+          <div class="pid-path" :title="pinnedVersion.pid_file || '未配置'">
+            <span>PID 文件：</span>
+            <span :class="{ 'pid-running': pinnedVersion.running }">
+              {{ pinnedVersion.pid_file || '-' }}
+            </span>
+          </div>
         </div>
 
         <div class="version-actions">
@@ -249,6 +255,12 @@
                 :title="row.install_path ? row.install_path + '/conf/nginx.conf' : ''"
               >
                 配置文件：{{ row.install_path ? row.install_path + '/conf/nginx.conf' : '-' }}
+              </div>
+              <div class="pid-path" :title="row.pid_file || '未配置'">
+                <span>PID 文件：</span>
+                <span :class="{ 'pid-running': row.running }">
+                  {{ row.pid_file || '-' }}
+                </span>
               </div>
             </div>
 
@@ -1467,10 +1479,23 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.install-path {
+.install-path,
+.config-path,
+.pid-path {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.pid-path {
+  display: flex;
+  gap: 4px;
+}
+
+.pid-running {
+  color: var(--el-color-success);
+  font-weight: 600;
 }
 
 .version-actions {
