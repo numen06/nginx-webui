@@ -1129,23 +1129,11 @@ def get_nginx_status() -> Dict[str, Any]:
     from datetime import datetime
 
     config = get_config()
-    nginx_executable = _resolve_nginx_executable()
     active = get_active_version()
+    nginx_executable = _resolve_nginx_executable()
 
-    if nginx_executable is None or not nginx_executable.exists():
-        info: Dict[str, Any] = {
-            "running": False,
-            "pid": None,
-            "version": None,
-            "uptime": None,
-            "available": False,
-            "message": "Nginx 未安装或不可用",
-        }
-        if active is not None:
-            info["active_version"] = active["version"]
-            info["directory"] = active["directory"]
-            info["binary"] = str(active["executable"])
-        return info
+    # 即使没有可执行文件路径，也尝试检测nginx进程
+    # 这样可以处理容器重启后PID文件过期的情况
 
     try:
         pid = None
@@ -1214,56 +1202,94 @@ def get_nginx_status() -> Dict[str, Any]:
                 pass
 
         # 如果没有从 pid 文件获取到，尝试查找 nginx 主进程
-        if not running and nginx_executable and PSUTIL_AVAILABLE:
+        # 改进：即使没有nginx_executable，也尝试查找（通过进程名称）
+        if not running and PSUTIL_AVAILABLE:
             try:
-                # 查找与可执行文件匹配的主进程
-                executable_name = nginx_executable.name
+                # 查找nginx主进程（通过进程名称"nginx"或命令行包含nginx）
+                versions_root = _get_versions_root() if active is None else None
+                
                 for proc in psutil.process_iter(
-                    ["pid", "name", "cmdline", "create_time"]
+                    ["pid", "name", "cmdline", "create_time", "exe"]
                 ):
                     try:
-                        if proc.info["name"] == executable_name or (
-                            proc.info["cmdline"]
-                            and executable_name in " ".join(proc.info["cmdline"] or [])
-                        ):
-                            # 检查是否是主进程（通常主进程的 cmdline 包含 master process 或者只有配置文件参数）
-                            cmdline = proc.info["cmdline"] or []
-                            if (
-                                "master process" in " ".join(cmdline).lower()
-                                or len([c for c in cmdline if c.endswith(".conf")]) > 0
-                            ):
-                                pid = proc.info["pid"]
-                                running = True
+                        proc_name = proc.info.get("name", "").lower()
+                        cmdline = proc.info.get("cmdline") or []
+                        cmdline_str = " ".join(cmdline).lower()
+                        
+                        # 检查是否是nginx进程
+                        is_nginx = (
+                            proc_name == "nginx" 
+                            or "nginx" in proc_name
+                            or any("nginx" in str(c).lower() for c in cmdline)
+                        )
+                        
+                        if not is_nginx:
+                            continue
+                            
+                        # 检查是否是主进程（包含master process或配置文件参数）
+                        is_master = (
+                            "master process" in cmdline_str
+                            or any(c.endswith(".conf") for c in cmdline)
+                        )
+                        
+                        if not is_master:
+                            continue
+                        
+                        # 找到nginx主进程
+                        pid = proc.info["pid"]
+                        running = True
+                        
+                        # 尝试从命令行获取可执行文件路径（用于后续操作）
+                        if cmdline and len(cmdline) > 0:
+                            potential_exe = Path(cmdline[0])
+                            if potential_exe.exists() and nginx_executable is None:
+                                nginx_executable = potential_exe
+                        
+                        # 尝试从进程信息获取可执行文件路径
+                        try:
+                            if proc.info.get("exe"):
+                                potential_exe = Path(proc.info["exe"])
+                                if potential_exe.exists() and nginx_executable is None:
+                                    nginx_executable = potential_exe
+                        except (psutil.AccessDenied, psutil.NoSuchProcess):
+                            pass
 
-                                # 获取运行时间
-                                create_time = datetime.fromtimestamp(
-                                    proc.info["create_time"]
-                                )
-                                now = datetime.now()
-                                uptime_delta = now - create_time
+                        # 获取运行时间
+                        create_time = datetime.fromtimestamp(
+                            proc.info["create_time"]
+                        )
+                        now = datetime.now()
+                        uptime_delta = now - create_time
 
-                                days = uptime_delta.days
-                                hours, remainder = divmod(uptime_delta.seconds, 3600)
-                                minutes, seconds = divmod(remainder, 60)
+                        days = uptime_delta.days
+                        hours, remainder = divmod(uptime_delta.seconds, 3600)
+                        minutes, seconds = divmod(remainder, 60)
 
-                                if days > 0:
-                                    uptime_str = f"{days}天{hours}小时{minutes}分钟"
-                                elif hours > 0:
-                                    uptime_str = f"{hours}小时{minutes}分钟"
-                                elif minutes > 0:
-                                    uptime_str = f"{minutes}分钟{seconds}秒"
-                                else:
-                                    uptime_str = f"{seconds}秒"
-                                break
+                        if days > 0:
+                            uptime_str = f"{days}天{hours}小时{minutes}分钟"
+                        elif hours > 0:
+                            uptime_str = f"{hours}小时{minutes}分钟"
+                        elif minutes > 0:
+                            uptime_str = f"{minutes}分钟{seconds}秒"
+                        else:
+                            uptime_str = f"{seconds}秒"
+                        break
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
             except Exception:
                 pass
-        elif not running and nginx_executable and not PSUTIL_AVAILABLE:
+        elif not running and not PSUTIL_AVAILABLE:
             # 如果没有 psutil，尝试使用 pgrep 查找进程
             try:
+                # 优先通过可执行文件路径查找
+                if nginx_executable:
+                    search_pattern = str(nginx_executable)
+                else:
+                    # 如果没有可执行文件路径，就搜索所有nginx进程
+                    search_pattern = "nginx"
+                
                 result = subprocess.run(
-                    ["pgrep", "-f", str(nginx_executable)],
+                    ["pgrep", "-f", search_pattern],
                     capture_output=True,
                     text=True,
                     timeout=5,
