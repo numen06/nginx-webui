@@ -171,6 +171,24 @@ def analyze_logs_simple(
     Returns:
         分析结果统计
     """
+    # 性能优化：避免频繁触发
+    state = _state_manager.get_state()
+    if state["is_running"]:
+        logger.info("[statistics_v2] 任务正在运行中，跳过本次触发 (trigger=%s)", trigger)
+        return {"success": False, "message": "任务正在运行中"}
+    
+    # 增量分析时，检查距离上次分析的时间间隔，避免过于频繁
+    last_end = state.get("last_end_time")
+    if last_end and not full:
+        seconds_since_last = (datetime.now() - last_end).total_seconds()
+        if seconds_since_last < 10:
+            logger.info(
+                "[statistics_v2] 距离上次分析仅%.1f秒，跳过以避免频繁触发 (trigger=%s)",
+                seconds_since_last,
+                trigger
+            )
+            return {"success": False, "message": "分析间隔太短，请稍后再试"}
+    
     _state_manager.start_task(trigger)
     access_log_path = Path(_resolve_access_log_path())
     error_log_path = Path(_resolve_error_log_path())

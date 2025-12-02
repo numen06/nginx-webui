@@ -100,6 +100,7 @@ def query_statistics(hours: int) -> Optional[Dict]:
         success_requests = sum(r.success_requests for r in records)
         error_requests = sum(r.error_requests for r in records)
         attack_count = sum(r.attack_count for r in records)
+        error_log_count = sum(r.error_log_count for r in records)
         
         # 合并详细数据
         status_dist = {}
@@ -183,7 +184,7 @@ def query_statistics(hours: int) -> Optional[Dict]:
                 "error_requests": error_requests,
                 "error_rate": round(error_rate, 2),
                 "attack_count": attack_count,
-                "error_log_count": 0,
+                "error_log_count": error_log_count,
             },
             "status_distribution": status_dist,
             "method_distribution": method_dist,
