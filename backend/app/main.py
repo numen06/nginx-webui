@@ -90,6 +90,12 @@ async def startup_event():
     """应用启动时打印核心配置信息并自动启动nginx"""
     # 重置分析任务状态，确保重启后状态正确
     reset_analysis_state()
+    from app.routers.statistics import _state_manager
+    logging.info(
+        "[statistics] 分析任务状态已重置，is_running=%s, watcher_enabled=%s",
+        _state_manager.is_running,
+        _state_manager.get("watcher_enabled"),
+    )
     
     cfg = get_config()
     nginx_available = is_nginx_available()
@@ -251,31 +257,39 @@ async def startup_event():
             except Exception as exc:
                 logging.warning("基于日志监听触发的1天分析失败: %s", exc)
 
-            # 定期清理超过30天的过期缓存
+            # 定期清理超过7天的过期缓存
             try:
-                cleanup_old_cache(max_age_hours=30 * 24)  # 30天 = 30 * 24 小时
+                cleanup_old_cache(max_age_hours=7 * 24)  # 7天 = 7 * 24 小时
             except Exception as exc:
                 logging.warning("清理统计缓存失败: %s", exc)
 
         watcher = start_log_watcher(
             access_log_path, _analyze_all_windows, debounce_seconds=30
         )
+        from app.routers.statistics import _state_manager
         if watcher:
-            ANALYSIS_STATE["watcher_enabled"] = True
+            _state_manager.set_watcher_enabled(True)
             print(f"✓ 基于日志变化的统计分析监听已启用，文件: {access_log_path}")
         else:
-            ANALYSIS_STATE["watcher_enabled"] = False
+            _state_manager.set_watcher_enabled(False)
             print(
                 "⚠ 未启用日志监听（可能非 Linux / 未安装 pyinotify / 日志文件不存在），"
                 "将依赖手动触发全量分析"
             )
     except Exception as e:
-        ANALYSIS_STATE["watcher_enabled"] = False
+        from app.routers.statistics import _state_manager
+        _state_manager.set_watcher_enabled(False)
         logging.warning(f"初始化日志监听失败，将依赖手动触发分析: {e}")
 
     # 兜底：每 5 分钟定时触发一次分析，防止极端情况下监听失效或长时间无请求却仍需刷新统计
     def fallback_analyzer():
         import time
+
+        # 重启后先等待一个周期（5分钟），再开始第一次分析，确保任务状态正确
+        from app.routers.statistics import _state_manager
+        logging.info("[statistics] 重启后等待下一个周期（5分钟）再开始分析，当前任务状态: is_running=%s", _state_manager.is_running)
+        print("✓ 统计分析兜底定时任务已启动，将在 5 分钟后开始第一次分析")
+        time.sleep(300)  # 等待5分钟
 
         while True:
             try:
@@ -333,9 +347,9 @@ async def startup_event():
                 except Exception as exc:
                     logging.warning("兜底定时1天分析失败: %s", exc)
 
-                # 定期清理超过30天的过期缓存
+                # 定期清理超过7天的过期缓存
                 try:
-                    cleanup_old_cache(max_age_hours=30 * 24)  # 30天 = 30 * 24 小时
+                    cleanup_old_cache(max_age_hours=7 * 24)  # 7天 = 7 * 24 小时
                 except Exception as exc:
                     logging.warning("兜底定时清理统计缓存失败: %s", exc)
             except Exception as exc:
@@ -345,7 +359,6 @@ async def startup_event():
             time.sleep(300)
 
     threading.Thread(target=fallback_analyzer, daemon=True).start()
-    print("✓ 统计分析兜底定时任务已启动（每 5 分钟一次）")
 
 
 # 挂载静态文件目录（前端打包文件）
