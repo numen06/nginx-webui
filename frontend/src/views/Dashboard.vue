@@ -412,6 +412,10 @@ const taskStatus = ref({
   running_duration_seconds: null  // 当前运行中任务耗时（秒）
 })
 
+// 防抖控制：记录上次增量分析触发的时间
+const lastIncrementalAnalyzeTime = ref(0)
+const INCREMENTAL_ANALYZE_COOLDOWN = 10000 // 10秒冷却时间，与后端保持一致
+
 // 统计分析状态标签（保持固定宽度，避免布局抖动）
 const analysisTagType = computed(() => {
   const s = taskStatus.value.status
@@ -684,11 +688,26 @@ const loadStatisticsSummary = async () => {
   }
 }
 
-// 手动触发增量分析
+// 手动触发增量分析（带防抖和冷却时间检查）
 const triggerIncrementalAnalyze = async () => {
-  if (taskStatus.value.is_running) return
+  if (taskStatus.value.is_running) {
+    ElMessage.info('分析任务正在运行中，请稍候')
+    return
+  }
+
+  // 检查冷却时间
+  const now = Date.now()
+  const timeSinceLastTrigger = now - lastIncrementalAnalyzeTime.value
+  if (timeSinceLastTrigger < INCREMENTAL_ANALYZE_COOLDOWN) {
+    const remainingSeconds = Math.ceil((INCREMENTAL_ANALYZE_COOLDOWN - timeSinceLastTrigger) / 1000)
+    ElMessage.warning(`请等待 ${remainingSeconds} 秒后再试`)
+    return
+  }
 
   try {
+    // 记录触发时间
+    lastIncrementalAnalyzeTime.value = now
+    
     // 任务开始时立即重置 analyzed_lines 为 0
     taskStatus.value.analyzed_lines = 0
     taskStatus.value.is_running = true
@@ -712,7 +731,15 @@ const triggerIncrementalAnalyze = async () => {
     }
   } catch (error) {
     console.error('触发增量分析失败:', error)
-    ElMessage.error('触发增量分析失败: ' + (error.message || '未知错误'))
+    // 提取错误详情
+    let errorMessage = '未知错误'
+    if (error.status === 429) {
+      // 429 Too Many Requests
+      errorMessage = error.detail || error.message || '分析过于频繁，请稍后再试'
+    } else {
+      errorMessage = error.message || error.detail || '未知错误'
+    }
+    ElMessage.error('触发增量分析失败: ' + errorMessage)
     loadTaskStatus()
   }
 }

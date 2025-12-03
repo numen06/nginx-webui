@@ -304,12 +304,13 @@ def analyze_logs_simple(
     if last_end and not full:
         seconds_since_last = (datetime.now() - last_end).total_seconds()
         if seconds_since_last < 10:
+            wait_seconds = int(10 - seconds_since_last) + 1
             logger.info(
                 "[statistics_v2] 距离上次分析仅%.1f秒，跳过以避免频繁触发 (trigger=%s)",
                 seconds_since_last,
                 trigger,
             )
-            return {"success": False, "message": "分析间隔太短，请稍后再试"}
+            return {"success": False, "message": f"分析间隔太短，请等待{wait_seconds}秒后再试"}
 
     _state_manager.start_task(trigger)
     access_log_path = Path(_resolve_access_log_path())
@@ -589,9 +590,10 @@ async def trigger_analyze(
         if last_end:
             seconds_since_last = (datetime.now() - last_end).total_seconds()
             if seconds_since_last < 10:
+                wait_seconds = int(10 - seconds_since_last) + 1  # 向上取整，确保足够的等待时间
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"分析过于频繁，请等待{int(10-seconds_since_last)}秒后再试",
+                    detail=f"分析过于频繁，请等待{wait_seconds}秒后再试",
                 )
 
     # 后台执行
