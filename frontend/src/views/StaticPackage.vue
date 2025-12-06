@@ -90,7 +90,7 @@
               </el-text>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="280" fixed="right" align="center">
+          <el-table-column label="操作" width="380" fixed="right" align="center">
             <template #default="{ row }">
               <el-button
                 type="success"
@@ -100,6 +100,15 @@
                 :loading="deploying === row.filename"
               >
                 部署
+              </el-button>
+              <el-button
+                type="primary"
+                size="small"
+                :icon="Download"
+                @click="handleDownloadPackage(row.filename)"
+                :loading="downloading === row.filename"
+              >
+                下载
               </el-button>
               <el-button
                 type="danger"
@@ -315,6 +324,7 @@ const selectedFile = ref(null)
 const uploading = ref(false)
 const deploying = ref(null)
 const deleting = ref(null)
+const downloading = ref(null)
 const extracting = ref(false)
 const uploadRef = ref(null)
 const packages = ref([])
@@ -462,6 +472,26 @@ const handleDeployConfirm = async () => {
     ElMessage.error(error.detail || '部署失败')
   } finally {
     deploying.value = null
+  }
+}
+
+const handleDownloadPackage = async (filename) => {
+  downloading.value = filename
+  try {
+    const blob = await filesApi.downloadPackage(filename)
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('下载成功')
+  } catch (error) {
+    ElMessage.error(error.detail || '下载失败')
+  } finally {
+    downloading.value = null
   }
 }
 
