@@ -2,12 +2,18 @@
 认证模块
 实现 HTTP Basic Authentication 和 JWT token 管理
 """
+
 import bcrypt
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, HTTPException, status, Query
+from fastapi.security import (
+    HTTPBasic,
+    HTTPBasicCredentials,
+    HTTPBearer,
+    HTTPAuthorizationCredentials,
+)
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -37,12 +43,14 @@ def get_secret_key() -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+    )
 
 
 def hash_password(password: str) -> str:
     """加密密码"""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -52,7 +60,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.now() + expires_delta
     else:
         expire = datetime.now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
+
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, get_secret_key(), algorithm=ALGORITHM)
     return encoded_jwt
@@ -79,7 +87,10 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
-def get_current_user_basic(credentials: HTTPBasicCredentials = Depends(security_basic), db: Session = Depends(get_db)) -> User:
+def get_current_user_basic(
+    credentials: HTTPBasicCredentials = Depends(security_basic),
+    db: Session = Depends(get_db),
+) -> User:
     """通过 Basic Auth 获取当前用户"""
     user = authenticate_user(db, credentials.username, credentials.password)
     if user is None:
@@ -91,7 +102,9 @@ def get_current_user_basic(credentials: HTTPBasicCredentials = Depends(security_
     return user
 
 
-def get_current_user_token(credentials: HTTPAuthorizationCredentials = Depends(security_bearer)) -> dict:
+def get_current_user_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security_bearer),
+) -> dict:
     """通过 Token 获取当前用户信息"""
     token = credentials.credentials
     payload = verify_token(token)
@@ -104,7 +117,10 @@ def get_current_user_token(credentials: HTTPAuthorizationCredentials = Depends(s
     return payload
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security_bearer), db: Session = Depends(get_db)) -> User:
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security_bearer),
+    db: Session = Depends(get_db),
+) -> User:
     """获取当前用户（通过 Token）"""
     payload = get_current_user_token(credentials)
     username: str = payload.get("sub")
@@ -113,7 +129,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="无效的 token",
         )
-    
+
     user = db.query(User).filter(User.username == username).first()
     if user is None or not user.is_active:
         raise HTTPException(
@@ -128,13 +144,61 @@ def get_user_by_token(token: str, db: Session) -> Optional[User]:
     payload = verify_token(token)
     if payload is None:
         return None
-    
+
     username: str = payload.get("sub")
     if username is None:
         return None
-    
+
     user = db.query(User).filter(User.username == username).first()
     if user is None or not user.is_active:
         return None
     return user
 
+
+def get_current_user_optional_query(
+    token: Optional[str] = Query(None, description="身份验证 Token（可选）"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+        HTTPBearer(auto_error=False)
+    ),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    获取当前用户，支持两种方式：
+    1. Authorization header (Bearer token) - 优先
+    2. Query parameter (?token=xxx) - 备用，用于下载链接
+    """
+    # 优先使用 Header 中的 token
+    if credentials and credentials.credentials:
+        payload = verify_token(credentials.credentials)
+        if payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="无效的 token 或 token 已过期",
+            )
+        username: str = payload.get("sub")
+    # 其次使用查询参数中的 token
+    elif token:
+        payload = verify_token(token)
+        if payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="无效的 token 或 token 已过期",
+            )
+        username: str = payload.get("sub")
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少身份验证信息",
+        )
+
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 token"
+        )
+
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已禁用"
+        )
+    return user

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, get_current_user_optional_query, User
 from app.config import get_config
 from app.utils.audit import create_audit_log, get_client_ip
 from app.utils.nginx_versions import _get_versions_root, _get_install_path
@@ -621,9 +621,9 @@ async def list_packages(current_user: User = Depends(get_current_user)):
 
 @router.get("/packages/download/{filename}", summary="下载静态资源包")
 async def download_package(
-    filename: str, current_user: User = Depends(get_current_user)
+    filename: str, current_user: User = Depends(get_current_user_optional_query)
 ):
-    """下载静态资源包（使用流式传输，支持大文件）"""
+    """下载静态资源包（使用流式传输，支持大文件）。支持 Header 或查询参数传递 token。"""
     try:
         # 验证文件名，防止目录遍历攻击
         if "/" in filename or ".." in filename:
@@ -1202,9 +1202,9 @@ async def download_file(
     file_path: str,
     version: Optional[str] = Query(None, description="Nginx 版本号"),
     root_only: bool = Query(False, description="是否管理整个安装目录(而非仅 html)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_optional_query),
 ):
-    """下载文件（使用流式传输，支持大文件）"""
+    """下载文件（使用流式传输，支持大文件）。支持 Header 或查询参数传递 token。"""
     try:
         target_path = validate_path(file_path, version, root_only)
 

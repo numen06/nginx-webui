@@ -514,7 +514,7 @@ const handleRename = async (file) => {
   }
 }
 
-const handleDownload = async (file) => {
+const handleDownload = (file) => {
   if (file.is_dir) {
     ElMessage.warning('暂不支持下载文件夹')
     return
@@ -524,17 +524,35 @@ const handleDownload = async (file) => {
     return
   }
   try {
-    const blob = await filesApi.downloadFile(file.path, selectedDirectory.value, rootOnly.value)
-    const url = window.URL.createObjectURL(blob)
+    // 使用 URL 参数传递 token，浏览器会立即弹出保存对话框
+    const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+    const token = localStorage.getItem('token')
+    const encodedPath = file.path.split('/').map(segment => encodeURIComponent(segment)).join('/')
+    let url = `${baseURL}/files/download/${encodedPath}`
+    
+    // 构建查询参数
+    const params = []
+    if (selectedDirectory.value) params.push(`version=${encodeURIComponent(selectedDirectory.value)}`)
+    if (rootOnly.value) params.push('root_only=true')
+    if (token) params.push(`token=${encodeURIComponent(token)}`)
+    
+    if (params.length > 0) {
+      url += '?' + params.join('&')
+    }
+    
+    // 直接使用 a 标签下载，浏览器会立即弹出保存对话框
     const a = document.createElement('a')
+    a.style.display = 'none'
     a.href = url
     a.download = file.name
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    window.URL.revokeObjectURL(url)
+    
+    ElMessage.success('开始下载')
   } catch (error) {
-    ElMessage.error(error.detail || '下载失败')
+    ElMessage.error('下载失败')
+    console.error('Download error:', error)
   }
 }
 

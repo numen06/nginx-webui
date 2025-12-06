@@ -475,23 +475,31 @@ const handleDeployConfirm = async () => {
   }
 }
 
-const handleDownloadPackage = async (filename) => {
-  downloading.value = filename
+const handleDownloadPackage = (filename) => {
   try {
-    const blob = await filesApi.downloadPackage(filename)
-    const url = window.URL.createObjectURL(blob)
+    // 使用 URL 参数传递 token，浏览器会立即弹出保存对话框
+    const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+    const token = localStorage.getItem('token')
+    let url = `${baseURL}/files/packages/download/${encodeURIComponent(filename)}`
+    
+    // 将 token 添加到 URL 参数中
+    if (token) {
+      url += `?token=${encodeURIComponent(token)}`
+    }
+    
+    // 直接使用 a 标签下载，浏览器会立即弹出保存对话框
     const a = document.createElement('a')
+    a.style.display = 'none'
     a.href = url
     a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    window.URL.revokeObjectURL(url)
-    ElMessage.success('下载成功')
+    
+    ElMessage.success('开始下载')
   } catch (error) {
-    ElMessage.error(error.detail || '下载失败')
-  } finally {
-    downloading.value = null
+    ElMessage.error('下载失败')
+    console.error('Download error:', error)
   }
 }
 
