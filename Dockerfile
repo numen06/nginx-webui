@@ -28,6 +28,7 @@ ENV APP_PORT=8000
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
+
 RUN curl -o /etc/yum.repos.d/alinux3.repo https://mirrors.aliyun.com/alinux/3.2104/os/x86_64/alinux3.repo
 
 # 安装系统依赖（包含编译 Nginx 所需工具链）
