@@ -28,6 +28,8 @@ ENV APP_PORT=8000
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
+RUN curl -o /etc/yum.repos.d/alinux3.repo https://mirrors.aliyun.com/alinux/3.2104/os/x86_64/alinux3.repo
+
 # 安装系统依赖（包含编译 Nginx 所需工具链）
 # 说明：
 # - 阿里云龙蜥镜像在某些环境下 RPM 数据库可能是 bdb_ro，只读导致 dnf 事务失败
