@@ -19,7 +19,7 @@ RUN npm run build && \
     rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
 # ==================== 第二阶段：运行后端 ====================
-FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/python:3.11.1
+FROM ac2-registry.cn-hangzhou.cr.aliyuncs.com/ac2/base:alinux3.2104-py312
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
