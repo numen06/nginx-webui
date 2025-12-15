@@ -5,6 +5,12 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import loader from '@monaco-editor/loader'
+import * as monacoModule from 'monaco-editor'
+
+// 使用本地打包的 monaco，而不是 CDN
+loader.config({
+  monaco: monacoModule
+})
 
 const props = defineProps({
   modelValue: {
