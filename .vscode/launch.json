@@ -2,9 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Python: FastAPI (后端)",
+      "name": "Python: FastAPI (后端，使用 .venv)",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "module": "uvicorn",
       "args": [
         "app.main:app",
@@ -28,6 +29,7 @@
       "name": "Python: FastAPI (后端，含环境安装)",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "module": "uvicorn",
       "args": [
         "app.main:app",
@@ -52,6 +54,7 @@
       "name": "Python: FastAPI (当前文件)",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "program": "${file}",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/backend",
@@ -109,6 +112,7 @@
       "name": "Python: 调试测试",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "module": "pytest",
       "args": [
         "-v",
