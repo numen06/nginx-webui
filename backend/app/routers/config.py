@@ -200,7 +200,7 @@ async def reload_nginx_config(
     apply_working_config()
     result = reload_nginx()
     result["backup_id"] = backup.id
-    
+
     # 清除状态缓存（重载后状态可能变化）
     clear_nginx_status_cache()
 
@@ -225,7 +225,7 @@ async def get_status(
 ):
     """
     获取 Nginx 运行状态（使用缓存优化性能）
-    
+
     Args:
         force_refresh: 强制刷新，不使用缓存
     """
@@ -234,13 +234,13 @@ async def get_status(
         cached_status = get_cached_nginx_status()
         if cached_status is not None:
             return cached_status
-    
+
     # 缓存未命中或强制刷新，重新获取状态
     status_info = get_nginx_status()
-    
+
     # 保存到缓存
     set_cached_nginx_status(status_info)
-    
+
     return status_info
 
 
@@ -268,13 +268,13 @@ async def get_config_backups(
     }
 
 
-@router.post("/backup", summary="手动创建配置备份")
+@router.post("/backup", summary="手动创建配置备份（备份当前线上配置）")
 async def create_config_backup(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """手动创建配置备份"""
+    """手动创建配置备份（备份当前正在生效的 nginx.conf，而非编辑器中的临时配置）"""
     try:
         backup = create_backup(db, created_by_id=current_user.id)
 
@@ -321,10 +321,7 @@ async def restore_config_backup(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="备份不存在")
 
     try:
-        # 恢复备份前先创建当前配置的备份
-        current_backup = create_backup(db, created_by_id=current_user.id)
-
-        # 恢复备份
+        # 直接恢复备份（不再为当前配置创建新的备份）
         success = restore_backup(db, backup_id)
         if not success:
             raise HTTPException(
@@ -338,7 +335,7 @@ async def restore_config_backup(
             username=current_user.username,
             action="backup_restore",
             target=backup.filename,
-            details={"backup_id": backup_id, "current_backup_id": current_backup.id},
+            details={"backup_id": backup_id},
             ip_address=get_client_ip(request),
         )
 

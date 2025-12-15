@@ -90,7 +90,7 @@
                 :loading="backupLoading"
               >
                 <el-icon><DocumentAdd /></el-icon>
-                <span class="btn-label">手动备份</span>
+                <span class="btn-label">备份当前线上配置</span>
               </el-button>
               <el-button
                 type="warning"
@@ -427,7 +427,7 @@ const handleCreateBackup = async () => {
     backupLoading.value = true
     const res = await configApi.createBackup()
     if (res?.success) {
-      ElMessage.success('备份创建成功')
+      ElMessage.success('备份创建成功（已保存当前线上配置）')
       await handleLoadBackups()
     } else {
       ElMessage.error(res?.message || '备份创建失败')
@@ -447,8 +447,13 @@ const handleRollback = async () => {
   }
 
   try {
+    // 如果当前编辑器中有未保存的修改，提示用户将放弃这些内容
+    const message = isModified.value
+      ? '检测到当前配置有未保存的修改。\n\n回滚到所选备份版本将放弃当前输入框中的内容，并使用备份内容覆盖临时配置副本。\n\n是否继续？'
+      : '确定要将当前配置回滚到所选备份版本吗？此操作会覆盖当前配置文件。'
+
     await ElMessageBox.confirm(
-      '确定要将当前配置回滚到所选备份版本吗？此操作会覆盖当前配置文件。',
+      message,
       '回滚确认',
       {
         type: 'warning'

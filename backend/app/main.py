@@ -40,7 +40,7 @@ from app.routers import (
     git,
 )
 from app.routers import statistics_v2 as statistics, system
-from app.utils.version import APP_VERSION
+from app.utils.version import get_version
 from app.utils.statistics_cache import cleanup_old_cache
 from app.utils.log_watcher import start_log_watcher
 from app.routers.logs import _resolve_access_log_path
@@ -53,6 +53,9 @@ logging.basicConfig(
 
 # 初始化数据库
 init_db()
+
+# 读取当前应用版本（从配置 / 环境变量 / 默认值）
+APP_VERSION = get_version()
 
 # 创建 FastAPI 应用（版本号使用程序版本，而不是 Nginx 编译时间）
 app = FastAPI(

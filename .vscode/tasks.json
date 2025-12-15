@@ -69,7 +69,7 @@
     {
       "label": "安装后端依赖（如需要）",
       "type": "shell",
-      "command": "python -m pip install -r requirements.txt",
+      "command": "${workspaceFolder}/.venv/bin/python -m pip install -r requirements.txt",
       "windows": {
         "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt"
       },
