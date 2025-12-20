@@ -272,6 +272,72 @@ async def startup_event():
 
     threading.Thread(target=fallback_analyzer, daemon=True).start()
 
+    # 启动日志轮转定时任务
+    def logrotate_scheduler():
+        """日志轮转定时任务"""
+        import time
+        from app.utils.logrotate import rotate_logs
+        from datetime import datetime, timedelta
+
+        config = get_config()
+        logrotate_config = config.logrotate
+
+        if not logrotate_config.enabled:
+            print("日志轮转功能已禁用，跳过定时任务启动")
+            return
+
+        print(f"✓ 日志轮转定时任务已启动，轮转时间: {logrotate_config.rotate_time}, 保留天数: {logrotate_config.retention_days}")
+
+        # 计算下次轮转时间
+        try:
+            rotate_time_parts = logrotate_config.rotate_time.split(":")
+            rotate_hour = int(rotate_time_parts[0])
+            rotate_minute = int(rotate_time_parts[1])
+        except Exception as e:
+            logging.error(f"解析轮转时间失败: {e}，使用默认时间 00:00")
+            rotate_hour = 0
+            rotate_minute = 0
+
+        while True:
+            try:
+                now = datetime.now()
+                next_rotate = now.replace(
+                    hour=rotate_hour, minute=rotate_minute, second=0, microsecond=0
+                )
+                if next_rotate <= now:
+                    # 如果今天的时间已过，则设置为明天
+                    next_rotate += timedelta(days=1)
+
+                # 计算需要等待的秒数
+                wait_seconds = (next_rotate - now).total_seconds()
+                logging.info(
+                    f"日志轮转定时任务: 下次轮转时间 {next_rotate.strftime('%Y-%m-%d %H:%M:%S')}，"
+                    f"等待 {wait_seconds:.0f} 秒"
+                )
+
+                # 等待到轮转时间
+                time.sleep(wait_seconds)
+
+                # 执行日志轮转
+                logging.info("开始执行定时日志轮转...")
+                result = rotate_logs(retention_days=logrotate_config.retention_days)
+
+                if result["success"]:
+                    logging.info(
+                        f"定时日志轮转完成: 轮转 {len(result.get('rotated_files', []))} 个文件, "
+                        f"删除 {len(result.get('deleted_files', []))} 个旧文件"
+                    )
+                else:
+                    logging.error(
+                        f"定时日志轮转失败: {result.get('errors', [])}"
+                    )
+            except Exception as exc:
+                logging.error(f"日志轮转定时任务异常: {exc}", exc_info=True)
+                # 出错后等待 1 小时再重试
+                time.sleep(3600)
+
+    threading.Thread(target=logrotate_scheduler, daemon=True).start()
+
 
 # 挂载静态文件目录（前端打包文件）
 static_dir = Path(__file__).parent.parent / "static"

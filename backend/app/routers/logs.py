@@ -8,7 +8,7 @@ from datetime import datetime
 import os
 import subprocess
 import re
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -16,6 +16,8 @@ from app.auth import get_current_user, User
 from app.config import get_config
 from app.utils.nginx_versions import get_active_version
 from app.utils.nginx import _resolve_nginx_executable
+from app.utils.logrotate import rotate_logs
+from app.utils.audit import create_audit_log, get_client_ip
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -642,3 +644,87 @@ async def get_error_log(
         },
         **version_info,
     }
+
+
+@router.get("/rotate/status", summary="获取日志轮转状态")
+async def get_logrotate_status(
+    current_user: User = Depends(get_current_user),
+):
+    """获取日志轮转配置和状态"""
+    config = get_config()
+    logrotate_config = config.logrotate
+    
+    # 计算下次轮转时间
+    from datetime import timedelta
+    try:
+        rotate_time_parts = logrotate_config.rotate_time.split(":")
+        rotate_hour = int(rotate_time_parts[0])
+        rotate_minute = int(rotate_time_parts[1])
+        
+        now = datetime.now()
+        next_rotate = now.replace(hour=rotate_hour, minute=rotate_minute, second=0, microsecond=0)
+        if next_rotate <= now:
+            # 如果今天的时间已过，则设置为明天
+            next_rotate += timedelta(days=1)
+        
+        next_rotate_time = next_rotate.isoformat()
+    except Exception as e:
+        next_rotate_time = None
+    
+    return {
+        "success": True,
+        "enabled": logrotate_config.enabled,
+        "retention_days": logrotate_config.retention_days,
+        "rotate_time": logrotate_config.rotate_time,
+        "next_rotate_time": next_rotate_time,
+    }
+
+
+@router.post("/rotate", summary="手动触发日志轮转")
+async def trigger_logrotate(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """手动触发日志轮转"""
+    config = get_config()
+    retention_days = config.logrotate.retention_days
+    
+    # 执行日志轮转
+    result = rotate_logs(retention_days=retention_days)
+    
+    # 记录操作审计日志
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="logrotate",
+        target="nginx_logs",
+        details={
+            "success": result["success"],
+            "rotated_files_count": len(result.get("rotated_files", [])),
+            "deleted_files_count": len(result.get("deleted_files", [])),
+            "errors": result.get("errors", []),
+        },
+        ip_address=get_client_ip(request),
+    )
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "message": "日志轮转完成",
+            "rotated_files": result.get("rotated_files", []),
+            "deleted_files": result.get("deleted_files", []),
+            "nginx_signal_sent": result.get("nginx_signal_sent", False),
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "success": False,
+                "message": "日志轮转失败",
+                "errors": result.get("errors", []),
+                "rotated_files": result.get("rotated_files", []),
+                "deleted_files": result.get("deleted_files", []),
+            },
+        )

@@ -74,12 +74,21 @@ class BackupConfig(BaseModel):
     backup_dir: str = "/app/data/backups"
 
 
+class LogrotateConfig(BaseModel):
+    """日志轮转配置"""
+
+    enabled: bool = True
+    retention_days: int = 7
+    rotate_time: str = "00:00"  # 格式: HH:MM
+
+
 class Config(BaseModel):
     """全局配置"""
 
     nginx: NginxConfig = Field(default_factory=NginxConfig)
     app: AppConfig = Field(default_factory=AppConfig)
     backup: BackupConfig = Field(default_factory=BackupConfig)
+    logrotate: LogrotateConfig = Field(default_factory=LogrotateConfig)
 
 
 class ConfigManager:
@@ -178,10 +187,23 @@ class ConfigManager:
             "BACKUP_DIR", backup_config.get("backup_dir", f"{data_root}/backups")
         )
         
+        # 日志轮转配置
+        logrotate_config = config_data.get("logrotate", {})
+        logrotate_config["enabled"] = os.getenv(
+            "LOGROTATE_ENABLED", str(logrotate_config.get("enabled", "true"))
+        ).lower() in ("true", "1", "yes")
+        logrotate_config["retention_days"] = int(
+            os.getenv("LOGROTATE_RETENTION_DAYS", logrotate_config.get("retention_days", 7))
+        )
+        logrotate_config["rotate_time"] = os.getenv(
+            "LOGROTATE_ROTATE_TIME", logrotate_config.get("rotate_time", "00:00")
+        )
+        
         self._config = Config(
             nginx=NginxConfig(**nginx_config),
             app=AppConfig(**app_config),
             backup=BackupConfig(**backup_config),
+            logrotate=LogrotateConfig(**logrotate_config),
         )
         
         # 确保备份目录存在（安全处理，避免挂载点冲突）
