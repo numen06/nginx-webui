@@ -433,10 +433,46 @@ async def get_access_log(
     end_date: Optional[str] = Query(
         None, description="结束日期 (YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS)"
     ),
+    rotate_file: Optional[str] = Query(None, description="分片文件名（如 access.log.2024-12-21）"),
     current_user: User = Depends(get_current_user),
 ):
     """查看 Nginx 访问日志（优先使用当前运行版本的日志文件）"""
-    log_path = _resolve_access_log_path()
+    # 如果指定了分片文件，使用分片文件路径
+    if rotate_file:
+        # 验证分片文件名安全性
+        if ".." in rotate_file or "/" in rotate_file or "\\" in rotate_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的分片文件名",
+            )
+        
+        # 获取日志目录
+        access_log_path = Path(_resolve_access_log_path())
+        log_dir = access_log_path.parent
+        
+        # 构建分片文件路径
+        rotate_file_path = log_dir / rotate_file
+        
+        # 验证文件是否存在且在日志目录内
+        try:
+            rotate_file_path.resolve().relative_to(log_dir.resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="分片文件路径无效",
+            )
+        
+        if not rotate_file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"分片文件不存在: {rotate_file}",
+            )
+        
+        log_path = str(rotate_file_path)
+        is_rotate_file = True
+    else:
+        log_path = _resolve_access_log_path()
+        is_rotate_file = False
 
     # 解析日期参数
     parsed_start_date = None
@@ -522,6 +558,8 @@ async def get_access_log(
         "logs": result["lines"],
         "log_path": log_path,
         "log_size_bytes": log_size_bytes,
+        "is_rotate_file": is_rotate_file,
+        "rotate_file": rotate_file if is_rotate_file else None,
         "pagination": {
             "page": page,
             "page_size": page_size,
@@ -546,10 +584,46 @@ async def get_error_log(
     end_date: Optional[str] = Query(
         None, description="结束日期 (YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS)"
     ),
+    rotate_file: Optional[str] = Query(None, description="分片文件名（如 error.log.2024-12-21）"),
     current_user: User = Depends(get_current_user),
 ):
     """查看 Nginx 错误日志（优先使用当前运行版本的日志文件）"""
-    log_path = _resolve_error_log_path()
+    # 如果指定了分片文件，使用分片文件路径
+    if rotate_file:
+        # 验证分片文件名安全性
+        if ".." in rotate_file or "/" in rotate_file or "\\" in rotate_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的分片文件名",
+            )
+        
+        # 获取日志目录
+        error_log_path = Path(_resolve_error_log_path())
+        log_dir = error_log_path.parent
+        
+        # 构建分片文件路径
+        rotate_file_path = log_dir / rotate_file
+        
+        # 验证文件是否存在且在日志目录内
+        try:
+            rotate_file_path.resolve().relative_to(log_dir.resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="分片文件路径无效",
+            )
+        
+        if not rotate_file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"分片文件不存在: {rotate_file}",
+            )
+        
+        log_path = str(rotate_file_path)
+        is_rotate_file = True
+    else:
+        log_path = _resolve_error_log_path()
+        is_rotate_file = False
 
     # 解析日期参数
     parsed_start_date = None
@@ -633,6 +707,8 @@ async def get_error_log(
         "logs": result["lines"],
         "log_path": log_path,
         "log_size_bytes": log_size_bytes,
+        "is_rotate_file": is_rotate_file,
+        "rotate_file": rotate_file if is_rotate_file else None,
         "pagination": {
             "page": page,
             "page_size": page_size,
@@ -727,4 +803,168 @@ async def trigger_logrotate(
                 "rotated_files": result.get("rotated_files", []),
                 "deleted_files": result.get("deleted_files", []),
             },
+        )
+
+
+@router.get("/rotate/files", summary="获取日志分片文件列表")
+async def get_logrotate_files(
+    current_user: User = Depends(get_current_user),
+):
+    """获取日志分片文件列表"""
+    try:
+        # 获取日志文件路径
+        access_log_path = Path(_resolve_access_log_path())
+        error_log_path = Path(_resolve_error_log_path())
+        
+        log_dir = access_log_path.parent
+        access_basename = access_log_path.name
+        error_basename = error_log_path.name
+        
+        access_files = []
+        error_files = []
+        
+        # 扫描日志目录，查找轮转后的日志文件
+        # 格式：access.log.YYYY-MM-DD 或 access.log.YYYY-MM-DD.timestamp
+        if log_dir.exists():
+            for log_file in log_dir.iterdir():
+                if not log_file.is_file():
+                    continue
+                
+                filename = log_file.name
+                
+                # 检查是否是访问日志的分片文件
+                if filename.startswith(f"{access_basename}."):
+                    # 提取日期部分：access.log.YYYY-MM-DD 或 access.log.YYYY-MM-DD.timestamp
+                    date_part = filename[len(access_basename) + 1:].split(".")[0]
+                    try:
+                        # 尝试解析日期
+                        file_date = datetime.strptime(date_part, "%Y-%m-%d")
+                        stat_info = log_file.stat()
+                        access_files.append({
+                            "filename": filename,
+                            "path": str(log_file),
+                            "size": stat_info.st_size,
+                            "modified_time": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
+                            "date": file_date.strftime("%Y-%m-%d"),
+                        })
+                    except ValueError:
+                        # 无法解析日期，跳过
+                        continue
+                
+                # 检查是否是错误日志的分片文件
+                elif filename.startswith(f"{error_basename}."):
+                    date_part = filename[len(error_basename) + 1:].split(".")[0]
+                    try:
+                        file_date = datetime.strptime(date_part, "%Y-%m-%d")
+                        stat_info = log_file.stat()
+                        error_files.append({
+                            "filename": filename,
+                            "path": str(log_file),
+                            "size": stat_info.st_size,
+                            "modified_time": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
+                            "date": file_date.strftime("%Y-%m-%d"),
+                        })
+                    except ValueError:
+                        continue
+        
+        # 按日期倒序排列
+        access_files.sort(key=lambda x: x["date"], reverse=True)
+        error_files.sort(key=lambda x: x["date"], reverse=True)
+        
+        return {
+            "success": True,
+            "access_files": access_files,
+            "error_files": error_files,
+            "access_count": len(access_files),
+            "error_count": len(error_files),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取日志分片文件列表失败: {str(e)}",
+        )
+
+
+@router.delete("/rotate/file/{filename}", summary="删除日志分片文件")
+async def delete_logrotate_file(
+    filename: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """删除指定的日志分片文件"""
+    try:
+        # 验证分片文件名安全性
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的分片文件名",
+            )
+        
+        # 获取日志文件路径
+        access_log_path = Path(_resolve_access_log_path())
+        error_log_path = Path(_resolve_error_log_path())
+        
+        log_dir = access_log_path.parent
+        access_basename = access_log_path.name
+        error_basename = error_log_path.name
+        
+        # 构建分片文件路径
+        rotate_file_path = log_dir / filename
+        
+        # 验证文件是否存在且在日志目录内
+        try:
+            rotate_file_path.resolve().relative_to(log_dir.resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="分片文件路径无效",
+            )
+        
+        # 验证文件名格式（必须是分片文件，不能是当前日志文件）
+        if filename == access_basename or filename == error_basename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能删除当前日志文件",
+            )
+        
+        if not filename.startswith(f"{access_basename}.") and not filename.startswith(f"{error_basename}."):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="只能删除日志分片文件",
+            )
+        
+        if not rotate_file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"分片文件不存在: {filename}",
+            )
+        
+        # 删除文件
+        rotate_file_path.unlink()
+        
+        # 记录操作审计日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="logrotate_delete",
+            target=filename,
+            details={
+                "filename": filename,
+                "file_path": str(rotate_file_path),
+            },
+            ip_address=get_client_ip(request),
+        )
+        
+        return {
+            "success": True,
+            "message": f"分片文件已删除: {filename}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除分片文件失败: {str(e)}",
         )

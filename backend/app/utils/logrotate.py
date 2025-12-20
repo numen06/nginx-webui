@@ -12,9 +12,77 @@ from typing import Dict, List, Optional, Tuple
 
 from app.config import get_config
 from app.utils.nginx_versions import get_active_version, _find_pid_for_version
-from app.routers.logs import _resolve_access_log_path, _resolve_error_log_path
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_log_path(config_path: str) -> str:
+    """
+    解析日志文件路径，将相对路径转换为绝对路径。
+    
+    Args:
+        config_path: 配置中的日志路径（可能是相对路径或绝对路径）
+    
+    Returns:
+        解析后的绝对路径字符串
+    """
+    log_path = Path(config_path)
+    
+    # 如果已经是绝对路径，直接返回
+    if log_path.is_absolute():
+        return str(log_path.resolve())
+    
+    # 相对路径需要解析：相对于 backend 目录
+    # 当前文件在 backend/app/utils/logrotate.py
+    # parents[2] -> backend 目录
+    backend_dir = Path(__file__).resolve().parents[2]
+    resolved_path = (backend_dir / config_path).resolve()
+    
+    return str(resolved_path)
+
+
+def _resolve_access_log_path() -> str:
+    """
+    解析当前应当读取的访问日志路径。
+    
+    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/access.log。
+    否则使用配置文件中的路径。
+    """
+    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
+    active = get_active_version()
+    if active is not None:
+        # 优先使用nginx安装目录下的logs/access.log
+        default_path = active["install_path"] / "logs" / "access.log"
+        if default_path.exists():
+            return str(default_path.resolve())
+        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
+        return str(default_path.resolve())
+    
+    # 如果没有运行中的nginx版本，使用配置文件中的路径
+    config = get_config()
+    return _resolve_log_path(config.nginx.access_log)
+
+
+def _resolve_error_log_path() -> str:
+    """
+    解析当前应当读取的错误日志路径。
+    
+    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/error.log。
+    否则使用配置文件中的路径。
+    """
+    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
+    active = get_active_version()
+    if active is not None:
+        # 优先使用nginx安装目录下的logs/error.log
+        default_path = active["install_path"] / "logs" / "error.log"
+        if default_path.exists():
+            return str(default_path.resolve())
+        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
+        return str(default_path.resolve())
+    
+    # 如果没有运行中的nginx版本，使用配置文件中的路径
+    config = get_config()
+    return _resolve_log_path(config.nginx.error_log)
 
 
 def _get_nginx_pid() -> Optional[int]:
