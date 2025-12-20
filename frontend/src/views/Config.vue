@@ -434,25 +434,74 @@ const handleApply = async () => {
 }
 
 const handleReload = async () => {
-  try {
-    await ElMessageBox.confirm('确定要重新装载配置吗？', '提示', {
-      type: 'warning'
-    })
-    
-    const response = await configApi.reloadConfig()
-    if (response.success) {
-      const backupInfo = response.backup_id ? `，已创建备份 #${response.backup_id}` : ''
-      ElMessage.success(`配置重载成功${backupInfo}`)
-      configInfo.value.pending_changes = false
-      await loadConfig()
-      // 刷新备份列表，以便显示新创建的最后版本备份
-      await handleLoadBackups()
-    } else {
-      ElMessage.error('配置重载失败: ' + response.message)
+  let shouldReload = false
+  
+  // 检查是否有未保存的修改
+  if (isModified.value) {
+    try {
+      await ElMessageBox.confirm(
+        '检测到当前配置有未保存的修改。\n\n重新装载配置会使用已保存的工作副本，当前编辑器中的修改将被忽略。\n\n是否先保存当前修改？',
+        '未保存的修改',
+        {
+          type: 'warning',
+          confirmButtonText: '先保存',
+          cancelButtonText: '直接重载',
+          distinguishCancelAndClose: true
+        }
+      )
+      // 用户选择先保存，调用保存函数
+      await handleSave()
+      // 保存后直接重载（不再次弹出确认对话框）
+      shouldReload = true
+    } catch (error) {
+      // 用户选择取消或直接重载
+      if (error === 'cancel') {
+        // 用户选择直接重载，弹出重载确认对话框
+        try {
+          await ElMessageBox.confirm('确定要重新装载配置吗？', '提示', {
+            type: 'warning'
+          })
+          shouldReload = true
+        } catch (confirmError) {
+          // 用户取消重载
+          return
+        }
+      } else {
+        // 用户关闭对话框，取消操作
+        return
+      }
     }
-  } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('重新装载配置失败')
+  } else {
+    // 没有未保存的修改，直接弹出重载确认对话框
+    try {
+      await ElMessageBox.confirm('确定要重新装载配置吗？', '提示', {
+        type: 'warning'
+      })
+      shouldReload = true
+    } catch (error) {
+      if (error === 'cancel') {
+        return
+      }
+    }
+  }
+
+  // 执行重载
+  if (shouldReload) {
+    try {
+      const response = await configApi.reloadConfig()
+      if (response.success) {
+        const backupInfo = response.backup_id ? `，已创建备份 #${response.backup_id}` : ''
+        ElMessage.success(`配置重载成功${backupInfo}`)
+        configInfo.value.pending_changes = false
+        isModified.value = false
+        await loadConfig()
+        // 刷新备份列表，以便显示新创建的最后版本备份
+        await handleLoadBackups()
+      } else {
+        ElMessage.error('配置重载失败: ' + response.message)
+      }
+    } catch (error) {
+      ElMessage.error('重新装载配置失败: ' + (error?.message || error))
     }
   }
 }
@@ -531,18 +580,19 @@ const handleEditBackup = async () => {
 
   try {
     backupLoading.value = true
-    const res = await configApi.getBackupContent(selectedBackupId.value)
-    if (res?.success) {
-      // 将备份内容加载到编辑器
-      configContent.value = res.content
-      isModified.value = true
-      ElMessage.success('备份内容已加载到编辑器，您可以编辑后保存到工作副本')
-    } else {
-      ElMessage.error(res?.message || '获取备份内容失败')
+    // 先将备份内容复制到工作副本（临时配置）
+    const restoreRes = await configApi.restoreBackup(selectedBackupId.value)
+    if (!restoreRes?.success) {
+      ElMessage.error(restoreRes?.message || '恢复备份到工作副本失败')
+      return
     }
+    
+    // 然后加载工作副本的内容到编辑器
+    await loadConfig()
+    ElMessage.success('备份内容已复制到工作副本并加载到编辑器，您可以编辑后保存')
   } catch (error) {
-    console.error('获取备份内容失败:', error)
-    ElMessage.error(error?.detail || error?.message || '获取备份内容失败')
+    console.error('编辑备份版本失败:', error)
+    ElMessage.error(error?.detail || error?.message || '编辑备份版本失败')
   } finally {
     backupLoading.value = false
   }

@@ -29,7 +29,13 @@ from app.utils.nginx_status_cache import (
     clear_nginx_status_cache,
 )
 from app.utils.nginx_versions import get_active_version
-from app.utils.backup import create_backup, list_backups, restore_backup, get_backup, set_last_version
+from app.utils.backup import (
+    create_backup,
+    list_backups,
+    restore_backup,
+    get_backup,
+    set_last_version,
+)
 from app.utils.audit import create_audit_log, get_client_ip
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -195,16 +201,29 @@ async def reload_nginx_config(
         }
 
     # 重载配置
-    # 重载前：备份当前线上配置（覆盖前的版本）
+    # 重载前：备份当前线上配置（覆盖前的版本，1号版本）
     backup_before = create_backup(db, created_by_id=current_user.id)
-    
+
     # 应用工作副本并重载
+    # 注意：apply_working_config()将工作副本（2号版本）复制到实际配置文件
     apply_working_config()
     result = reload_nginx()
-    
-    # 重载成功后：备份当前线上配置（此时已经是新配置了）并标记为最后版本
+
+    # 重载成功后：备份当前线上配置（此时已经是新配置了，2号版本）并标记为最后版本
+    # 注意：apply_working_config()已经将工作副本复制到实际配置文件，
+    # reload_nginx()已经重载了nginx，所以此时实际配置文件就是当前线上运行的配置（2号版本）
+    # 最后版本应该始终是线上版本的备份，所以备份实际配置文件
     if result["success"]:
-        backup_after = create_backup(db, created_by_id=current_user.id, is_last_version=True)
+        # 备份实际配置文件（2号版本），因为这就是当前线上运行的配置
+        backup_after = create_backup(
+            db, created_by_id=current_user.id, is_last_version=True
+        )
+
+        # 确保工作副本和实际配置文件同步（工作副本 = 实际配置文件 = 2号版本）
+        from app.utils.nginx import sync_working_config_from_actual
+
+        sync_working_config_from_actual()
+
         result["backup_id"] = backup_before.id
         result["last_version_backup_id"] = backup_after.id
     else:
@@ -239,13 +258,13 @@ async def apply_config(
 ):
     """
     强制覆盖配置文件（应用工作副本到实际配置）
-    
+
     功能：
     1. 先测试配置有效性
-    2. 自动备份当前配置
-    3. 将工作副本覆盖到实际配置文件
-    4. 不重载nginx（需要手动重启nginx才能生效）
-    
+    2. 将工作副本覆盖到实际配置文件
+    3. 不重载nginx（需要手动重启nginx才能生效）
+    注意：此操作不会创建备份，只有重载nginx时才会创建备份
+
     适用场景：
     - 需要修改配置但暂时不想重载nginx
     - 准备在后续手动重启nginx时生效
@@ -259,14 +278,13 @@ async def apply_config(
             "message": "配置测试失败，无法覆盖",
             "test_result": test_result,
         }
-    
+
     try:
-        # 创建备份
-        backup = create_backup(db, created_by_id=current_user.id)
-        
         # 应用工作副本到实际配置文件
+        # 注意：不创建备份，因为配置还没有真正生效（nginx未重载）
+        # 只有在重载nginx时才会创建备份
         actual_config_path = apply_working_config()
-        
+
         # 记录操作日志
         create_audit_log(
             db=db,
@@ -275,16 +293,14 @@ async def apply_config(
             action="config_apply",
             target="nginx",
             details={
-                "backup_id": backup.id,
                 "config_path": str(actual_config_path),
             },
             ip_address=get_client_ip(request),
         )
-        
+
         return {
             "success": True,
             "message": "配置文件已覆盖，建议重启 Nginx 使配置生效",
-            "backup_id": backup.id,
             "config_path": str(actual_config_path),
             "need_restart": True,  # 标记需要重启
         }
