@@ -13,19 +13,20 @@ from app.models import ConfigBackup
 from app.utils.nginx import get_config_path, get_working_config_path
 
 
-def create_backup(db: Session, created_by_id: Optional[int] = None) -> ConfigBackup:
+def create_backup(db: Session, created_by_id: Optional[int] = None, is_last_version: bool = False) -> ConfigBackup:
     """
     创建配置文件备份（始终备份当前实际生效的线上 nginx.conf）
 
     Args:
         db: 数据库会话
         created_by_id: 创建者用户ID
+        is_last_version: 是否标记为最后版本
 
     Returns:
         ConfigBackup: 备份记录
     """
     # 备份当前实际使用的 Nginx 配置文件，而不是固定的 config.yaml 路径
-    # 这样在多版本 Nginx 管理启用时，备份/恢复都严格基于“活动版本”的 nginx.conf（线上配置）。
+    # 这样在多版本 Nginx 管理启用时，备份/恢复都严格基于"活动版本"的 nginx.conf（线上配置）。
     config = get_config()
     config_path = get_config_path()
     backup_dir = Path(config.backup.backup_dir)
@@ -42,12 +43,19 @@ def create_backup(db: Session, created_by_id: Optional[int] = None) -> ConfigBac
     # 复制配置文件
     shutil.copy2(config_path, backup_path)
 
+    # 如果标记为最后版本，先取消其他备份的最后版本标记
+    if is_last_version:
+        db.query(ConfigBackup).filter(ConfigBackup.is_last_version == True).update(
+            {"is_last_version": False}
+        )
+
     # 创建备份记录
     backup_record = ConfigBackup(
         filename=backup_filename,
         file_path=str(backup_path),
         created_by_id=created_by_id,
         created_at=datetime.now(),
+        is_last_version=is_last_version,
     )
     db.add(backup_record)
     db.commit()
@@ -94,6 +102,33 @@ def list_backups(db: Session, limit: Optional[int] = None) -> List[ConfigBackup]
 def get_backup(db: Session, backup_id: int) -> Optional[ConfigBackup]:
     """获取指定备份"""
     return db.query(ConfigBackup).filter(ConfigBackup.id == backup_id).first()
+
+
+def set_last_version(db: Session, backup_id: int) -> bool:
+    """
+    设置指定备份为最后版本，并取消其他备份的最后版本标记
+
+    Args:
+        db: 数据库会话
+        backup_id: 备份ID
+
+    Returns:
+        bool: 是否成功
+    """
+    backup = get_backup(db, backup_id)
+    if not backup:
+        return False
+
+    # 取消所有备份的最后版本标记
+    db.query(ConfigBackup).filter(ConfigBackup.is_last_version == True).update(
+        {"is_last_version": False}
+    )
+
+    # 设置指定备份为最后版本
+    backup.is_last_version = True
+    db.commit()
+
+    return True
 
 
 def restore_backup(db: Session, backup_id: int) -> bool:

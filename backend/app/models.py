@@ -34,6 +34,7 @@ class ConfigBackup(Base):
     file_path = Column(String(500), nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_last_version = Column(Boolean, default=False, nullable=False, index=True)  # 标记是否为最后版本
     
     # 关联关系
     creator = relationship("User", back_populates="config_backups")

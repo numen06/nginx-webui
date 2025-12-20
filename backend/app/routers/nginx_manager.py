@@ -622,20 +622,19 @@ def _backup_protected_dirs(install_path: Path) -> Dict[str, Path]:
         shutil.copytree(html_dir, html_backup, dirs_exist_ok=True)
         backups["html"] = html_backup
 
-    # 备份 conf 目录（配置文件，但排除nginx.conf，因为会重新生成）
+    # 备份 conf 目录（配置文件，包括nginx.conf以保留用户修改）
     conf_dir = install_path / "conf"
     if conf_dir.exists():
         conf_backup = backup_dir / "conf"
         if conf_backup.exists():
             shutil.rmtree(conf_backup, ignore_errors=True)
         conf_backup.mkdir(parents=True, exist_ok=True)
-        # 只备份非nginx.conf的配置文件
+        # 备份所有配置文件，包括nginx.conf
         for item in conf_dir.iterdir():
-            if item.name != "nginx.conf":
-                if item.is_dir():
-                    shutil.copytree(item, conf_backup / item.name, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, conf_backup / item.name)
+            if item.is_dir():
+                shutil.copytree(item, conf_backup / item.name, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, conf_backup / item.name)
         if any(conf_backup.iterdir()):
             backups["conf"] = conf_backup
 
@@ -694,8 +693,16 @@ def _upgrade_to_production_version(version: str) -> Dict[str, any]:
         shutil.copytree(source_install_path, target_install_path, dirs_exist_ok=True)
 
         # 如果有备份，恢复备份的文件
+        has_backup_nginx_conf = False
         if backups:
             _restore_protected_dirs(target_install_path, backups)
+            
+            # 检查备份中是否有 nginx.conf
+            if "conf" in backups:
+                backup_conf_dir = backups["conf"]
+                backup_nginx_conf = backup_conf_dir / "nginx.conf"
+                if backup_nginx_conf.exists():
+                    has_backup_nginx_conf = True
 
             # 清理备份目录
             backup_dir = (
@@ -707,8 +714,12 @@ def _upgrade_to_production_version(version: str) -> Dict[str, any]:
                 except Exception:
                     pass
 
-        # 更新 last 目录的 nginx.conf 并记录真实版本号
-        _update_nginx_config_for_version(target_install_path, version)
+        # 只有在没有备份的 nginx.conf 时，才更新 nginx.conf（创建默认配置）
+        # 如果有备份的 nginx.conf，说明用户已经修改过配置，应该保留用户的配置
+        if not has_backup_nginx_conf:
+            _update_nginx_config_for_version(target_install_path, version)
+        
+        # 记录真实版本号
         _write_version_metadata(target_install_path, version)
 
         return {
@@ -751,8 +762,9 @@ def _restore_protected_dirs(install_path: Path, backups: Dict[str, Path]) -> Non
                         else:
                             shutil.copytree(item, target_item, dirs_exist_ok=True)
                     else:
-                        # 只复制不存在的文件
-                        if not target_item.exists():
+                        # 对于 nginx.conf，始终覆盖（优先保留用户修改的配置）
+                        # 对于其他文件，只复制不存在的文件
+                        if item.name == "nginx.conf" or not target_item.exists():
                             shutil.copy2(item, target_item)
             else:
                 # 目标目录不存在，直接复制整个目录

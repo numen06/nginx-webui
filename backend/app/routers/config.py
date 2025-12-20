@@ -29,7 +29,7 @@ from app.utils.nginx_status_cache import (
     clear_nginx_status_cache,
 )
 from app.utils.nginx_versions import get_active_version
-from app.utils.backup import create_backup, list_backups, restore_backup, get_backup
+from app.utils.backup import create_backup, list_backups, restore_backup, get_backup, set_last_version
 from app.utils.audit import create_audit_log, get_client_ip
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -195,11 +195,20 @@ async def reload_nginx_config(
         }
 
     # 重载配置
-    # 在重载前先创建备份并应用工作副本
-    backup = create_backup(db, created_by_id=current_user.id)
+    # 重载前：备份当前线上配置（覆盖前的版本）
+    backup_before = create_backup(db, created_by_id=current_user.id)
+    
+    # 应用工作副本并重载
     apply_working_config()
     result = reload_nginx()
-    result["backup_id"] = backup.id
+    
+    # 重载成功后：备份当前线上配置（此时已经是新配置了）并标记为最后版本
+    if result["success"]:
+        backup_after = create_backup(db, created_by_id=current_user.id, is_last_version=True)
+        result["backup_id"] = backup_before.id
+        result["last_version_backup_id"] = backup_after.id
+    else:
+        result["backup_id"] = backup_before.id
 
     # 清除状态缓存（重载后状态可能变化）
     clear_nginx_status_cache()
@@ -211,7 +220,11 @@ async def reload_nginx_config(
         username=current_user.username,
         action="config_reload",
         target="nginx",
-        details={"result": result["success"], "backup_id": backup.id},
+        details={
+            "result": result["success"],
+            "backup_id": backup_before.id,
+            "last_version_backup_id": backup_after.id if result["success"] else None,
+        },
         ip_address=get_client_ip(request),
     )
 
@@ -326,6 +339,7 @@ async def get_config_backups(
                     backup.created_at.isoformat() if backup.created_at else None
                 ),
                 "created_by_id": backup.created_by_id,
+                "is_last_version": backup.is_last_version,
             }
             for backup in backups
         ],
@@ -369,6 +383,45 @@ async def create_config_backup(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"创建备份失败: {str(e)}",
+        )
+
+
+@router.get("/backup/{backup_id}/content", summary="获取备份内容")
+async def get_backup_content(
+    backup_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取指定备份的配置内容"""
+    backup = get_backup(db, backup_id)
+    if not backup:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="备份不存在")
+
+    try:
+        from pathlib import Path
+
+        backup_path = Path(backup.file_path)
+        if not backup_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="备份文件不存在"
+            )
+
+        # 读取备份文件内容
+        with open(backup_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        return {
+            "success": True,
+            "content": content,
+            "backup_id": backup_id,
+            "filename": backup.filename,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取备份内容失败: {str(e)}",
         )
 
 

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.models import Base, User, ConfigBackup, OperationLog, Certificate, GitRepository, StatisticsCache
+from sqlalchemy import inspect, text
 
 
 def _safe_mkdir(path: Path) -> None:
@@ -71,9 +72,33 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _migrate_add_is_last_version():
+    """迁移：为 config_backups 表添加 is_last_version 字段"""
+    db = SessionLocal()
+    try:
+        inspector = inspect(engine)
+        columns = [col['name'] for col in inspector.get_columns('config_backups')]
+        
+        if 'is_last_version' not in columns:
+            # 添加新列
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE config_backups ADD COLUMN is_last_version BOOLEAN DEFAULT 0 NOT NULL"))
+                conn.commit()
+            print("已为 config_backups 表添加 is_last_version 字段")
+    except Exception as e:
+        # 如果表不存在，会在 create_all 时创建，这里忽略错误
+        if "no such table" not in str(e).lower():
+            print(f"迁移 is_last_version 字段时出错: {e}")
+    finally:
+        db.close()
+
+
 def init_db():
     """初始化数据库，创建所有表"""
     Base.metadata.create_all(bind=engine)
+    
+    # 执行迁移
+    _migrate_add_is_last_version()
     
     # 创建默认管理员账户（如果不存在）
     db = SessionLocal()

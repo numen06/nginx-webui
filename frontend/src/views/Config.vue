@@ -97,6 +97,15 @@
                 <span class="btn-label">备份当前线上配置</span>
               </el-button>
               <el-button
+                type="info"
+                class="backup-btn"
+                :disabled="!selectedBackupId"
+                @click="handleEditBackup"
+              >
+                <el-icon><Edit /></el-icon>
+                <span class="btn-label">编辑当前备份版本</span>
+              </el-button>
+              <el-button
                 type="warning"
                 class="backup-btn"
                 :disabled="!selectedBackupId"
@@ -145,7 +154,8 @@ import {
   RefreshRight,
   DocumentAdd,
   RefreshLeft,
-  Upload
+  Upload,
+  Edit
 } from '@element-plus/icons-vue'
 
 const configContent = ref('')
@@ -435,6 +445,8 @@ const handleReload = async () => {
       ElMessage.success(`配置重载成功${backupInfo}`)
       configInfo.value.pending_changes = false
       await loadConfig()
+      // 刷新备份列表，以便显示新创建的最后版本备份
+      await handleLoadBackups()
     } else {
       ElMessage.error('配置重载失败: ' + response.message)
     }
@@ -454,9 +466,10 @@ const handleLoadBackups = async () => {
       const timeText = item.created_at
         ? formatDateTime(item.created_at)
         : '未知时间'
+      const lastVersionTag = item.is_last_version ? ' [最后版本]' : ''
       return {
         id: item.id,
-        label: `${timeText}（ID: ${item.id}）`
+        label: `${timeText}（ID: ${item.id}）${lastVersionTag}`
       }
     })
     // 默认选择最新的一条
@@ -486,6 +499,50 @@ const handleCreateBackup = async () => {
   } catch (error) {
     console.error('创建备份失败:', error)
     ElMessage.error(error?.detail || error?.message || '创建备份失败')
+  } finally {
+    backupLoading.value = false
+  }
+}
+
+const handleEditBackup = async () => {
+  if (!selectedBackupId.value) {
+    ElMessage.warning('请先选择一个备份版本')
+    return
+  }
+
+  try {
+    // 如果当前编辑器中有未保存的修改，提示用户将放弃这些内容
+    if (isModified.value) {
+      try {
+        await ElMessageBox.confirm(
+          '检测到当前配置有未保存的修改。\n\n加载备份内容到编辑器将替换当前输入框中的内容。\n\n是否继续？',
+          '确认加载备份',
+          {
+            type: 'warning'
+          }
+        )
+      } catch {
+        return
+      }
+    }
+  } catch {
+    return
+  }
+
+  try {
+    backupLoading.value = true
+    const res = await configApi.getBackupContent(selectedBackupId.value)
+    if (res?.success) {
+      // 将备份内容加载到编辑器
+      configContent.value = res.content
+      isModified.value = true
+      ElMessage.success('备份内容已加载到编辑器，您可以编辑后保存到工作副本')
+    } else {
+      ElMessage.error(res?.message || '获取备份内容失败')
+    }
+  } catch (error) {
+    console.error('获取备份内容失败:', error)
+    ElMessage.error(error?.detail || error?.message || '获取备份内容失败')
   } finally {
     backupLoading.value = false
   }

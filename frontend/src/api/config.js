@@ -46,6 +46,11 @@ export const configApi = {
     return api.post(`/config/restore/${backupId}`)
   },
 
+  // 获取备份内容
+  getBackupContent(backupId) {
+    return api.get(`/config/backup/${backupId}/content`)
+  },
+
   // 格式化配置
   formatConfig(content) {
     return api.post('/config/format', { content })
