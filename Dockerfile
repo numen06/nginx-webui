@@ -45,7 +45,8 @@ RUN set -eux; \
         gcc gcc-c++ make \
         pcre pcre-devel \
         zlib zlib-devel \
-        openssl openssl-devel && \
+        openssl openssl-devel \
+        certbot python3-certbot-nginx && \
     dnf clean all && \
     rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
 

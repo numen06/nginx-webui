@@ -3,11 +3,83 @@ Certbot 工具封装
 """
 import subprocess
 import re
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from app.config import get_config
+
+
+def copy_certificate_files(domain: str) -> Dict[str, Any]:
+    """
+    从 certbot 默认路径复制证书文件到项目的 ssl_dir
+
+    Args:
+        domain: 域名
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "cert_path": Optional[str],
+            "key_path": Optional[str]
+        }
+    """
+    config = get_config()
+
+    # certbot 默认路径
+    certbot_live_dir = Path("/etc/letsencrypt/live") / domain
+    source_cert = certbot_live_dir / "fullchain.pem"
+    source_key = certbot_live_dir / "privkey.pem"
+
+    # 检查源文件是否存在
+    if not source_cert.exists():
+        return {
+            "success": False,
+            "message": f"Certbot 证书文件不存在: {source_cert}",
+            "cert_path": None,
+            "key_path": None
+        }
+
+    if not source_key.exists():
+        return {
+            "success": False,
+            "message": f"Certbot 私钥文件不存在: {source_key}",
+            "cert_path": None,
+            "key_path": None
+        }
+
+    # 目标路径（项目的 ssl_dir）
+    ssl_dir = Path(config.nginx.ssl_dir)
+    ssl_dir.mkdir(parents=True, exist_ok=True)
+
+    target_cert = ssl_dir / f"{domain}.crt"
+    target_key = ssl_dir / f"{domain}.key"
+
+    try:
+        # 复制证书文件
+        shutil.copy2(source_cert, target_cert)
+        shutil.copy2(source_key, target_key)
+
+        # 确保目标路径是绝对路径
+        target_cert_abs = target_cert.resolve()
+        target_key_abs = target_key.resolve()
+
+        return {
+            "success": True,
+            "message": "证书文件复制成功",
+            "cert_path": str(target_cert_abs),
+            "key_path": str(target_key_abs)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"复制证书文件失败: {str(e)}",
+            "cert_path": None,
+            "key_path": None
+        }
+
 
 
 def request_certificate(

@@ -338,6 +338,81 @@ async def startup_event():
 
     threading.Thread(target=logrotate_scheduler, daemon=True).start()
 
+    # 启动证书自动续期定时任务（每天凌晨 3 点检查）
+    def cert_renewal_scheduler():
+        """证书自动续期定时任务"""
+        import time
+        from datetime import datetime, timedelta
+        from app.utils.certbot import renew_certificate, copy_certificate_files
+        from app.utils.certbot import get_certificate_info
+
+        print("✓ 证书自动续期定时任务已启动，将在每天凌晨 3:00 检查并续期")
+
+        while True:
+            try:
+                now = datetime.now()
+                # 下次执行时间：明天凌晨 3 点
+                next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                if next_run <= now:
+                    next_run += timedelta(days=1)
+
+                wait_seconds = (next_run - now).total_seconds()
+                logging.info(
+                    f"证书自动续期定时任务: 下次执行时间 {next_run.strftime('%Y-%m-%d %H:%M:%S')}，"
+                    f"等待 {wait_seconds:.0f} 秒"
+                )
+
+                time.sleep(wait_seconds)
+
+                # 执行续期
+                logging.info("开始执行证书自动续期检查...")
+                result = renew_certificate(domain=None)
+
+                if result["success"]:
+                    logging.info("证书自动续期完成")
+
+                    # 续期成功后，复制证书文件并更新数据库
+                    try:
+                        from app.database import SessionLocal
+                        from app.models import Certificate
+
+                        db = SessionLocal()
+                        try:
+                            certificates = db.query(Certificate).filter(
+                                Certificate.auto_renew == True
+                            ).all()
+
+                            for cert in certificates:
+                                copy_result = copy_certificate_files(cert.domain)
+                                if copy_result["success"]:
+                                    cert.cert_path = copy_result["cert_path"]
+                                    cert.key_path = copy_result["key_path"]
+
+                                    cert_info = get_certificate_info(cert.cert_path)
+                                    if cert_info.get("valid_to"):
+                                        try:
+                                            cert.valid_to = datetime.fromisoformat(
+                                                cert_info["valid_to"].replace("Z", "+00:00")
+                                            )
+                                        except:
+                                            pass
+                                    if cert_info.get("issuer"):
+                                        cert.issuer = cert_info["issuer"]
+
+                            db.commit()
+                            logging.info("证书文件已更新到持久化目录")
+                        finally:
+                            db.close()
+                    except Exception as exc:
+                        logging.error("续期后更新证书文件失败: %s", exc)
+                else:
+                    logging.info("证书自动续期检查完成，无需续期的证书")
+            except Exception as exc:
+                logging.error("证书自动续期定时任务异常: %s", exc, exc_info=True)
+                time.sleep(3600)
+
+    threading.Thread(target=cert_renewal_scheduler, daemon=True).start()
+
 
 # 挂载静态文件目录（前端打包文件）
 static_dir = Path(__file__).parent.parent / "static"

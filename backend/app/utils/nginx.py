@@ -5,7 +5,7 @@ Nginx 操作工具
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 try:
     import psutil
@@ -1378,10 +1378,367 @@ def get_nginx_status() -> Dict[str, Any]:
     except Exception as e:
         return {
             "running": False,
-            "pid": None,
+            "pid": False,
             "pid_file": None,
             "version": None,
             "uptime": None,
             "error": str(e),
             "available": True,
+        }
+
+
+# ==================== SSL 配置相关函数 ====================
+
+import re as _re
+
+
+def _find_server_blocks(content: str) -> List[Dict[str, Any]]:
+    """
+    解析 nginx 配置文件中的所有 server block
+
+    Args:
+        content: nginx 配置文件内容
+
+    Returns:
+        List[Dict]: server block 列表，每个元素包含 start, end, content, server_names
+    """
+    blocks = []
+    lines = content.split('\n')
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # 查找 server 块的开始
+        if _re.match(r'^server\s*\{', line) or _re.match(r'^server\{', line):
+            start_line = i
+            brace_count = line.count('{') - line.count('}')
+            block_lines = [lines[i]]
+
+            i += 1
+            while i < len(lines) and brace_count > 0:
+                block_lines.append(lines[i])
+                brace_count += lines[i].count('{') - lines[i].count('}')
+                i += 1
+
+            block_content = '\n'.join(block_lines)
+
+            # 提取 server_name
+            server_names = []
+            for bl in block_lines:
+                bl_stripped = bl.strip()
+                if bl_stripped.startswith('#'):
+                    continue
+                name_match = _re.search(r'server_name\s+([^;]+);', bl_stripped)
+                if name_match:
+                    names_str = name_match.group(1).strip()
+                    for name in names_str.split():
+                        name = name.strip().rstrip(';')
+                        if name:
+                            server_names.append(name)
+
+            # 检查是否已有 SSL 配置
+            has_ssl = any(
+                _re.search(r'listen\s+\d+\s+ssl', bl, _re.IGNORECASE)
+                for bl in block_lines
+            )
+            has_443 = any(
+                _re.search(r'listen\s+443', bl, _re.IGNORECASE)
+                for bl in block_lines
+            )
+
+            blocks.append({
+                'start': start_line,
+                'end': i - 1,
+                'content': block_content,
+                'server_names': server_names,
+                'has_ssl': has_ssl or has_443,
+            })
+        else:
+            i += 1
+
+    return blocks
+
+
+def _domain_matches(domain: str, pattern: str) -> bool:
+    """
+    检查域名是否匹配模式（支持通配符）
+
+    Args:
+        domain: 要匹配的域名
+        pattern: 模式（如 *.example.com）
+
+    Returns:
+        bool: 是否匹配
+    """
+    domain = domain.lower().strip()
+    pattern = pattern.lower().strip()
+
+    if pattern == domain:
+        return True
+
+    # 处理通配符模式 *.example.com
+    if pattern.startswith('*.'):
+        suffix = pattern[2:]  # example.com
+        # domain 必须以 .suffix 结尾，或者等于 suffix
+        if domain == suffix:
+            return True
+        if domain.endswith('.' + suffix):
+            # 确保通配符前面有至少一个子域名部分
+            prefix = domain[:-len(suffix) - 1]
+            if prefix and '.' not in prefix:
+                return True
+
+    return False
+
+
+def find_server_block_by_domain(config_content: str, domain: str) -> Optional[Dict[str, Any]]:
+    """
+    查找匹配指定域名的 server block
+
+    Args:
+        config_content: nginx 配置文件内容
+        domain: 域名
+
+    Returns:
+        Optional[Dict]: 匹配的 server block 信息，包含 start, end, content, server_names
+    """
+    blocks = _find_server_blocks(config_content)
+
+    # 先精确匹配
+    for block in blocks:
+        if domain in block['server_names']:
+            return block
+
+    # 再通配符匹配
+    for block in blocks:
+        for name in block['server_names']:
+            if _domain_matches(domain, name):
+                return block
+
+    # 查找默认 server block (server_name _)
+    for block in blocks:
+        if '_' in block['server_names']:
+            return block
+
+    return None
+
+
+def _add_ssl_to_server_block_content(block_content: str, cert_path: str, key_path: str) -> str:
+    """
+    在现有 server block 内容中添加 SSL 配置
+
+    Args:
+        block_content: server block 的内容
+        cert_path: 证书文件路径
+        key_path: 私钥文件路径
+
+    Returns:
+        str: 修改后的 server block 内容
+    """
+    lines = block_content.split('\n')
+    new_lines = []
+
+    has_listen_443_ssl = False
+    has_listen_80 = False
+    has_ssl_cert = False
+    has_redirect = False
+    insert_after_listen = -1
+    first_listen_line = -1
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # 检查是否已有 443 SSL listen
+        if _re.search(r'listen\s+443\s+ssl', stripped, _re.IGNORECASE):
+            has_listen_443_ssl = True
+
+        # 检查是否有 listen 80
+        if _re.search(r'listen\s+80', stripped, _re.IGNORECASE):
+            has_listen_80 = True
+            if first_listen_line < 0:
+                first_listen_line = i
+
+        # 检查是否已有 SSL 证书配置
+        if 'ssl_certificate' in stripped and 'ssl_certificate_key' not in stripped:
+            has_ssl_cert = True
+
+        # 检查是否已有重定向
+        if 'return 301' in stripped or 'return 302' in stripped or 'rewrite' in stripped:
+            if 'https' in stripped:
+                has_redirect = True
+
+        new_lines.append(line)
+
+    # 如果已经有完整的 SSL 配置，不重复添加
+    if has_listen_443_ssl and has_ssl_cert:
+        return block_content
+
+    result_lines = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # 在 listen 80 后面插入 443 SSL listen
+        if _re.search(r'listen\s+80', stripped, _re.IGNORECASE) and not has_listen_443_ssl:
+            indent = line[:len(line) - len(line.lstrip())]
+            result_lines.append(line)
+            # 插入 443 SSL listen
+            result_lines.append(f'{indent}listen 443 ssl;')
+            result_lines.append(f'{indent}listen [::]:443 ssl;')
+            insert_after_listen = len(result_lines) - 1
+            continue
+
+        result_lines.append(line)
+
+        # 在 server_name 行之后插入 SSL 证书配置
+        if stripped.startswith('server_name') and not has_ssl_cert and insert_after_listen > 0:
+            indent = line[:len(line) - len(line.lstrip())]
+            # 获取正确的缩进（server_name 的缩进 + 一级）
+            if indent:
+                ssl_indent = indent + '    '
+            else:
+                ssl_indent = '    '
+            result_lines.append('')
+            result_lines.append(f'{indent}# SSL 证书配置')
+            result_lines.append(f'{indent}ssl_certificate {cert_path};')
+            result_lines.append(f'{indent}ssl_certificate_key {key_path};')
+            result_lines.append('')
+            result_lines.append(f'{indent}# SSL 协议和加密套件')
+            result_lines.append(f'{indent}ssl_protocols TLSv1.2 TLSv1.3;')
+            result_lines.append(f'{indent}ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;')
+            result_lines.append(f'{indent}ssl_prefer_server_ciphers on;')
+            has_ssl_cert = True  # 标记已添加
+
+    # 如果没有 listen 80 也没有 listen 443，说明是空的 server block
+    # 添加基本配置
+    if not has_listen_80 and not has_listen_443_ssl:
+        # 在 server { 后面插入
+        final_lines = []
+        inserted = False
+        indent = '    '
+        for i, line in enumerate(result_lines):
+            final_lines.append(line)
+            if not inserted and '{' in line and 'server' in line:
+                final_lines.append(f'{indent}listen 80;')
+                final_lines.append(f'{indent}listen 443 ssl;')
+                final_lines.append(f'{indent}listen [::]:443 ssl;')
+                inserted = True
+        result_lines = final_lines
+
+    return '\n'.join(result_lines)
+
+
+def _create_ssl_server_blocks(domain: str, cert_path: str, key_path: str) -> str:
+    """
+    创建新的 SSL server block（包含 HTTP 80 重定向和 HTTPS 443 两个 block）
+
+    Args:
+        domain: 域名
+        cert_path: 证书文件路径
+        key_path: 私钥文件路径
+
+    Returns:
+        str: nginx server block 配置
+    """
+    return f"""
+# HTTP -> HTTPS 重定向
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+    return 301 https://$host$request_uri;
+}}
+
+# HTTPS server
+server {{
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {domain};
+
+    # SSL 证书配置
+    ssl_certificate {cert_path};
+    ssl_certificate_key {key_path};
+
+    # SSL 协议和加密套件
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers on;
+
+    # 日志配置
+    access_log /app/data/logs/{domain}_access.log;
+    error_log  /app/data/logs/{domain}_error.log;
+
+    location / {{
+        root   html;
+        index  index.html index.htm;
+    }}
+}}
+"""
+
+
+def apply_ssl_config(domain: str, cert_path: str, key_path: str) -> Dict[str, Any]:
+    """
+    主函数：自动为域名添加 SSL 配置到 nginx 配置文件
+
+    优先查找现有 server block，找到则添加 SSL 配置；找不到则创建新的 server block。
+    修改保存到工作副本。
+
+    Args:
+        domain: 域名
+        cert_path: 证书文件路径
+        key_path: 私钥文件路径
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "action": str,  # "modified" 或 "created"
+        }
+    """
+    try:
+        # 读取工作副本配置
+        config_content = get_config_content(use_working_copy=True)
+
+        # 查找匹配的 server block
+        existing_block = find_server_block_by_domain(config_content, domain)
+
+        if existing_block:
+            # 修改现有 server block
+            lines = config_content.split('\n')
+
+            # 替换现有的 server block 内容
+            new_block_content = _add_ssl_to_server_block_content(
+                existing_block['content'], cert_path, key_path
+            )
+
+            # 重建配置
+            new_lines = lines[:existing_block['start']]
+            new_lines.append(new_block_content)
+            new_lines.extend(lines[existing_block['end'] + 1:])
+
+            new_content = '\n'.join(new_lines)
+            save_config_content(new_content)
+
+            return {
+                "success": True,
+                "message": f"已在现有 server block 中添加 SSL 配置（域名: {domain}）",
+                "action": "modified"
+            }
+        else:
+            # 创建新的 server block，追加到配置末尾
+            new_blocks = _create_ssl_server_blocks(domain, cert_path, key_path)
+            new_content = config_content.rstrip('\n') + '\n' + new_blocks + '\n'
+            save_config_content(new_content)
+
+            return {
+                "success": True,
+                "message": f"已创建新的 SSL server block（域名: {domain}）",
+                "action": "created"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"添加 SSL 配置失败: {str(e)}",
+            "action": "error"
         }

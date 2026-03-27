@@ -32,6 +32,7 @@ from app.utils.certbot import (
     renew_certificate,
     list_certificates,
     get_certificate_info,
+    copy_certificate_files,
 )
 from app.utils.audit import create_audit_log, get_client_ip
 
@@ -715,10 +716,32 @@ async def request_cert(
             "output": result["output"],
         }
 
+    domain = request_data.domains[0]
+
+    # 复制证书文件到持久化目录
+    copy_result = copy_certificate_files(domain)
+    if not copy_result["success"]:
+        return {
+            "success": False,
+            "message": f"证书申请成功但复制文件失败: {copy_result['message']}",
+            "output": result["output"],
+        }
+
+    cert_path = copy_result["cert_path"]
+    key_path = copy_result["key_path"]
+
+    # 自动修改 nginx 配置添加 SSL
+    try:
+        from app.utils.nginx import apply_ssl_config
+        ssl_result = apply_ssl_config(domain, cert_path, key_path)
+        ssl_message = ssl_result.get("message", "")
+    except Exception as e:
+        ssl_message = f"自动添加 SSL 配置失败: {str(e)}"
+
     # 保存证书记录
-    if result["cert_path"] and result["key_path"]:
+    if cert_path and key_path:
         # 获取证书信息
-        cert_info = get_certificate_info(result["cert_path"])
+        cert_info = get_certificate_info(cert_path)
 
         # 解析有效期
         valid_from = None
@@ -739,9 +762,9 @@ async def request_cert(
                 pass
 
         cert = Certificate(
-            domain=request_data.domains[0],
-            cert_path=result["cert_path"],
-            key_path=result["key_path"],
+            domain=domain,
+            cert_path=cert_path,
+            key_path=key_path,
             issuer=cert_info.get("issuer", "Let's Encrypt"),
             valid_from=valid_from,
             valid_to=valid_to,
@@ -758,15 +781,24 @@ async def request_cert(
             user_id=current_user.id,
             username=current_user.username,
             action="cert_request",
-            target=request_data.domains[0],
-            details={"domains": request_data.domains, "email": request_data.email},
+            target=domain,
+            details={
+                "domains": request_data.domains,
+                "email": request_data.email,
+                "ssl_config": ssl_message,
+            },
             ip_address=get_client_ip(request),
         )
 
+        message = f"证书申请成功"
+        if ssl_message and "失败" not in ssl_message:
+            message += f"，{ssl_message}"
+
         return {
             "success": True,
-            "message": "证书申请成功",
+            "message": message,
             "output": result["output"],
+            "ssl_config": ssl_message,
             "certificate": {
                 "id": cert.id,
                 "domain": cert.domain,
@@ -806,24 +838,70 @@ async def renew_cert(
                 "output": result.get("output", "")
             }
 
-    # 如果续期成功，更新证书信息
+    # 如果续期成功，复制新的证书文件并更新nginx配置
     if result["success"]:
-        # 如果续期成功，certbot会更新证书文件，我们需要更新数据库中的证书信息
-        # 但手动上传的证书路径可能不在certbot的标准路径，需要重新读取证书文件
-        cert_info = get_certificate_info(cert.cert_path)
+        # 复制新的证书文件
+        copy_result = copy_certificate_files(cert.domain)
+        ssl_message = ""
 
-        if cert_info.get("valid_to"):
+        if copy_result["success"]:
+            # 更新证书路径为新复制后的路径
+            cert.cert_path = copy_result["cert_path"]
+            cert.key_path = copy_result["key_path"]
+
+            # 重新读取证书信息
+            cert_info = get_certificate_info(cert.cert_path)
+
+            if cert_info.get("valid_to"):
+                try:
+                    cert.valid_to = datetime.fromisoformat(
+                        cert_info["valid_to"].replace("Z", "+00:00")
+                    )
+                except:
+                    pass
+
+            if cert_info.get("issuer"):
+                cert.issuer = cert_info["issuer"]
+
+            # 更新nginx配置中的证书路径
             try:
-                cert.valid_to = datetime.fromisoformat(
-                    cert_info["valid_to"].replace("Z", "+00:00")
-                )
-            except:
-                pass
-
-        if cert_info.get("issuer"):
-            cert.issuer = cert_info["issuer"]
+                from app.utils.nginx import apply_ssl_config
+                ssl_result = apply_ssl_config(cert.domain, cert.cert_path, cert.key_path)
+                ssl_message = ssl_result.get("message", "")
+            except Exception as e:
+                ssl_message = f"自动更新 SSL 配置失败: {str(e)}"
+        else:
+            # 如果复制失败，只更新证书信息，路径保持不变
+            cert_info = get_certificate_info(cert.cert_path)
+            if cert_info.get("valid_to"):
+                try:
+                    cert.valid_to = datetime.fromisoformat(
+                        cert_info["valid_to"].replace("Z", "+00:00")
+                    )
+                except:
+                    pass
+            if cert_info.get("issuer"):
+                cert.issuer = cert_info["issuer"]
 
         db.commit()
+
+        # 记录操作日志
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="cert_renew",
+            target=cert.domain,
+            details={"success": True, "ssl_config": ssl_message},
+            ip_address=get_client_ip(request),
+        )
+
+        return {
+            "success": True,
+            "message": f"证书续期成功{f'，{ssl_message}' if ssl_message and '失败' not in ssl_message else ''}",
+            "output": result["output"],
+            "ssl_config": ssl_message
+        }
 
     # 记录操作日志
     create_audit_log(
@@ -832,7 +910,7 @@ async def renew_cert(
         username=current_user.username,
         action="cert_renew",
         target=cert.domain,
-        details={"success": result["success"]},
+        details={"success": False},
         ip_address=get_client_ip(request),
     )
 

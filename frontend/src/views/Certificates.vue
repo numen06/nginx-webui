@@ -65,7 +65,24 @@
         </el-table-column>
         <el-table-column prop="valid_to" label="过期时间" width="180" align="center">
           <template #default="scope">
-            {{ formatDateTime(scope.row.valid_to) }}
+            <div class="expiry-cell">
+              <span :class="{ 'expiring-soon': scope.row.days_until_expiry !== null && scope.row.days_until_expiry <= 30 && scope.row.days_until_expiry > 0, 'expired': scope.row.days_until_expiry !== null && scope.row.days_until_expiry <= 0 }">
+                {{ formatDateTime(scope.row.valid_to) || '-' }}
+              </span>
+              <span v-if="scope.row.days_until_expiry !== null" class="expiry-days" :class="{ 'expiring-soon': scope.row.days_until_expiry <= 30 && scope.row.days_until_expiry > 0, 'expired': scope.row.days_until_expiry <= 0 }">
+                {{ scope.row.days_until_expiry > 0 ? scope.row.days_until_expiry + '天' : '已过期' }}
+              </span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="自动续期" width="100" align="center">
+          <template #default="scope">
+            <el-switch
+              v-model="scope.row.auto_renew"
+              @change="handleToggleAutoRenew(scope.row)"
+              :loading="scope.row._toggling"
+              size="small"
+            />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" align="center">
@@ -109,6 +126,77 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 申请证书对话框 -->
+    <el-dialog
+      v-model="requestDialogVisible"
+      title="申请 Let's Encrypt 免费证书"
+      width="560px"
+      top="8vh"
+      :close-on-click-modal="false"
+      class="cert-request-dialog"
+    >
+      <el-form :model="requestForm" :rules="requestRules" ref="requestFormRef" label-width="100px" class="compact-form">
+        <el-form-item label="域名" prop="domain">
+          <el-input
+            v-model="requestForm.domain"
+            placeholder="例如：example.com"
+          />
+          <div class="form-tip">主域名，将用于证书申请和 Nginx 配置</div>
+        </el-form-item>
+
+        <el-form-item label="邮箱地址" prop="email">
+          <el-input
+            v-model="requestForm.email"
+            placeholder="例如：admin@example.com"
+          />
+          <div class="form-tip">Let's Encrypt 会通过此邮箱发送证书到期通知</div>
+        </el-form-item>
+
+        <el-form-item label="验证方式" prop="validation_method">
+          <el-radio-group v-model="requestForm.validation_method">
+            <el-radio value="http">
+              <span>HTTP 验证</span>
+              <div class="radio-desc">需要域名已解析到本服务器且 Nginx 正在运行</div>
+            </el-radio>
+            <el-radio value="dns">
+              <span>DNS 验证</span>
+              <div class="radio-desc">需要手动添加 DNS TXT 记录</div>
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 16px;"
+        >
+          <template #title>
+            <span style="font-size: 12px;">
+              申请成功后将自动完成：1) 证书文件持久化存储  2) 自动修改 Nginx 配置添加 SSL  3) 开启自动续期
+            </span>
+          </template>
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="info" @click="requestDialogVisible = false">
+            <el-icon><CloseBold /></el-icon>
+            <span class="btn-label">取消</span>
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="requesting"
+            :disabled="isRequestDisabled"
+            @click="handleRequestSubmit"
+          >
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">申请证书</span>
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
 
     <!-- 上传证书对话框 -->
     <el-dialog
@@ -277,6 +365,38 @@ const archiveUploadRef = ref(null)
 const copyTextDialogVisible = ref(false)
 const copyTextContent = ref('')
 
+// 申请证书对话框
+const requestDialogVisible = ref(false)
+const requesting = ref(false)
+const requestFormRef = ref(null)
+const requestForm = ref({
+  domain: '',
+  email: '',
+  validation_method: 'http'
+})
+
+const isRequestDisabled = computed(() => {
+  return !requestForm.value.domain || !requestForm.value.email
+})
+
+const requestRules = {
+  domain: [
+    { required: true, message: '请输入域名', trigger: 'blur' },
+    {
+      pattern: /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/,
+      message: '请输入有效的域名',
+      trigger: 'blur'
+    }
+  ],
+  email: [
+    { required: true, message: '请输入邮箱地址', trigger: 'blur' },
+    { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' }
+  ],
+  validation_method: [
+    { required: true, message: '请选择验证方式', trigger: 'change' }
+  ]
+}
+
 const uploadForm = ref({
   domain: '',
   certFile: null,
@@ -326,7 +446,42 @@ const loadCertificates = async () => {
 }
 
 const handleRequest = () => {
-  ElMessage.info('申请证书功能待实现')
+  requestForm.value = {
+    domain: '',
+    email: '',
+    validation_method: 'http'
+  }
+  requestDialogVisible.value = true
+}
+
+const handleRequestSubmit = async () => {
+  if (!requestFormRef.value) return
+
+  try {
+    await requestFormRef.value.validate()
+  } catch (error) {
+    return
+  }
+
+  requesting.value = true
+  try {
+    const response = await certificatesApi.requestCertificate(
+      [requestForm.value.domain],
+      requestForm.value.email,
+      requestForm.value.validation_method
+    )
+    if (response.success) {
+      ElMessage.success(response.message)
+      requestDialogVisible.value = false
+      loadCertificates()
+    } else {
+      ElMessage.error(response.message || '证书申请失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '证书申请失败')
+  } finally {
+    requesting.value = false
+  }
 }
 
 const handleUpload = () => {
@@ -486,11 +641,28 @@ const handleUploadSubmit = async () => {
 
 const handleRenew = async (cert) => {
   try {
-    await certificatesApi.renewCertificate(cert.id)
-    ElMessage.success('证书续期成功')
+    const response = await certificatesApi.renewCertificate(cert.id)
+    if (response.success) {
+      ElMessage.success(response.message || '证书续期成功')
+    } else {
+      ElMessage.error(response.message || '证书续期失败')
+    }
     loadCertificates()
   } catch (error) {
-    ElMessage.error('证书续期失败')
+    ElMessage.error(error.detail || error.message || '证书续期失败')
+  }
+}
+
+const handleToggleAutoRenew = async (cert) => {
+  cert._toggling = true
+  try {
+    await certificatesApi.updateCertificate(cert.id, cert.auto_renew)
+    ElMessage.success(cert.auto_renew ? '已开启自动续期' : '已关闭自动续期')
+  } catch (error) {
+    cert.auto_renew = !cert.auto_renew
+    ElMessage.error(error.detail || error.message || '操作失败')
+  } finally {
+    cert._toggling = false
   }
 }
 
@@ -703,6 +875,52 @@ onMounted(() => {
 
 .cert-upload-dialog :deep(.el-upload .el-button) {
   width: 100%;
+}
+
+.expiry-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.expiry-days {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.expiry-days.expiring-soon {
+  color: var(--el-color-warning);
+}
+
+.expiry-days.expired {
+  color: var(--el-color-danger);
+}
+
+.expiring-soon {
+  color: var(--el-color-warning) !important;
+}
+
+.expired {
+  color: var(--el-color-danger) !important;
+}
+
+.radio-desc {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+.cert-request-dialog :deep(.el-radio) {
+  height: auto;
+  margin-right: 0;
+  margin-bottom: 8px;
+  align-items: flex-start;
+}
+
+.cert-request-dialog :deep(.el-radio__label) {
+  white-space: normal;
 }
 </style>
 

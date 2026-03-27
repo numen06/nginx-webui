@@ -9,7 +9,7 @@ services:
       - "80:80"
     volumes:
       - /opt/nginx-webui/data:/app/data
+      - /opt/nginx-webui/letsencrypt:/etc/letsencrypt
     environment:
       - APP_PORT=8000
     restart: always
-
