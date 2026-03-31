@@ -22,7 +22,8 @@ RUN npm run build && \
     rm -rf node_modules && \
     rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
-# ==================== 共用：基础 RPM（两阶段共用，避免重复安装）====================
+# ==================== 共用：基础 RPM（运行镜像与预编译 nginx 共用，含源码编译链）====================
+# 说明：最终镜像内需支持用户自行编译 Nginx 等，故 gcc/make/*-devel 与运行时库放在同一基础层，只 dnf 一次。
 FROM ac2-registry.cn-hangzhou.cr.aliyuncs.com/ac2/base:alinux3.2104-py312 AS alinux-dnf-base
 
 ARG DNF_TIMEOUT=30
@@ -41,7 +42,9 @@ RUN set -eux; \
         --setopt=tsflags=nodocs \
         tar \
         ca-certificates \
-        pcre zlib openssl && \
+        pcre zlib openssl \
+        gcc gcc-c++ make \
+        pcre-devel zlib-devel openssl-devel && \
     dnf clean all && \
     rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
 
@@ -49,23 +52,6 @@ RUN set -eux; \
 FROM alinux-dnf-base AS nginx-builder
 
 ARG NGINX_VERSION=1.29.3
-ARG DNF_TIMEOUT=30
-ARG DNF_RETRIES=10
-ARG DNF_MAX_PARALLEL_DOWNLOADS=10
-ARG DNF_INSTALL_WEAK_DEPS=False
-
-# 仅增量安装编译链与 *-devel（基础库已在 alinux-dnf-base）
-RUN set -eux; \
-    dnf install -y \
-        --setopt=timeout=${DNF_TIMEOUT} \
-        --setopt=retries=${DNF_RETRIES} \
-        --setopt=max_parallel_downloads=${DNF_MAX_PARALLEL_DOWNLOADS} \
-        --setopt=install_weak_deps=${DNF_INSTALL_WEAK_DEPS} \
-        --setopt=tsflags=nodocs \
-        gcc gcc-c++ make \
-        pcre-devel zlib-devel openssl-devel && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
 
 WORKDIR /app
 
@@ -93,7 +79,7 @@ ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
-# 仅增量安装运行时工具与 certbot（tar/pcre/zlib/openssl/ca-certificates 已在 alinux-dnf-base）
+# 仅增量安装运行时工具与 certbot（基础层已含 tar/pcre/zlib/openssl、证书与编译链）
 # 说明：
 # - 阿里云龙蜥镜像在某些环境下 RPM 数据库可能是 bdb_ro，只读导致 dnf 事务失败
 # - 这里先尽量修复 RPM 数据库，再用 dnf 安装，避免 update 带来额外风险
