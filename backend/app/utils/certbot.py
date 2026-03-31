@@ -466,15 +466,15 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         if proc.poll() is not None:
             rest = proc.stdout.read() or ""
             full = "".join(buf) + rest
-        return {
-            "success": False,
-            "message": "certbot 在显示 DNS 要求前已退出，请查看输出",
-            "job_id": None,
-            "record_name": None,
-            "record_value": None,
-            "output": full,
-            "error_code": "certbot_exited_early",
-        }
+            return {
+                "success": False,
+                "message": "certbot 在显示 DNS 要求前已退出，请查看输出",
+                "job_id": None,
+                "record_name": None,
+                "record_value": None,
+                "output": full,
+                "error_code": "certbot_exited_early",
+            }
         line = proc.stdout.readline()
         if not line:
             time.sleep(0.05)
