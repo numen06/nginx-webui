@@ -164,36 +164,70 @@
       <div v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1" class="dns-wizard-panel">
         <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
           <template #title>
-            <span class="dns-alert-title">请在域名 DNS 控制台添加以下 TXT 记录（主机记录名与值须完全一致）</span>
+            <span class="dns-alert-title">请在域名 DNS 控制台新增 1 条 TXT 记录（把下面字段一字不差填进去）</span>
           </template>
         </el-alert>
-        <el-descriptions :column="1" border size="small" class="dns-rec-desc">
-          <el-descriptions-item label="记录类型">TXT</el-descriptions-item>
-          <el-descriptions-item label="主机记录 / 名称">
-            <span class="mono-text">{{ dnsRecordName || '-' }}</span>
-            <el-button size="small" text type="primary" :disabled="!dnsRecordName" @click="handleCopy(dnsRecordName)">复制</el-button>
-          </el-descriptions-item>
-          <el-descriptions-item label="记录值">
-            <span class="mono-text dns-value">{{ dnsRecordValue || '-' }}</span>
-            <el-button size="small" text type="primary" :disabled="!dnsRecordValue" @click="handleCopy(dnsRecordValue)">复制</el-button>
-          </el-descriptions-item>
-        </el-descriptions>
+        <el-card shadow="never" class="dns-guide-card">
+          <template #header>
+            <span class="dns-guide-title">第 1 步：进入域名 DNS 管理</span>
+          </template>
+          <ol class="dns-steps-list">
+            <li>登录你的域名服务商控制台（在哪里买的域名就去哪里）</li>
+            <li>找到域名 <span class="mono-text">{{ requestForm.domain || '-' }}</span> 的 DNS 解析页面</li>
+            <li>点击“新增记录”或“添加解析”</li>
+          </ol>
+        </el-card>
+
+        <el-card shadow="never" class="dns-guide-card">
+          <template #header>
+            <span class="dns-guide-title">第 2 步：按下表填写记录</span>
+          </template>
+          <el-descriptions :column="1" border size="small" class="dns-rec-desc">
+            <el-descriptions-item label="记录类型">TXT</el-descriptions-item>
+            <el-descriptions-item label="主机记录 / Name">
+              <span class="mono-text">{{ dnsHostRecord || dnsRecordName || '-' }}</span>
+              <el-button size="small" text type="primary" :disabled="!dnsHostRecord && !dnsRecordName" @click="handleCopy(dnsHostRecord || dnsRecordName)">复制</el-button>
+              <div class="form-tip">如果平台要求填写完整主机名，也可填：{{ dnsRecordName || '-' }}</div>
+            </el-descriptions-item>
+            <el-descriptions-item label="记录值 / Value">
+              <span class="mono-text dns-value">{{ dnsRecordValue || '-' }}</span>
+              <el-button size="small" text type="primary" :disabled="!dnsRecordValue" @click="handleCopy(dnsRecordValue)">复制</el-button>
+            </el-descriptions-item>
+            <el-descriptions-item label="TTL">默认即可（建议 600 秒或 Auto）</el-descriptions-item>
+          </el-descriptions>
+          <el-alert type="info" :closable="false" class="dns-field-tip" show-icon>
+            <template #title>
+              不同平台字段名可能叫：主机记录/记录名/Name、记录值/Value/内容，含义相同。
+            </template>
+          </el-alert>
+        </el-card>
+
+        <el-card shadow="never" class="dns-guide-card">
+          <template #header>
+            <span class="dns-guide-title">第 3 步：保存并检测是否生效</span>
+          </template>
+          <p class="form-tip">保存后通常 1-10 分钟生效，最长可能更久。你可以开启自动检测，系统会每 5 秒检查一次。</p>
+          <div class="dns-verify-row">
+            <el-checkbox v-model="dnsAutoPoll">每 5 秒自动检测一次</el-checkbox>
+            <el-tag v-if="dnsVerified" type="success" size="small">TXT 已匹配，可点击“完成申请”</el-tag>
+            <el-tag v-else-if="dnsLastCheckMsg" type="info" size="small">{{ dnsLastCheckMsg }}</el-tag>
+          </div>
+          <el-button type="primary" plain size="small" :loading="dnsChecking" @click="runDnsVerifyOnce">
+            立即检测 DNS
+          </el-button>
+          <el-alert type="error" :closable="false" class="dns-troubleshoot" show-icon>
+            <template #title>
+              检测失败时请依次检查：1) 记录类型是否为 TXT；2) 主机记录是否填错（建议先用上方复制值）；3) 记录值是否有多余空格/换行；4) 是否改到了错误的域名。
+            </template>
+          </el-alert>
+        </el-card>
+
         <div class="dns-help-links">
-          <span class="form-tip">常见 DNS 控制台：</span>
+          <span class="form-tip">常见 DNS 控制台教程：</span>
           <el-link type="primary" href="https://docs.dnspod.cn/dns/console/manage/" target="_blank" :underline="false">腾讯云 DNSPod</el-link>
           <el-link type="primary" href="https://help.aliyun.com/document_detail/29725.html" target="_blank" :underline="false">阿里云</el-link>
           <el-link type="primary" href="https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/" target="_blank" :underline="false">Cloudflare</el-link>
         </div>
-        <el-divider content-position="left">验证解析</el-divider>
-        <p class="form-tip">添加保存后，全球 DNS 生效可能需要数分钟。可开启自动检测或手动点击检测。</p>
-        <div class="dns-verify-row">
-          <el-checkbox v-model="dnsAutoPoll">每 5 秒自动检测一次</el-checkbox>
-          <el-tag v-if="dnsVerified" type="success" size="small">TXT 已匹配</el-tag>
-          <el-tag v-else-if="dnsLastCheckMsg" type="info" size="small">{{ dnsLastCheckMsg }}</el-tag>
-        </div>
-        <el-button type="primary" plain size="small" :loading="dnsChecking" @click="runDnsVerifyOnce">
-          立即检测 DNS
-        </el-button>
       </div>
 
       <!-- 表单：HTTP 或 DNS 步骤 0 -->
@@ -483,6 +517,18 @@ let dnsPollTimer = null
 
 const isRequestDisabled = computed(() => {
   return !requestForm.value.domain || !requestForm.value.email
+})
+
+const dnsHostRecord = computed(() => {
+  const fqdn = String(dnsRecordName.value || '').trim().replace(/\.$/, '')
+  const domain = String(requestForm.value.domain || '').trim().replace(/^\*\./, '')
+  if (!fqdn) return ''
+  if (!domain) return fqdn
+  if (fqdn === domain) return '@'
+  if (fqdn.endsWith(`.${domain}`)) {
+    return fqdn.slice(0, -1 * (`.${domain}`).length) || '@'
+  }
+  return fqdn
 })
 
 const escapeHtml = (s) => {
@@ -1274,8 +1320,33 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+.dns-guide-card {
+  margin-bottom: 12px;
+  border: 1px solid var(--el-border-color-light);
+}
+
+.dns-guide-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.dns-steps-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.8;
+  font-size: 13px;
+}
+
 .dns-rec-desc {
-  margin-top: 8px;
+  margin-top: 2px;
+}
+
+.dns-field-tip {
+  margin-top: 10px;
+}
+
+.dns-troubleshoot {
+  margin-top: 10px;
 }
 
 .mono-text {
