@@ -7,9 +7,12 @@ import shutil
 import threading
 import time
 import uuid
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
+from urllib.parse import quote
+from urllib.request import urlopen, Request
 
 from app.config import get_config
 
@@ -599,10 +602,41 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
         except Exception:
             continue
 
+    # 兜底：DNS-over-HTTPS（不依赖系统安装 dig/nslookup）
+    doh_endpoints = [
+        ("GoogleDoH", f"https://dns.google/resolve?name={quote(name)}&type=TXT"),
+        ("CloudflareDoH", f"https://cloudflare-dns.com/dns-query?name={quote(name)}&type=TXT"),
+    ]
+    for provider, url in doh_endpoints:
+        try:
+            req = Request(url, headers={"Accept": "application/dns-json", "User-Agent": "nginx-webui/1.0"})
+            with urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            answers = data.get("Answer") or []
+            txt_values: List[str] = []
+            for ans in answers:
+                if int(ans.get("type", 0)) != 16:
+                    continue
+                val = str(ans.get("data", "")).strip()
+                if val.startswith('"') and val.endswith('"'):
+                    val = val[1:-1]
+                txt_values.append(val)
+            joined = " ".join(txt_values)
+            matched = expected in joined or any(expected in v for v in txt_values)
+            return {
+                "success": True,
+                "matched": matched,
+                "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                "checked_with": provider,
+                "records": txt_values,
+            }
+        except Exception:
+            continue
+
     return {
         "success": False,
         "matched": False,
-        "message": "系统未找到 dig/nslookup，无法检测 DNS",
+        "message": "系统未找到 dig/nslookup，且 DNS-over-HTTPS 查询失败，无法检测 DNS",
         "checked_with": None,
         "records": [],
     }
