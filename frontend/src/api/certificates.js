@@ -66,6 +66,29 @@ export const certificatesApi = {
     })
   },
 
+  /** DNS 验证：启动 certbot 并获取 TXT */
+  dnsChallengeStart(domain, email) {
+    return api.post('/certificates/dns-challenge/start', { domain, email })
+  },
+
+  /** DNS 验证：TXT 生效后继续签发 */
+  dnsChallengeComplete(jobId) {
+    return api.post('/certificates/dns-challenge/complete', { job_id: jobId })
+  },
+
+  /** 检测公网 DNS TXT */
+  verifyDns(recordName, recordValue) {
+    return api.post('/certificates/verify-dns', {
+      record_name: recordName,
+      record_value: recordValue
+    })
+  },
+
+  /** 校验证书文件（openssl） */
+  verifyCert(certId) {
+    return api.post('/certificates/verify-cert', { cert_id: certId })
+  },
+
   // 续期证书
   renewCertificate(certId) {
     return api.post(`/certificates/renew/${certId}`)

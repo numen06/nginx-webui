@@ -4,11 +4,174 @@ Certbot 工具封装
 import subprocess
 import re
 import shutil
+import threading
+import time
+import uuid
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
 from app.config import get_config
+
+# DNS 手动验证：挂起的 certbot 进程（必须与后续按回车为同一进程，否则 ACME challenge 失效）
+_dns_jobs: Dict[str, Dict[str, Any]] = {}
+_dns_jobs_lock = threading.Lock()
+_JOB_TTL_SEC = 1800  # 30 分钟
+
+
+def _cleanup_stale_dns_jobs() -> None:
+    now = time.time()
+    with _dns_jobs_lock:
+        stale = [
+            jid
+            for jid, j in _dns_jobs.items()
+            if now - j.get("created_at", 0) > _JOB_TTL_SEC
+        ]
+        for jid in stale:
+            j = _dns_jobs.pop(jid, None)
+            if j and j.get("proc"):
+                try:
+                    j["proc"].terminate()
+                    j["proc"].wait(timeout=5)
+                except Exception:
+                    try:
+                        j["proc"].kill()
+                    except Exception:
+                        pass
+
+
+def classify_certbot_failure(
+    output: str, validation_method: str = "http"
+) -> Tuple[str, str, List[str]]:
+    """
+    根据 certbot 输出分类错误，返回 (error_code, 友好说明, 修复建议列表)
+    """
+    o = (output or "").lower()
+    full = output or ""
+
+    suggestions: List[str] = []
+
+    if "too many certificates already issued" in o or "rate limit" in o:
+        return (
+            "rate_limit",
+            "Let's Encrypt 签发频率受限（同一注册域名每周有数量限制）",
+            [
+                "等待约 1 周后重试，或使用其他 ACME 测试环境（staging）",
+                "检查是否在短时间内重复申请了同一域名",
+                "确认是否与其他服务共享了同一注册域名的配额",
+            ],
+        )
+
+    if "certbot: command not found" in o or (
+        "no such file or directory" in o and "certbot" in full.lower()
+    ):
+        return (
+            "certbot_missing",
+            "未找到 certbot 可执行文件",
+            ["在服务器上安装 certbot，并在配置中设置正确的 certbot_path"],
+        )
+
+    if "permission denied" in o or "operation not permitted" in o:
+        return (
+            "permission",
+            "权限不足，certbot 无法写入证书目录或读取配置",
+            [
+                "使用具有权限的用户运行本服务，或为 certbot 配置可写目录",
+                "Linux 上 /etc/letsencrypt 通常需要 root 或加入相应组",
+            ],
+        )
+
+    if "connection refused" in o or "timed out" in o or "timeout" in o:
+        if validation_method == "http":
+            return (
+                "http_unreachable",
+                "HTTP 验证时无法从公网访问验证地址（连接被拒绝或超时）",
+                [
+                    "确认域名 A/AAAA 已解析到本服务器公网 IP",
+                    "确认防火墙放行 80 端口，且 Nginx 正在监听 80",
+                    "确认 static_dir（webroot）与 Nginx 中 ACME 文件根目录一致",
+                ],
+            )
+        return (
+            "network",
+            "网络连接失败或超时",
+            ["检查服务器出网、DNS 解析及防火墙设置"],
+        )
+
+    if "dns problem" in o or "dns query problem" in o or "no valid a records" in o:
+        return (
+            "dns_resolution",
+            "域名 DNS 解析异常",
+            ["确认域名已正确解析到本机（HTTP 验证）或 DNS 面板中 TXT 已生效"],
+        )
+
+    if "incorrect txt record" in o or "expected a dns txt record" in o:
+        return (
+            "dns_txt_mismatch",
+            "DNS TXT 记录与要求不一致或未生效",
+            [
+                "在 DNS 控制台添加 _acme-challenge 的 TXT 记录",
+                "等待 DNS 传播后再继续（可用「检测 DNS」功能）",
+                "确认记录名、值与界面显示完全一致（无多余空格）",
+            ],
+        )
+
+    if "invalid response" in o or "http-01" in o or "detail: invalid response" in o:
+        return (
+            "http_validation_failed",
+            "HTTP-01 验证失败：Let's Encrypt 无法从公网获取验证文件",
+            [
+                "确认域名已解析到本服务器",
+                "确认 Nginx 对 `/.well-known/acme-challenge/` 可访问且指向 webroot",
+                "关闭仅 HTTPS 跳转对验证路径的影响，或临时允许 80 访问",
+            ],
+        )
+
+    if "urn:ietf:params:acme:error:unauthorized" in o:
+        return (
+            "acme_unauthorized",
+            "ACME 授权验证失败",
+            [
+                "按验证方式检查 HTTP 可访问性或 DNS TXT 是否正确",
+                "若使用 DNS 验证，请确认 TXT 已全球生效后再继续",
+            ],
+        )
+
+    if "could not bind" in o or "address already in use" in o:
+        return (
+            "port_in_use",
+            "端口被占用或 certbot 无法绑定所需端口",
+            ["检查 80/443 是否被其他程序占用；HTTP 验证建议使用 webroot 模式"],
+        )
+
+    # 默认：附带截断输出便于排查
+    snippet = full.strip().replace("\r", "")
+    if len(snippet) > 800:
+        snippet = snippet[:800] + "\n...(输出已截断)"
+    return (
+        "unknown",
+        "证书申请失败，请查看下方 certbot 输出排查",
+        [
+            "确认 certbot、openssl 已安装且配置路径正确",
+            "根据输出中的具体英文错误在搜索引擎或 Let's Encrypt 社区查找",
+            f"原始信息摘要：{snippet[:200]}..." if len(snippet) > 200 else snippet,
+        ],
+    )
+
+
+def _enrich_failure_result(
+    result: Dict[str, Any], validation_method: str
+) -> Dict[str, Any]:
+    if result.get("success"):
+        result.setdefault("error_code", None)
+        result.setdefault("suggestions", None)
+        return result
+    out = result.get("output") or ""
+    code, msg, sug = classify_certbot_failure(out, validation_method)
+    result["error_code"] = code
+    result["message"] = msg if result.get("message") in ("证书申请失败", "证书续期失败") else result.get("message", msg)
+    result["suggestions"] = sug
+    return result
 
 
 def copy_certificate_files(domain: str) -> Dict[str, Any]:
@@ -39,7 +202,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "success": False,
             "message": f"Certbot 证书文件不存在: {source_cert}",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
         }
 
     if not source_key.exists():
@@ -47,7 +210,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "success": False,
             "message": f"Certbot 私钥文件不存在: {source_key}",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
         }
 
     # 目标路径（项目的 ssl_dir）
@@ -70,122 +233,131 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "success": True,
             "message": "证书文件复制成功",
             "cert_path": str(target_cert_abs),
-            "key_path": str(target_key_abs)
+            "key_path": str(target_key_abs),
         }
     except Exception as e:
         return {
             "success": False,
             "message": f"复制证书文件失败: {str(e)}",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
         }
-
 
 
 def request_certificate(
-    domains: List[str],
-    email: str,
-    validation_method: str = "http"
+    domains: List[str], email: str, validation_method: str = "http"
 ) -> Dict[str, Any]:
     """
-    通过 certbot 申请证书
-    
-    Args:
-        domains: 域名列表
-        email: 邮箱地址
-        validation_method: 验证方式 ('http' 或 'dns')
-    
+    通过 certbot 申请证书（仅支持 HTTP(webroot)；DNS 请使用 start_dns_manual_challenge + complete_dns_manual_challenge）
+
     Returns:
-        {
-            "success": bool,
-            "message": str,
-            "output": str,
-            "cert_path": Optional[str],
-            "key_path": Optional[str]
-        }
+        含 success, message, output, cert_path, key_path, error_code, suggestions
     """
     config = get_config()
     certbot_path = Path(config.nginx.certbot_path)
-    
+
     if not certbot_path.exists():
         return {
             "success": False,
             "message": f"Certbot 可执行文件不存在: {certbot_path}",
             "output": "",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
+            "error_code": "certbot_missing",
+            "suggestions": [
+                "安装 certbot 并设置配置项 nginx.certbot_path",
+                "Docker 镜像中需包含 certbot 或挂载宿主机可执行文件",
+            ],
         }
-    
-    # 构建 certbot 命令
-    cmd = [
-        str(certbot_path),
-        "certonly",
-        "--non-interactive",
-        "--agree-tos",
-        "--email", email,
-        "--expand"
-    ]
-    
-    # 添加域名
-    for domain in domains:
-        cmd.extend(["-d", domain])
-    
-    # 验证方式
-    if validation_method == "http":
-        cmd.append("--webroot")
-        cmd.extend(["--webroot-path", str(Path(config.nginx.static_dir))])
-    elif validation_method == "dns":
-        cmd.append("--manual")
-        cmd.append("--preferred-challenges", "dns")
-    else:
+
+    if validation_method == "dns":
+        return {
+            "success": False,
+            "message": "DNS 验证请使用界面上的分步流程：获取 TXT → 配置 DNS → 检测 → 完成申请",
+            "output": "",
+            "cert_path": None,
+            "key_path": None,
+            "error_code": "use_dns_wizard",
+            "suggestions": [
+                "在「申请证书」中选择 DNS 验证后按步骤操作",
+                "勿直接调用本接口进行 DNS 验证（需保持同一 certbot 会话）",
+            ],
+        }
+
+    if validation_method != "http":
         return {
             "success": False,
             "message": f"不支持的验证方式: {validation_method}",
             "output": "",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
+            "error_code": "unsupported_validation",
+            "suggestions": ["请选择 http 或 dns"],
         }
-    
+
+    # 构建 certbot 命令（仅 HTTP）
+    cmd = [
+        str(certbot_path),
+        "certonly",
+        "--non-interactive",
+        "--agree-tos",
+        "--email",
+        email,
+        "--expand",
+    ]
+
+    for domain in domains:
+        cmd.extend(["-d", domain])
+
+    cmd.append("--webroot")
+    cmd.extend(["--webroot-path", str(Path(config.nginx.static_dir))])
+
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300  # 5分钟超时
+            cmd, capture_output=True, text=True, timeout=300  # 5分钟超时
         )
-        
+
         success = result.returncode == 0
-        
-        # 解析证书路径
+        output = (result.stdout or "") + (result.stderr or "")
+
         cert_path = None
         key_path = None
-        
+
         if success and domains:
-            # 默认证书路径：/etc/letsencrypt/live/{domain}/fullchain.pem
             domain = domains[0]
             cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
             key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-            
-            # 验证路径是否存在
+
             if not Path(cert_path).exists():
                 cert_path = None
             if not Path(key_path).exists():
                 key_path = None
-        
-        return {
+
+        ret: Dict[str, Any] = {
             "success": success,
             "message": "证书申请成功" if success else "证书申请失败",
-            "output": result.stdout + result.stderr,
+            "output": output,
             "cert_path": cert_path,
-            "key_path": key_path
+            "key_path": key_path,
         }
+        if not success:
+            ret = _enrich_failure_result(ret, "http")
+        else:
+            ret["error_code"] = None
+            ret["suggestions"] = None
+        return ret
     except subprocess.TimeoutExpired:
         return {
             "success": False,
             "message": "证书申请超时",
             "output": "",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
+            "error_code": "timeout",
+            "suggestions": [
+                "检查网络与 Let's Encrypt 连通性",
+                "确认验证过程无长时间阻塞",
+            ],
         }
     except Exception as e:
         return {
@@ -193,116 +365,548 @@ def request_certificate(
             "message": f"证书申请出错: {str(e)}",
             "output": "",
             "cert_path": None,
-            "key_path": None
+            "key_path": None,
+            "error_code": "exception",
+            "suggestions": ["查看服务端日志", str(e)],
+        }
+
+
+def parse_dns_challenge_from_output(text: str) -> Optional[Tuple[str, str]]:
+    """
+    从 certbot manual DNS 输出中解析 TXT 记录名与值。
+    返回 (record_name, record_value)
+    """
+    if not text:
+        return None
+    # 常见格式：_acme-challenge.example.com with the following value:\n\nTOKEN
+    m = re.search(
+        r"(_acme-challenge[^\s]+)\s+with the following value:\s*\r?\n\s*\r?\n?\s*([^\s\r\n]+)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        return (m.group(1).strip(), m.group(2).strip())
+    # 备选：分行
+    m2 = re.search(
+        r"(_acme-challenge[^\s]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if m2:
+        lines = text.splitlines()
+        name = m2.group(1).strip()
+        for i, line in enumerate(lines):
+            if name in line and "following value" in line.lower():
+                # 向后找第一个像 token 的行
+                for j in range(i + 1, min(i + 8, len(lines))):
+                    cand = lines[j].strip()
+                    if len(cand) > 20 and re.match(r"^[A-Za-z0-9_-]+$", cand):
+                        return (name, cand)
+    return None
+
+
+def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
+    """
+    启动 certbot manual DNS 验证进程，解析出 TXT 后保持进程等待 stdin 回车。
+    """
+    _cleanup_stale_dns_jobs()
+    config = get_config()
+    certbot_path = Path(config.nginx.certbot_path)
+
+    if not certbot_path.exists():
+        return {
+            "success": False,
+            "message": f"Certbot 可执行文件不存在: {certbot_path}",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+            "output": "",
+        }
+
+    cmd = [
+        str(certbot_path),
+        "certonly",
+        "--manual",
+        "--preferred-challenges",
+        "dns",
+        "-d",
+        domain,
+        "--email",
+        email,
+        "--agree-tos",
+        "--no-eff-email",
+        "--expand",
+    ]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"无法启动 certbot: {str(e)}",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+            "output": "",
+        }
+
+    buf: List[str] = []
+    deadline = time.time() + 120
+    parsed: Optional[Tuple[str, str]] = None
+
+    assert proc.stdout is not None
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            rest = proc.stdout.read() or ""
+            full = "".join(buf) + rest
+        return {
+            "success": False,
+            "message": "certbot 在显示 DNS 要求前已退出，请查看输出",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+            "output": full,
+            "error_code": "certbot_exited_early",
+        }
+        line = proc.stdout.readline()
+        if not line:
+            time.sleep(0.05)
+            continue
+        buf.append(line)
+        full = "".join(buf)
+        parsed = parse_dns_challenge_from_output(full)
+        if parsed:
+            break
+
+    if not parsed:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        full = "".join(buf)
+        return {
+            "success": False,
+            "message": "未能从 certbot 输出中解析 DNS TXT 记录，请确认 certbot 版本与语言为英文输出",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+            "output": full,
+            "error_code": "dns_parse_failed",
+            "suggestions": [
+                "服务器上 certbot 需为英文界面输出",
+                "尝试手动安装 certbot 或升级版本",
+            ],
+        }
+
+    job_id = str(uuid.uuid4())
+    record_name, record_value = parsed
+    with _dns_jobs_lock:
+        _dns_jobs[job_id] = {
+            "proc": proc,
+            "domain": domain,
+            "email": email,
+            "record_name": record_name,
+            "record_value": record_value,
+            "created_at": time.time(),
+            "stdout_tail": "".join(buf),
+        }
+
+    return {
+        "success": True,
+        "message": "已获取 DNS 验证信息，请在 DNS 中添加 TXT 后点击检测并完成申请",
+        "job_id": job_id,
+        "record_name": record_name,
+        "record_value": record_value,
+        "output": "".join(buf),
+    }
+
+
+def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, Any]:
+    """
+    检查公网 DNS 是否已包含指定 TXT 值（使用 dig 或 nslookup）。
+    """
+    name = (record_name or "").strip().strip(".")
+    expected = (expected_value or "").strip()
+    if not name or not expected:
+        return {
+            "success": False,
+            "matched": False,
+            "message": "记录名或验证值为空",
+            "checked_with": None,
+            "records": [],
+        }
+
+    # 优先 dig
+    for dig_cmd in (
+        ["dig", "+short", "TXT", name, "@8.8.8.8"],
+        ["dig", "+short", "TXT", name],
+    ):
+        try:
+            r = subprocess.run(
+                dig_cmd, capture_output=True, text=True, timeout=15
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            if r.returncode == 0 and out.strip():
+                # 多行带引号
+                chunks = re.findall(r'"([^"]*)"', out)
+                if not chunks:
+                    chunks = [out.strip()]
+                flat = " ".join(chunks)
+                matched = expected in flat or expected in out.replace('"', "")
+                return {
+                    "success": True,
+                    "matched": matched,
+                    "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                    "checked_with": " ".join(dig_cmd),
+                    "records": chunks,
+                }
+        except FileNotFoundError:
+            break
+        except Exception:
+            continue
+
+    # nslookup（Windows / 无 dig）
+    for ns_cmd in (
+        ["nslookup", "-type=TXT", name, "8.8.8.8"],
+        ["nslookup", "-type=TXT", name],
+    ):
+        try:
+            r = subprocess.run(
+                ns_cmd, capture_output=True, text=True, timeout=20
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            matched = expected in out.replace('"', "").replace(" ", "")
+            return {
+                "success": True,
+                "matched": matched,
+                "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                "checked_with": " ".join(ns_cmd),
+                "records": [out[:2000]],
+            }
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+
+    return {
+        "success": False,
+        "matched": False,
+        "message": "系统未找到 dig/nslookup，无法检测 DNS",
+        "checked_with": None,
+        "records": [],
+    }
+
+
+def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
+    """
+    向挂起的 certbot 发送回车，等待签发结束。
+    """
+    _cleanup_stale_dns_jobs()
+    with _dns_jobs_lock:
+        job = _dns_jobs.get(job_id)
+
+    if not job:
+        return {
+            "success": False,
+            "message": "无效或已过期的任务 ID，请重新获取 DNS 验证信息",
+            "output": "",
+            "cert_path": None,
+            "key_path": None,
+            "domain": None,
+            "error_code": "invalid_job",
+            "suggestions": ["请从第一步重新发起 DNS 验证流程"],
+        }
+
+    proc: subprocess.Popen = job["proc"]
+    domain = job["domain"]
+
+    try:
+        if proc.stdin:
+            proc.stdin.write("\n")
+            proc.stdin.flush()
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"无法继续 certbot 会话: {str(e)}",
+            "output": job.get("stdout_tail", ""),
+            "cert_path": None,
+            "key_path": None,
+            "domain": job.get("domain"),
+            "error_code": "stdin_error",
+            "suggestions": [],
+        }
+
+    try:
+        rest_out, _ = proc.communicate(timeout=300)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        with _dns_jobs_lock:
+            _dns_jobs.pop(job_id, None)
+        return {
+            "success": False,
+            "message": "certbot 执行超时",
+            "output": job.get("stdout_tail", ""),
+            "cert_path": None,
+            "key_path": None,
+            "domain": job.get("domain"),
+            "error_code": "timeout",
+            "suggestions": ["检查网络与 Let's Encrypt 连通性", "确认 DNS TXT 已全球生效"],
+        }
+
+    full_out = (job.get("stdout_tail") or "") + (rest_out or "")
+    success = proc.returncode == 0
+
+    with _dns_jobs_lock:
+        _dns_jobs.pop(job_id, None)
+
+    cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
+    key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+    if success:
+        if not Path(cert_path).exists():
+            cert_path = None
+        if not Path(key_path).exists():
+            key_path = None
+
+    ret: Dict[str, Any] = {
+        "success": success,
+        "message": "证书申请成功" if success else "证书申请失败",
+        "output": full_out,
+        "cert_path": cert_path if success else None,
+        "key_path": key_path if success else None,
+        "domain": domain,
+        "email": job.get("email"),
+    }
+    if not success:
+        ret = _enrich_failure_result(ret, "dns")
+    else:
+        ret["error_code"] = None
+        ret["suggestions"] = None
+    return ret
+
+
+def verify_certificate_files(cert_path: str, key_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    使用 openssl 校验证书文件可读、未过期、与私钥匹配（若提供私钥）。
+    """
+    cp = Path(cert_path)
+    if not cp.exists():
+        return {
+            "success": False,
+            "valid": False,
+            "message": f"证书文件不存在: {cert_path}",
+            "details": {},
+        }
+
+    details: Dict[str, Any] = {}
+    try:
+        r = subprocess.run(
+            [
+                "openssl",
+                "x509",
+                "-in",
+                str(cp),
+                "-noout",
+                "-checkend",
+                "0",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        not_expired = r.returncode == 0
+        details["not_expired"] = not_expired
+        if r.returncode != 0:
+            details["checkend_stderr"] = (r.stderr or "")[:500]
+
+        info = get_certificate_info(str(cp))
+        details["issuer"] = info.get("issuer")
+        details["domain"] = info.get("domain")
+        details["valid_to"] = info.get("valid_to")
+        details["valid_from"] = info.get("valid_from")
+
+        key_ok = True
+        if key_path and Path(key_path).exists():
+            r_pub = subprocess.run(
+                [
+                    "openssl",
+                    "x509",
+                    "-noout",
+                    "-pubkey",
+                    "-in",
+                    str(cp),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            r_key = subprocess.run(
+                [
+                    "openssl",
+                    "pkey",
+                    "-pubout",
+                    "-in",
+                    str(key_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if r_pub.returncode == 0 and r_key.returncode == 0:
+                key_ok = (r_pub.stdout or "").strip() == (r_key.stdout or "").strip()
+            else:
+                key_ok = False
+            details["key_matches_cert"] = key_ok
+        else:
+            details["key_matches_cert"] = None
+
+        valid = bool(
+            not_expired
+            and info.get("success")
+            and (details["key_matches_cert"] is not False)
+        )
+        return {
+            "success": True,
+            "valid": valid,
+            "message": "证书校验通过" if valid else "证书存在问题（未过期/信息/密钥匹配项未全部满足）",
+            "details": details,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "valid": False,
+            "message": f"校验过程异常: {str(e)}",
+            "details": details,
         }
 
 
 def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
     """
     续期证书
-    
+
     Args:
         domain: 域名（如果为 None，则续期所有证书）
-    
+
     Returns:
         {
             "success": bool,
             "message": str,
-            "output": str
+            "output": str,
+            error_code, suggestions (失败时)
         }
     """
     config = get_config()
     certbot_path = Path(config.nginx.certbot_path)
-    
+
     if not certbot_path.exists():
         return {
             "success": False,
             "message": f"Certbot 可执行文件不存在: {certbot_path}",
-            "output": ""
+            "output": "",
+            "error_code": "certbot_missing",
+            "suggestions": ["安装 certbot 并配置路径"],
         }
-    
-    cmd = [
-        str(certbot_path),
-        "renew",
-        "--non-interactive"
-    ]
-    
+
+    cmd = [str(certbot_path), "renew", "--non-interactive"]
+
     if domain:
         cmd.extend(["--cert-name", domain])
-    
+
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300
+            cmd, capture_output=True, text=True, timeout=300
         )
-        
+
         success = result.returncode == 0
-        
-        return {
+        output = (result.stdout or "") + (result.stderr or "")
+        ret: Dict[str, Any] = {
             "success": success,
             "message": "证书续期成功" if success else "证书续期失败",
-            "output": result.stdout + result.stderr
+            "output": output,
         }
+        if not success:
+            ret = _enrich_failure_result(ret, "http")
+        else:
+            ret["error_code"] = None
+            ret["suggestions"] = None
+        return ret
     except subprocess.TimeoutExpired:
         return {
             "success": False,
             "message": "证书续期超时",
-            "output": ""
+            "output": "",
+            "error_code": "timeout",
+            "suggestions": [],
         }
     except Exception as e:
         return {
             "success": False,
             "message": f"证书续期出错: {str(e)}",
-            "output": ""
+            "output": "",
+            "error_code": "exception",
+            "suggestions": [str(e)],
         }
 
 
 def list_certificates() -> List[Dict[str, str]]:
     """
     列出所有已申请的证书
-    
+
     Returns:
         List[Dict]: 证书列表，每个证书包含 domain, cert_path, key_path
     """
     config = get_config()
     certbot_path = Path(config.nginx.certbot_path)
-    
+
     if not certbot_path.exists():
         return []
-    
+
     try:
         result = subprocess.run(
             [str(certbot_path), "certificates"],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
-        
+
         if result.returncode != 0:
             return []
-        
+
         # 解析输出
         certificates = []
-        lines = result.stdout.split('\n')
-        
+        lines = result.stdout.split("\n")
+
         for line in lines:
             # 查找证书名称和路径
-            if 'Certificate Name:' in line:
-                match = re.search(r'Certificate Name:\s+(\S+)', line)
+            if "Certificate Name:" in line:
+                match = re.search(r"Certificate Name:\s+(\S+)", line)
                 if match:
                     domain = match.group(1)
                     # 默认路径
                     cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
                     key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-                    
-                    certificates.append({
-                        "domain": domain,
-                        "cert_path": cert_path,
-                        "key_path": key_path
-                    })
-        
+
+                    certificates.append(
+                        {
+                            "domain": domain,
+                            "cert_path": cert_path,
+                            "key_path": key_path,
+                        }
+                    )
+
         return certificates
     except Exception:
         return []
@@ -311,10 +915,10 @@ def list_certificates() -> List[Dict[str, str]]:
 def get_certificate_info(cert_path: str) -> Dict[str, Any]:
     """
     获取证书信息（域名、过期时间等）
-    
+
     Args:
         cert_path: 证书文件路径
-    
+
     Returns:
         {
             "domain": Optional[str],
@@ -325,83 +929,85 @@ def get_certificate_info(cert_path: str) -> Dict[str, Any]:
         }
     """
     cert_file = Path(cert_path)
-    
+
     if not cert_file.exists():
         return {
             "success": False,
             "domain": None,
             "issuer": None,
             "valid_from": None,
-            "valid_to": None
+            "valid_to": None,
         }
-    
+
     try:
         # 使用 openssl 读取证书信息
         result = subprocess.run(
             [
-                "openssl", "x509",
-                "-in", str(cert_file),
+                "openssl",
+                "x509",
+                "-in",
+                str(cert_file),
                 "-noout",
                 "-text",
                 "-dates",
                 "-issuer",
-                "-subject"
+                "-subject",
             ],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
-        
+
         if result.returncode != 0:
             return {
                 "success": False,
                 "domain": None,
                 "issuer": None,
                 "valid_from": None,
-                "valid_to": None
+                "valid_to": None,
             }
-        
+
         output = result.stdout
-        
+
         # 解析域名
-        domain_match = re.search(r'CN\s*=\s*([^\s,]+)', output)
+        domain_match = re.search(r"CN\s*=\s*([^\s,]+)", output)
         domain = domain_match.group(1) if domain_match else None
-        
+
         # 解析颁发者
-        issuer_match = re.search(r'Issuer:\s*(.+)', output)
+        issuer_match = re.search(r"Issuer:\s*(.+)", output)
         issuer = issuer_match.group(1).strip() if issuer_match else None
-        
+
         # 解析有效期
         valid_from = None
         valid_to = None
-        
-        not_before_match = re.search(r'notBefore=(.+)', output)
-        not_after_match = re.search(r'notAfter=(.+)', output)
-        
+
+        not_before_match = re.search(r"notBefore=(.+)", output)
+        not_after_match = re.search(r"notAfter=(.+)", output)
+
         if not_before_match:
             try:
                 valid_from = datetime.strptime(
                     not_before_match.group(1).strip(),
-                    "%b %d %H:%M:%S %Y %Z"
+                    "%b %d %H:%M:%S %Y %Z",
                 )
             except ValueError:
                 pass
-        
+
         if not_after_match:
             try:
                 valid_to = datetime.strptime(
                     not_after_match.group(1).strip(),
-                    "%b %d %H:%M:%S %Y %Z"
+                    "%b %d %H:%M:%S %Y %Z",
                 )
             except ValueError:
                 pass
-        
+
         return {
             "success": True,
             "domain": domain,
             "issuer": issuer,
             "valid_from": valid_from.isoformat() if valid_from else None,
-            "valid_to": valid_to.isoformat() if valid_to else None
+            "valid_to": valid_to.isoformat() if valid_to else None,
         }
     except Exception as e:
         return {
@@ -410,6 +1016,5 @@ def get_certificate_info(cert_path: str) -> Dict[str, Any]:
             "issuer": None,
             "valid_from": None,
             "valid_to": None,
-            "error": str(e)
+            "error": str(e),
         }
-

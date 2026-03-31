@@ -85,7 +85,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" align="center">
+        <el-table-column label="操作" width="230" align="center">
           <template #default="scope">
             <div class="action-buttons">
               <el-tooltip content="重新上传" placement="top">
@@ -110,6 +110,18 @@
                   <el-icon><RefreshRight /></el-icon>
                 </el-button>
               </el-tooltip>
+              <el-tooltip content="验证证书" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="success"
+                  class="action-icon-btn"
+                  :loading="scope.row._verifying"
+                  @click="handleVerifyCert(scope.row)"
+                >
+                  <el-icon><CircleCheck /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip content="删除" placement="top">
                 <el-button
                   circle
@@ -131,12 +143,68 @@
     <el-dialog
       v-model="requestDialogVisible"
       title="申请 Let's Encrypt 免费证书"
-      width="560px"
-      top="8vh"
+      width="620px"
+      top="6vh"
       :close-on-click-modal="false"
       class="cert-request-dialog"
+      @closed="resetRequestWizard"
     >
-      <el-form :model="requestForm" :rules="requestRules" ref="requestFormRef" label-width="100px" class="compact-form">
+      <el-steps
+        v-if="requestForm.validation_method === 'dns'"
+        :active="dnsWizardStep"
+        finish-status="success"
+        align-center
+        class="cert-request-steps"
+      >
+        <el-step title="填写信息" />
+        <el-step title="配置 DNS 并验证" />
+      </el-steps>
+
+      <!-- DNS 步骤 1：配置 TXT -->
+      <div v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1" class="dns-wizard-panel">
+        <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
+          <template #title>
+            <span class="dns-alert-title">请在域名 DNS 控制台添加以下 TXT 记录（主机记录名与值须完全一致）</span>
+          </template>
+        </el-alert>
+        <el-descriptions :column="1" border size="small" class="dns-rec-desc">
+          <el-descriptions-item label="记录类型">TXT</el-descriptions-item>
+          <el-descriptions-item label="主机记录 / 名称">
+            <span class="mono-text">{{ dnsRecordName || '-' }}</span>
+            <el-button size="small" text type="primary" :disabled="!dnsRecordName" @click="handleCopy(dnsRecordName)">复制</el-button>
+          </el-descriptions-item>
+          <el-descriptions-item label="记录值">
+            <span class="mono-text dns-value">{{ dnsRecordValue || '-' }}</span>
+            <el-button size="small" text type="primary" :disabled="!dnsRecordValue" @click="handleCopy(dnsRecordValue)">复制</el-button>
+          </el-descriptions-item>
+        </el-descriptions>
+        <div class="dns-help-links">
+          <span class="form-tip">常见 DNS 控制台：</span>
+          <el-link type="primary" href="https://docs.dnspod.cn/dns/console/manage/" target="_blank" :underline="false">腾讯云 DNSPod</el-link>
+          <el-link type="primary" href="https://help.aliyun.com/document_detail/29725.html" target="_blank" :underline="false">阿里云</el-link>
+          <el-link type="primary" href="https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/" target="_blank" :underline="false">Cloudflare</el-link>
+        </div>
+        <el-divider content-position="left">验证解析</el-divider>
+        <p class="form-tip">添加保存后，全球 DNS 生效可能需要数分钟。可开启自动检测或手动点击检测。</p>
+        <div class="dns-verify-row">
+          <el-checkbox v-model="dnsAutoPoll">每 5 秒自动检测一次</el-checkbox>
+          <el-tag v-if="dnsVerified" type="success" size="small">TXT 已匹配</el-tag>
+          <el-tag v-else-if="dnsLastCheckMsg" type="info" size="small">{{ dnsLastCheckMsg }}</el-tag>
+        </div>
+        <el-button type="primary" plain size="small" :loading="dnsChecking" @click="runDnsVerifyOnce">
+          立即检测 DNS
+        </el-button>
+      </div>
+
+      <!-- 表单：HTTP 或 DNS 步骤 0 -->
+      <el-form
+        v-if="requestForm.validation_method !== 'dns' || dnsWizardStep === 0"
+        :model="requestForm"
+        :rules="requestRules"
+        ref="requestFormRef"
+        label-width="100px"
+        class="compact-form"
+      >
         <el-form-item label="域名" prop="domain">
           <el-input
             v-model="requestForm.domain"
@@ -154,14 +222,14 @@
         </el-form-item>
 
         <el-form-item label="验证方式" prop="validation_method">
-          <el-radio-group v-model="requestForm.validation_method">
+          <el-radio-group v-model="requestForm.validation_method" @change="onValidationMethodChange">
             <el-radio value="http">
               <span>HTTP 验证</span>
-              <div class="radio-desc">需要域名已解析到本服务器且 Nginx 正在运行</div>
+              <div class="radio-desc">需要域名已解析到本服务器且 Nginx 正在运行，80 端口可访问</div>
             </el-radio>
             <el-radio value="dns">
               <span>DNS 验证</span>
-              <div class="radio-desc">需要手动添加 DNS TXT 记录</div>
+              <div class="radio-desc">在域名 DNS 中添加 TXT 记录；适合无法开放 80 端口的场景</div>
             </el-radio>
           </el-radio-group>
         </el-form-item>
@@ -186,10 +254,37 @@
             <span class="btn-label">取消</span>
           </el-button>
           <el-button
+            v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
+            @click="dnsWizardBack"
+          >
+            上一步
+          </el-button>
+          <el-button
+            v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 0"
             type="primary"
             :loading="requesting"
             :disabled="isRequestDisabled"
-            @click="handleRequestSubmit"
+            @click="handleDnsWizardNext"
+          >
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">下一步：获取 DNS 要求</span>
+          </el-button>
+          <el-button
+            v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
+            type="primary"
+            :loading="requesting"
+            :disabled="!dnsVerified"
+            @click="handleDnsCompleteIssue"
+          >
+            <el-icon><Check /></el-icon>
+            <span class="btn-label">完成申请（签发证书）</span>
+          </el-button>
+          <el-button
+            v-if="requestForm.validation_method === 'http'"
+            type="primary"
+            :loading="requesting"
+            :disabled="isRequestDisabled"
+            @click="handleRequestSubmitHttp"
           >
             <el-icon><Check /></el-icon>
             <span class="btn-label">申请证书</span>
@@ -349,10 +444,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch, onBeforeUnmount } from 'vue'
 import { certificatesApi } from '../api/certificates'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument } from '@element-plus/icons-vue'
+import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck } from '@element-plus/icons-vue'
 import { formatDateTime } from '../utils/date'
 
 const certificateList = ref([])
@@ -375,9 +470,271 @@ const requestForm = ref({
   validation_method: 'http'
 })
 
+/** DNS 申请向导 */
+const dnsWizardStep = ref(0)
+const dnsJobId = ref(null)
+const dnsRecordName = ref('')
+const dnsRecordValue = ref('')
+const dnsVerified = ref(false)
+const dnsChecking = ref(false)
+const dnsAutoPoll = ref(false)
+const dnsLastCheckMsg = ref('')
+let dnsPollTimer = null
+
 const isRequestDisabled = computed(() => {
   return !requestForm.value.domain || !requestForm.value.email
 })
+
+const escapeHtml = (s) => {
+  if (s == null || s === undefined) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+const showCertFailureDialog = (payload) => {
+  const msg = payload?.message || '操作失败'
+  const code = payload?.error_code
+  const suggestions = payload?.suggestions || []
+  const output = payload?.output || ''
+  const sugHtml = suggestions.length
+    ? `<ul style="margin:8px 0;padding-left:18px;text-align:left">${suggestions.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+    : ''
+  const outHtml = output
+    ? `<details style="margin-top:12px;text-align:left"><summary style="cursor:pointer">查看 certbot 原始输出</summary><pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:240px;overflow:auto;margin-top:8px">${escapeHtml(output)}</pre></details>`
+    : ''
+  ElMessageBox.alert(
+    `<div style="text-align:left"><p style="font-weight:600;margin-bottom:8px">${escapeHtml(msg)}</p>${
+      code ? `<p style="font-size:12px;color:#909399">错误代码: ${escapeHtml(code)}</p>` : ''
+    }${sugHtml}${outHtml}</div>`,
+    '证书操作失败',
+    { dangerouslyUseHTMLString: true, type: 'error', customClass: 'cert-fail-msgbox' }
+  )
+}
+
+const clearDnsPoll = () => {
+  if (dnsPollTimer) {
+    clearInterval(dnsPollTimer)
+    dnsPollTimer = null
+  }
+}
+
+const resetRequestWizard = () => {
+  dnsWizardStep.value = 0
+  dnsJobId.value = null
+  dnsRecordName.value = ''
+  dnsRecordValue.value = ''
+  dnsVerified.value = false
+  dnsAutoPoll.value = false
+  dnsLastCheckMsg.value = ''
+  clearDnsPoll()
+}
+
+const onValidationMethodChange = () => {
+  resetRequestWizard()
+}
+
+const dnsWizardBack = () => {
+  clearDnsPoll()
+  dnsVerified.value = false
+  dnsLastCheckMsg.value = ''
+  dnsWizardStep.value = 0
+  dnsJobId.value = null
+  dnsRecordName.value = ''
+  dnsRecordValue.value = ''
+}
+
+const runDnsVerifyOnce = async () => {
+  if (!dnsRecordName.value || !dnsRecordValue.value) {
+    ElMessage.warning('缺少 DNS 记录信息')
+    return
+  }
+  dnsChecking.value = true
+  dnsLastCheckMsg.value = '检测中…'
+  try {
+    const res = await certificatesApi.verifyDns(dnsRecordName.value, dnsRecordValue.value)
+    if (res.matched) {
+      dnsVerified.value = true
+      dnsLastCheckMsg.value = 'TXT 记录已匹配'
+      ElMessage.success('DNS TXT 验证通过')
+      clearDnsPoll()
+      dnsAutoPoll.value = false
+    } else {
+      dnsVerified.value = false
+      dnsLastCheckMsg.value = res.message || '尚未匹配'
+    }
+  } catch (e) {
+    dnsLastCheckMsg.value = e?.detail || e?.message || '检测失败'
+  } finally {
+    dnsChecking.value = false
+  }
+}
+
+watch(
+  () => [dnsAutoPoll.value, dnsWizardStep.value, dnsRecordName.value, dnsRecordValue.value],
+  () => {
+    clearDnsPoll()
+    if (
+      dnsAutoPoll.value &&
+      dnsWizardStep.value === 1 &&
+      dnsRecordName.value &&
+      dnsRecordValue.value
+    ) {
+      dnsPollTimer = setInterval(() => {
+        runDnsVerifyOnce()
+      }, 5000)
+    }
+  }
+)
+
+onBeforeUnmount(() => {
+  clearDnsPoll()
+})
+
+const handleDnsWizardNext = async () => {
+  if (!requestFormRef.value) return
+  try {
+    await requestFormRef.value.validate()
+  } catch {
+    return
+  }
+  requesting.value = true
+  try {
+    const res = await certificatesApi.dnsChallengeStart(
+      requestForm.value.domain.trim(),
+      requestForm.value.email
+    )
+    if (res.success && res.job_id) {
+      dnsJobId.value = res.job_id
+      dnsRecordName.value = res.record_name || ''
+      dnsRecordValue.value = res.record_value || ''
+      dnsWizardStep.value = 1
+      dnsVerified.value = false
+      dnsLastCheckMsg.value = ''
+      ElMessage.success('已获取 DNS 验证要求，请添加 TXT 记录')
+    } else {
+      showCertFailureDialog({
+        message: res.message || '获取 DNS 要求失败',
+        error_code: res.error_code,
+        suggestions: res.suggestions || [],
+        output: res.output
+      })
+    }
+  } catch (error) {
+    showCertFailureDialog({
+      message: error?.detail || error?.message || '获取 DNS 要求失败',
+      error_code: error?.error_code,
+      suggestions: error?.suggestions,
+      output: error?.output
+    })
+  } finally {
+    requesting.value = false
+  }
+}
+
+const handleDnsCompleteIssue = async () => {
+  if (!dnsJobId.value) {
+    ElMessage.error('会话已失效，请从第一步重新获取 DNS 要求')
+    return
+  }
+  requesting.value = true
+  try {
+    const response = await certificatesApi.dnsChallengeComplete(dnsJobId.value)
+    if (response.success) {
+      let msg = response.message || '证书申请成功'
+      if (response.verification?.message) {
+        msg += `（${response.verification.message}）`
+      }
+      ElMessage.success(msg)
+      requestDialogVisible.value = false
+      loadCertificates()
+    } else {
+      showCertFailureDialog({
+        message: response.message || '签发失败',
+        error_code: response.error_code,
+        suggestions: response.suggestions || [],
+        output: response.output
+      })
+    }
+  } catch (error) {
+    showCertFailureDialog({
+      message: error?.detail || error?.message || '签发失败',
+      error_code: error?.error_code,
+      suggestions: error?.suggestions,
+      output: error?.output
+    })
+  } finally {
+    requesting.value = false
+  }
+}
+
+const handleRequestSubmitHttp = async () => {
+  if (!requestFormRef.value) return
+  try {
+    await requestFormRef.value.validate()
+  } catch {
+    return
+  }
+  requesting.value = true
+  try {
+    const response = await certificatesApi.requestCertificate(
+      [requestForm.value.domain.trim()],
+      requestForm.value.email,
+      'http'
+    )
+    if (response.success) {
+      let msg = response.message || '证书申请成功'
+      if (response.verification?.message) {
+        msg += `（${response.verification.message}）`
+      }
+      ElMessage.success(msg)
+      requestDialogVisible.value = false
+      loadCertificates()
+    } else {
+      showCertFailureDialog({
+        message: response.message || '证书申请失败',
+        error_code: response.error_code,
+        suggestions: response.suggestions || [],
+        output: response.output
+      })
+    }
+  } catch (error) {
+    showCertFailureDialog({
+      message: error?.detail || error?.message || '证书申请失败',
+      error_code: error?.error_code,
+      suggestions: error?.suggestions,
+      output: error?.output
+    })
+  } finally {
+    requesting.value = false
+  }
+}
+
+const handleVerifyCert = async (cert) => {
+  cert._verifying = true
+  try {
+    const res = await certificatesApi.verifyCert(cert.id)
+    const d = res.details || {}
+    const lines = [
+      res.message,
+      d.domain ? `域名(CN): ${d.domain}` : null,
+      d.valid_to ? `有效期至: ${d.valid_to}` : null,
+      d.not_expired === false ? '注意：证书已过期或即将过期' : null,
+      d.key_matches_cert === false ? '注意：私钥与证书不匹配' : null
+    ].filter(Boolean)
+    ElMessageBox.alert(
+      `<div style="text-align:left;font-size:13px;line-height:1.6">${lines.map((l) => `<p>${escapeHtml(l)}</p>`).join('')}</div>`,
+      '证书校验结果',
+      { dangerouslyUseHTMLString: true, type: res.valid ? 'success' : 'warning' }
+    )
+  } catch (error) {
+    ElMessage.error(error?.detail || error?.message || '验证失败')
+  } finally {
+    cert._verifying = false
+  }
+}
 
 const requestRules = {
   domain: [
@@ -451,37 +808,8 @@ const handleRequest = () => {
     email: '',
     validation_method: 'http'
   }
+  resetRequestWizard()
   requestDialogVisible.value = true
-}
-
-const handleRequestSubmit = async () => {
-  if (!requestFormRef.value) return
-
-  try {
-    await requestFormRef.value.validate()
-  } catch (error) {
-    return
-  }
-
-  requesting.value = true
-  try {
-    const response = await certificatesApi.requestCertificate(
-      [requestForm.value.domain],
-      requestForm.value.email,
-      requestForm.value.validation_method
-    )
-    if (response.success) {
-      ElMessage.success(response.message)
-      requestDialogVisible.value = false
-      loadCertificates()
-    } else {
-      ElMessage.error(response.message || '证书申请失败')
-    }
-  } catch (error) {
-    ElMessage.error(error.detail || error.message || '证书申请失败')
-  } finally {
-    requesting.value = false
-  }
 }
 
 const handleUpload = () => {
@@ -645,11 +973,21 @@ const handleRenew = async (cert) => {
     if (response.success) {
       ElMessage.success(response.message || '证书续期成功')
     } else {
-      ElMessage.error(response.message || '证书续期失败')
+      showCertFailureDialog({
+        message: response.message || '证书续期失败',
+        error_code: response.error_code,
+        suggestions: response.suggestions || [],
+        output: response.output
+      })
     }
     loadCertificates()
   } catch (error) {
-    ElMessage.error(error.detail || error.message || '证书续期失败')
+    showCertFailureDialog({
+      message: error?.detail || error?.message || '证书续期失败',
+      error_code: error?.error_code,
+      suggestions: error?.suggestions,
+      output: error?.output
+    })
   }
 }
 
@@ -921,6 +1259,50 @@ onMounted(() => {
 
 .cert-request-dialog :deep(.el-radio__label) {
   white-space: normal;
+}
+
+.cert-request-steps {
+  margin-bottom: 20px;
+}
+
+.dns-wizard-panel {
+  margin-top: 8px;
+}
+
+.dns-alert-title {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dns-rec-desc {
+  margin-top: 8px;
+}
+
+.mono-text {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.dns-value {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.dns-help-links {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.dns-verify-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
 }
 </style>
 

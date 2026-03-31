@@ -30,9 +30,12 @@ from app.models import Certificate
 from app.utils.certbot import (
     request_certificate,
     renew_certificate,
-    list_certificates,
     get_certificate_info,
     copy_certificate_files,
+    start_dns_manual_challenge,
+    complete_dns_manual_challenge,
+    verify_dns_txt_record,
+    verify_certificate_files,
 )
 from app.utils.audit import create_audit_log, get_client_ip
 
@@ -51,6 +54,32 @@ class CertificateUpdateRequest(BaseModel):
     """证书更新请求"""
 
     auto_renew: Optional[bool] = None
+
+
+class DnsChallengeStartRequest(BaseModel):
+    """DNS 手动验证：启动 certbot 会话"""
+
+    domain: str
+    email: EmailStr
+
+
+class DnsChallengeCompleteRequest(BaseModel):
+    """DNS 手动验证：在 DNS 生效后继续 certbot"""
+
+    job_id: str
+
+
+class VerifyDnsRequest(BaseModel):
+    """验证 DNS TXT 记录"""
+
+    record_name: str
+    record_value: str
+
+
+class VerifyCertRequest(BaseModel):
+    """验证证书文件"""
+
+    cert_id: Optional[int] = None
 
 
 CERT_EXTENSIONS = {".crt", ".cer", ".pem"}
@@ -378,6 +407,97 @@ def _extract_archive(archive_path: Path, target_dir: Path):
     )
 
 
+def _finalize_certbot_issued_certificate(
+    *,
+    domain: str,
+    cert_path: str,
+    key_path: str,
+    email: str,
+    domains: List[str],
+    raw_output: str,
+    request: Request,
+    current_user: User,
+    db: Session,
+) -> dict:
+    """certbot 签发成功后：应用 SSL、写入数据库、审计，并返回与 /request 一致的结构。"""
+    try:
+        from app.utils.nginx import apply_ssl_config
+
+        ssl_result = apply_ssl_config(domain, cert_path, key_path)
+        ssl_message = ssl_result.get("message", "")
+    except Exception as e:
+        ssl_message = f"自动添加 SSL 配置失败: {str(e)}"
+
+    cert_info = get_certificate_info(cert_path)
+
+    valid_from = None
+    valid_to = None
+    if cert_info.get("valid_from"):
+        try:
+            valid_from = datetime.fromisoformat(
+                cert_info["valid_from"].replace("Z", "+00:00")
+            )
+        except Exception:
+            pass
+    if cert_info.get("valid_to"):
+        try:
+            valid_to = datetime.fromisoformat(
+                cert_info["valid_to"].replace("Z", "+00:00")
+            )
+        except Exception:
+            pass
+
+    cert = Certificate(
+        domain=domain,
+        cert_path=cert_path,
+        key_path=key_path,
+        issuer=cert_info.get("issuer", "Let's Encrypt"),
+        valid_from=valid_from,
+        valid_to=valid_to,
+        auto_renew=True,
+        created_by_id=current_user.id,
+    )
+    db.add(cert)
+    db.commit()
+    db.refresh(cert)
+
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="cert_request",
+        target=domain,
+        details={
+            "domains": domains,
+            "email": email,
+            "ssl_config": ssl_message,
+        },
+        ip_address=get_client_ip(request),
+    )
+
+    message = "证书申请成功"
+    if ssl_message and "失败" not in ssl_message:
+        message += f"，{ssl_message}"
+
+    verification = verify_certificate_files(cert_path, key_path)
+
+    return {
+        "success": True,
+        "message": message,
+        "output": raw_output,
+        "ssl_config": ssl_message,
+        "certificate": {
+            "id": cert.id,
+            "domain": cert.domain,
+            "cert_path": cert.cert_path,
+            "key_path": cert.key_path,
+        },
+        "verification": verification,
+        "error_code": None,
+        "suggestions": None,
+    }
+
+
 @router.get("", summary="获取证书列表")
 async def get_certificates(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -694,6 +814,115 @@ async def upload_certificate_archive(
         )
 
 
+@router.post("/dns-challenge/start", summary="DNS 验证：获取 TXT 并挂起 certbot")
+async def dns_challenge_start(
+    body: DnsChallengeStartRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """启动 certbot 手动 DNS 会话，返回需添加的 TXT 记录与 job_id。"""
+    domain = (body.domain or "").strip()
+    existing = db.query(Certificate).filter(Certificate.domain == domain).first()
+    if existing:
+        return {
+            "success": False,
+            "message": f"域名 {domain} 已存在证书，请先删除或使用「上传证书」更新",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+            "output": "",
+            "error_code": "domain_exists",
+            "suggestions": ["删除该域名证书后重试", "或使用重新上传证书"],
+        }
+    return start_dns_manual_challenge(domain, body.email)
+
+
+@router.post("/dns-challenge/complete", summary="DNS 验证：DNS 生效后继续签发")
+async def dns_challenge_complete(
+    body: DnsChallengeCompleteRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """在检测到 TXT 生效后，向挂起的 certbot 发送回车，复制证书并入库。"""
+    result = complete_dns_manual_challenge(body.job_id)
+
+    if not result["success"]:
+        return {
+            "success": False,
+            "message": result["message"],
+            "output": result.get("output", ""),
+            "error_code": result.get("error_code"),
+            "suggestions": result.get("suggestions"),
+        }
+
+    domain = result.get("domain")
+    email = result.get("email") or ""
+    if not domain:
+        return {
+            "success": False,
+            "message": "内部错误：缺少域名信息",
+            "output": result.get("output", ""),
+            "error_code": "internal",
+            "suggestions": [],
+        }
+
+    copy_result = copy_certificate_files(domain)
+    if not copy_result["success"]:
+        return {
+            "success": False,
+            "message": f"证书签发成功但复制文件失败: {copy_result['message']}",
+            "output": result.get("output", ""),
+            "error_code": "copy_failed",
+            "suggestions": [
+                "检查 nginx.ssl_dir 是否可写",
+                "确认 certbot 证书目录 /etc/letsencrypt/live 存在",
+            ],
+        }
+
+    cert_path = copy_result["cert_path"]
+    key_path = copy_result["key_path"]
+
+    return _finalize_certbot_issued_certificate(
+        domain=domain,
+        cert_path=cert_path,
+        key_path=key_path,
+        email=email,
+        domains=[domain],
+        raw_output=result.get("output", ""),
+        request=request,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.post("/verify-dns", summary="检测 DNS TXT 是否已生效")
+async def verify_dns(
+    body: VerifyDnsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """检测公网 DNS 是否已包含指定 TXT 值。"""
+    return verify_dns_txt_record(body.record_name, body.record_value)
+
+
+@router.post("/verify-cert", summary="校验证书文件是否有效")
+async def verify_cert(
+    body: VerifyCertRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """使用 openssl 校验证书是否过期、与私钥是否匹配。"""
+    if body.cert_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="请提供 cert_id"
+        )
+    cert = db.query(Certificate).filter(Certificate.id == body.cert_id).first()
+    if not cert:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
+
+    return verify_certificate_files(cert.cert_path, cert.key_path)
+
+
 @router.post("/request", summary="通过 certbot 自动申请证书")
 async def request_cert(
     request_data: CertificateRequest,
@@ -701,8 +930,19 @@ async def request_cert(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """通过 certbot 自动申请证书"""
-    # 调用 certbot 申请证书
+    """通过 certbot 自动申请证书（HTTP 验证）；DNS 请使用 /dns-challenge/start 与 /complete。"""
+    domain = request_data.domains[0] if request_data.domains else ""
+
+    existing = db.query(Certificate).filter(Certificate.domain == domain).first()
+    if existing:
+        return {
+            "success": False,
+            "message": f"域名 {domain} 已存在证书，请先删除或使用「上传证书」更新",
+            "output": "",
+            "error_code": "domain_exists",
+            "suggestions": ["删除该域名证书后重试", "或使用重新上传证书"],
+        }
+
     result = request_certificate(
         domains=request_data.domains,
         email=request_data.email,
@@ -714,9 +954,9 @@ async def request_cert(
             "success": False,
             "message": result["message"],
             "output": result["output"],
+            "error_code": result.get("error_code"),
+            "suggestions": result.get("suggestions"),
         }
-
-    domain = request_data.domains[0]
 
     # 复制证书文件到持久化目录
     copy_result = copy_certificate_files(domain)
@@ -725,89 +965,27 @@ async def request_cert(
             "success": False,
             "message": f"证书申请成功但复制文件失败: {copy_result['message']}",
             "output": result["output"],
+            "error_code": "copy_failed",
+            "suggestions": [
+                "检查 nginx.ssl_dir 是否可写",
+                "确认 certbot 输出目录中证书文件存在",
+            ],
         }
 
     cert_path = copy_result["cert_path"]
     key_path = copy_result["key_path"]
 
-    # 自动修改 nginx 配置添加 SSL
-    try:
-        from app.utils.nginx import apply_ssl_config
-        ssl_result = apply_ssl_config(domain, cert_path, key_path)
-        ssl_message = ssl_result.get("message", "")
-    except Exception as e:
-        ssl_message = f"自动添加 SSL 配置失败: {str(e)}"
-
-    # 保存证书记录
-    if cert_path and key_path:
-        # 获取证书信息
-        cert_info = get_certificate_info(cert_path)
-
-        # 解析有效期
-        valid_from = None
-        valid_to = None
-        if cert_info.get("valid_from"):
-            try:
-                valid_from = datetime.fromisoformat(
-                    cert_info["valid_from"].replace("Z", "+00:00")
-                )
-            except:
-                pass
-        if cert_info.get("valid_to"):
-            try:
-                valid_to = datetime.fromisoformat(
-                    cert_info["valid_to"].replace("Z", "+00:00")
-                )
-            except:
-                pass
-
-        cert = Certificate(
-            domain=domain,
-            cert_path=cert_path,
-            key_path=key_path,
-            issuer=cert_info.get("issuer", "Let's Encrypt"),
-            valid_from=valid_from,
-            valid_to=valid_to,
-            auto_renew=True,  # 自动申请的证书默认开启自动续期
-            created_by_id=current_user.id,
-        )
-        db.add(cert)
-        db.commit()
-        db.refresh(cert)
-
-        # 记录操作日志
-        create_audit_log(
-            db=db,
-            user_id=current_user.id,
-            username=current_user.username,
-            action="cert_request",
-            target=domain,
-            details={
-                "domains": request_data.domains,
-                "email": request_data.email,
-                "ssl_config": ssl_message,
-            },
-            ip_address=get_client_ip(request),
-        )
-
-        message = f"证书申请成功"
-        if ssl_message and "失败" not in ssl_message:
-            message += f"，{ssl_message}"
-
-        return {
-            "success": True,
-            "message": message,
-            "output": result["output"],
-            "ssl_config": ssl_message,
-            "certificate": {
-                "id": cert.id,
-                "domain": cert.domain,
-                "cert_path": cert.cert_path,
-                "key_path": cert.key_path,
-            },
-        }
-
-    return {"success": True, "message": result["message"], "output": result["output"]}
+    return _finalize_certbot_issued_certificate(
+        domain=domain,
+        cert_path=cert_path,
+        key_path=key_path,
+        email=request_data.email,
+        domains=request_data.domains,
+        raw_output=result["output"],
+        request=request,
+        current_user=current_user,
+        db=db,
+    )
 
 
 @router.post("/renew/{cert_id}", summary="手动续期证书")
@@ -835,8 +1013,20 @@ async def renew_cert(
             return {
                 "success": False,
                 "message": f"该证书是通过手动上传的，无法自动续期。请通过重新上传功能手动更新证书，或通过申请证书功能使用certbot自动申请新证书。",
-                "output": result.get("output", "")
+                "output": result.get("output", ""),
+                "error_code": "manual_upload_no_certbot",
+                "suggestions": [
+                    "使用「重新上传」替换证书文件",
+                    "或删除后使用 Let's Encrypt 自动申请",
+                ],
             }
+        return {
+            "success": False,
+            "message": result["message"],
+            "output": result.get("output", ""),
+            "error_code": result.get("error_code"),
+            "suggestions": result.get("suggestions"),
+        }
 
     # 如果续期成功，复制新的证书文件并更新nginx配置
     if result["success"]:
