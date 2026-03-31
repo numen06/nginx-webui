@@ -12,9 +12,9 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 # 仅复制依赖文件以利用缓存
 COPY --chown=node:node frontend/package*.json ./
-RUN npm config set registry ${NPM_REGISTRY} && \
-    npm install && \
-    npm cache clean --force
+RUN npm install --registry=${NPM_REGISTRY} && \
+    npm cache clean --force && \
+    rm -f /home/node/.npmrc
 
 # 复制剩余前端代码并构建
 COPY --chown=node:node frontend/ ./
@@ -29,6 +29,7 @@ ARG NGINX_VERSION=1.29.3
 ARG DNF_TIMEOUT=30
 ARG DNF_RETRIES=10
 ARG DNF_MAX_PARALLEL_DOWNLOADS=10
+ARG DNF_INSTALL_WEAK_DEPS=False
 
 # 安装 Nginx 编译依赖
 RUN set -eux; \
@@ -38,6 +39,8 @@ RUN set -eux; \
         --setopt=timeout=${DNF_TIMEOUT} \
         --setopt=retries=${DNF_RETRIES} \
         --setopt=max_parallel_downloads=${DNF_MAX_PARALLEL_DOWNLOADS} \
+        --setopt=install_weak_deps=${DNF_INSTALL_WEAK_DEPS} \
+        --setopt=tsflags=nodocs \
         tar \
         gcc gcc-c++ make \
         pcre pcre-devel \
@@ -65,6 +68,7 @@ ENV APP_PORT=8000
 ARG DNF_TIMEOUT=30
 ARG DNF_RETRIES=10
 ARG DNF_MAX_PARALLEL_DOWNLOADS=10
+ARG DNF_INSTALL_WEAK_DEPS=False
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 #设置时区
@@ -84,6 +88,8 @@ RUN set -eux; \
         --setopt=timeout=${DNF_TIMEOUT} \
         --setopt=retries=${DNF_RETRIES} \
         --setopt=max_parallel_downloads=${DNF_MAX_PARALLEL_DOWNLOADS} \
+        --setopt=install_weak_deps=${DNF_INSTALL_WEAK_DEPS} \
+        --setopt=tsflags=nodocs \
         ca-certificates \
         curl wget tar \
         iproute iputils net-tools \
@@ -107,9 +113,9 @@ RUN find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null ||
     find /app/backend -type f -name "*.pyo" -delete 2>/dev/null || true
 
 # 安装 Python 依赖（合并命令减少层数）
-RUN pip config set global.index-url ${PIP_INDEX_URL} && \
-    pip install --upgrade pip && \
-    cd /app/backend && pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip --index-url=${PIP_INDEX_URL} && \
+    cd /app/backend && pip install --no-cache-dir --index-url=${PIP_INDEX_URL} -r requirements.txt && \
+    rm -rf /root/.cache/pip /root/.config/pip
 
 # 从 nginx-builder 复制预编译产物
 COPY --from=nginx-builder /app/data/nginx/versions/1.29.3 /app/data/nginx/versions/1.29.3
