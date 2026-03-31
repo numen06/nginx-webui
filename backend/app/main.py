@@ -286,7 +286,9 @@ async def startup_event():
             print("日志轮转功能已禁用，跳过定时任务启动")
             return
 
-        print(f"✓ 日志轮转定时任务已启动，轮转时间: {logrotate_config.rotate_time}, 保留天数: {logrotate_config.retention_days}")
+        print(
+            f"✓ 日志轮转定时任务已启动，轮转时间: {logrotate_config.rotate_time}, 保留天数: {logrotate_config.retention_days}"
+        )
 
         # 计算下次轮转时间
         try:
@@ -328,9 +330,7 @@ async def startup_event():
                         f"删除 {len(result.get('deleted_files', []))} 个旧文件"
                     )
                 else:
-                    logging.error(
-                        f"定时日志轮转失败: {result.get('errors', [])}"
-                    )
+                    logging.error(f"定时日志轮转失败: {result.get('errors', [])}")
             except Exception as exc:
                 logging.error(f"日志轮转定时任务异常: {exc}", exc_info=True)
                 # 出错后等待 1 小时再重试
@@ -378,9 +378,11 @@ async def startup_event():
 
                         db = SessionLocal()
                         try:
-                            certificates = db.query(Certificate).filter(
-                                Certificate.auto_renew == True
-                            ).all()
+                            certificates = (
+                                db.query(Certificate)
+                                .filter(Certificate.auto_renew == True)
+                                .all()
+                            )
 
                             for cert in certificates:
                                 copy_result = copy_certificate_files(cert.domain)
@@ -392,7 +394,9 @@ async def startup_event():
                                     if cert_info.get("valid_to"):
                                         try:
                                             cert.valid_to = datetime.fromisoformat(
-                                                cert_info["valid_to"].replace("Z", "+00:00")
+                                                cert_info["valid_to"].replace(
+                                                    "Z", "+00:00"
+                                                )
                                             )
                                         except:
                                             pass

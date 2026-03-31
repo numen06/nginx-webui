@@ -333,6 +333,19 @@ def analyze_logs_simple(
         offset_file = Path(str(access_log_path) + ".offset")
         offset = 0
 
+        # 访问日志不存在时，优雅返回（避免抛 500）
+        if not access_log_path.exists():
+            msg = f"访问日志文件不存在: {access_log_path}"
+            logger.warning("[statistics_v2] %s", msg)
+            _state_manager.finish_task(success=True, analyzed_lines=0)
+            return {
+                "success": True,
+                "analyzed_lines": 0,
+                "saved_buckets": 0,
+                "time_range": f"{start_time.strftime('%Y-%m-%d %H:%M')} -> {end_time.strftime('%Y-%m-%d %H:%M')}",
+                "message": "访问日志文件不存在，暂无可分析数据",
+            }
+
         if not full and offset_file.exists():
             # 增量：从上次offset开始
             with open(offset_file, "r") as f:
