@@ -65,6 +65,17 @@ def classify_certbot_failure(
             ],
         )
 
+    if "another instance of certbot is already running" in o:
+        return (
+            "certbot_busy",
+            "Certbot 正在被其他任务占用，请稍后重试",
+            [
+                "如果你刚发起过 DNS 验证，请先在当前流程完成“检测 DNS -> 完成申请”",
+                "等待 10-30 秒后重试，避免同时发起多个申请/续期任务",
+                "若长期不恢复，请检查是否有残留 certbot 进程或锁文件",
+            ],
+        )
+
     if "certbot: command not found" in o or (
         "no such file or directory" in o and "certbot" in full.lower()
     ):
@@ -413,6 +424,25 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
     启动 certbot manual DNS 验证进程，解析出 TXT 后保持进程等待 stdin 回车。
     """
     _cleanup_stale_dns_jobs()
+    # 避免并发启动多个 manual DNS 会话，触发 certbot 锁冲突
+    with _dns_jobs_lock:
+        for jid, job in _dns_jobs.items():
+            p = job.get("proc")
+            if p and p.poll() is None:
+                return {
+                    "success": False,
+                    "message": "已有证书申请会话正在进行，请先完成当前会话后再发起新申请",
+                    "job_id": jid,
+                    "record_name": job.get("record_name"),
+                    "record_value": job.get("record_value"),
+                    "output": job.get("stdout_tail", ""),
+                    "error_code": "certbot_busy",
+                    "suggestions": [
+                        "继续当前 DNS 验证流程（可直接使用已展示的 TXT 记录）",
+                        "完成或等待当前申请结束后，再发起新的申请",
+                    ],
+                }
+
     config = get_config()
     certbot_path = Path(config.nginx.certbot_path)
 
