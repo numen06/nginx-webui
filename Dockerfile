@@ -18,7 +18,35 @@ RUN npm run build && \
     rm -rf node_modules && \
     rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
-# ==================== 第二阶段：运行后端 ====================
+# ==================== 第二阶段：构建默认 Nginx ====================
+FROM ac2-registry.cn-hangzhou.cr.aliyuncs.com/ac2/base:alinux3.2104-py312 AS nginx-builder
+
+ARG NGINX_VERSION=1.29.3
+
+# 安装 Nginx 编译依赖
+RUN set -eux; \
+    rm -f /var/lib/rpm/__db* || true; \
+    rpm --rebuilddb || true; \
+    dnf install -y \
+        tar \
+        gcc gcc-c++ make \
+        pcre pcre-devel \
+        zlib zlib-devel \
+        openssl openssl-devel && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# 仅复制预编译所需文件
+COPY scripts/build-default-nginx.sh /app/scripts/build-default-nginx.sh
+COPY backend/default-nginx/ /app/backend/default-nginx/
+
+# 编译并安装到 /app/data/nginx/versions/<version>
+RUN chmod +x /app/scripts/build-default-nginx.sh && \
+    NGINX_VERSION=${NGINX_VERSION} /app/scripts/build-default-nginx.sh
+
+# ==================== 第三阶段：运行后端 ====================
 FROM ac2-registry.cn-hangzhou.cr.aliyuncs.com/ac2/base:alinux3.2104-py312
 
 # 设置环境变量
@@ -29,7 +57,7 @@ ENV APP_PORT=8000
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
 
-# 安装系统依赖（包含编译 Nginx 所需工具链）
+# 安装运行时依赖
 # 说明：
 # - 阿里云龙蜥镜像在某些环境下 RPM 数据库可能是 bdb_ro，只读导致 dnf 事务失败
 # - 这里先尽量修复 RPM 数据库，再用 dnf 安装，避免 update 带来额外风险
@@ -42,10 +70,9 @@ RUN set -eux; \
         ca-certificates \
         curl wget tar \
         iproute iputils net-tools \
-        gcc gcc-c++ make \
-        pcre pcre-devel \
-        zlib zlib-devel \
-        openssl openssl-devel \
+        pcre \
+        zlib \
+        openssl \
         certbot python3-certbot-nginx && \
     dnf clean all && \
     rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
@@ -53,9 +80,6 @@ RUN set -eux; \
 
 # 设置工作目录
 WORKDIR /app
-
-# 复制构建脚本（脚本统一放在 scripts 目录）
-COPY scripts/build-default-nginx.sh /app/scripts/build-default-nginx.sh
 
 # 复制后端代码（排除不需要的文件，.dockerignore 已处理）
 COPY backend/ /app/backend/
@@ -70,9 +94,8 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
     pip install --upgrade pip && \
     cd /app/backend && pip install --no-cache-dir -r requirements.txt
 
-# 预编译默认 Nginx（通过独立脚本，便于后续修改）
-RUN chmod +x /app/scripts/build-default-nginx.sh && \
-    /app/scripts/build-default-nginx.sh
+# 从 nginx-builder 复制预编译产物
+COPY --from=nginx-builder /app/data/nginx/versions/1.29.3 /app/data/nginx/versions/1.29.3
 
 # 准备数据目录结构，便于通过 /app/data 单目录持久化
 # 同时清理临时文件和缓存
