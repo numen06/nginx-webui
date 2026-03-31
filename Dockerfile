@@ -54,6 +54,9 @@ RUN set -eux; \
 # 设置工作目录
 WORKDIR /app
 
+# 复制构建脚本（脚本统一放在 scripts 目录）
+COPY scripts/build-default-nginx.sh /app/scripts/build-default-nginx.sh
+
 # 复制后端代码（排除不需要的文件，.dockerignore 已处理）
 COPY backend/ /app/backend/
 
@@ -66,6 +69,10 @@ RUN find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null ||
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
     pip install --upgrade pip && \
     cd /app/backend && pip install --no-cache-dir -r requirements.txt
+
+# 预编译默认 Nginx（通过独立脚本，便于后续修改）
+RUN chmod +x /app/scripts/build-default-nginx.sh && \
+    /app/scripts/build-default-nginx.sh
 
 # 准备数据目录结构，便于通过 /app/data 单目录持久化
 # 同时清理临时文件和缓存

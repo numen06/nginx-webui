@@ -79,6 +79,7 @@ docker-compose.yml
 
 # 脚本（不需要在镜像中）
 scripts/
+!scripts/build-default-nginx.sh
 
 # 后端测试和开发文件
 backend/*.pyc
@@ -92,6 +93,7 @@ backend/.coverage
 *.tar.gz
 *.zip
 *.tgz
+!backend/default-nginx/nginx-1.29.3.tar.gz
 
 # 其他
 .cache/
