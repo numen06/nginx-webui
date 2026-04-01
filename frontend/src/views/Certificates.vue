@@ -125,17 +125,17 @@
                 <span class="path-label">PEM：</span>
                 <span
                   class="path-text"
-                  :title="scope.row.fullchain_pem_path || '-'"
+                  :title="scope.row.pem_path || '-'"
                 >
-                  {{ scope.row.fullchain_pem_path || '-' }}
+                  {{ scope.row.pem_path || '-' }}
                 </span>
-                <el-tooltip content="复制 fullchain.pem 路径（同目录下有 privkey.pem）" :show-after="200">
+                <el-tooltip content="复制证书链 PEM 路径（与 .crt 同内容，常用作 ssl_certificate）" :show-after="200">
                   <el-button
                     size="small"
                     text
                     :icon="CopyDocument"
-                    :disabled="!scope.row.fullchain_pem_path"
-                    @click="handleCopy(scope.row.fullchain_pem_path)"
+                    :disabled="!scope.row.pem_path"
+                    @click="handleCopy(scope.row.pem_path)"
                   />
                 </el-tooltip>
               </div>

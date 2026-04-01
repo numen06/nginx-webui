@@ -206,11 +206,12 @@ def ensure_pem_bundle_from_stored_paths(
     domain: str, cert_path: str, key_path: str
 ) -> bool:
     """
-    当 ssl_dir/{basename}/ 下缺少 fullchain.pem 或 privkey.pem 时，从已有证书链与私钥文件复制生成
-    （内容与入库的 .crt/.key 一致）。用于仅存在扁平 .crt/.key、或历史数据未写 PEM 子目录的情况。
+    从已有证书链、私钥补齐磁盘布局：
+    - ssl_dir/{basename}.pem：与 .crt 同内容（证书链 PEM，与 .crt/.key 同级）
+    - ssl_dir/{basename}/fullchain.pem、privkey.pem：Certbot 风格子目录
 
     Returns:
-        True：子目录下两个 PEM 均存在（原本就有或已成功写入）；False：源文件不存在或写入失败。
+        True：上述 .pem 与子目录两文件均存在；False：源文件不存在或写入失败。
     """
     cert_p = Path(cert_path)
     key_p = Path(key_path)
@@ -227,21 +228,30 @@ def ensure_pem_bundle_from_stored_paths(
     ssl_dir.mkdir(parents=True, exist_ok=True)
 
     base = _domain_ssl_basename(domain)
+    target_flat_pem = ssl_dir / f"{base}.pem"
+
+    try:
+        if cert_p.resolve() != target_flat_pem.resolve():
+            shutil.copy2(cert_p, target_flat_pem)
+    except OSError:
+        pass
+
     subdir = ssl_dir / base
     target_fc = subdir / "fullchain.pem"
     target_pk = subdir / "privkey.pem"
-
-    if target_fc.is_file() and target_pk.is_file():
-        return True
 
     try:
         subdir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(cert_p, target_fc)
         shutil.copy2(key_p, target_pk)
     except OSError:
-        return False
+        pass
 
-    return target_fc.is_file() and target_pk.is_file()
+    return (
+        target_flat_pem.is_file()
+        and target_fc.is_file()
+        and target_pk.is_file()
+    )
 
 
 def copy_certificate_files(domain: str) -> Dict[str, Any]:
@@ -251,6 +261,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
     写入内容：
     - {basename}.crt：与 fullchain.pem 相同（完整证书链，作 ssl_certificate）
     - {basename}.key：与 privkey.pem 相同（私钥，作 ssl_certificate_key）
+    - {basename}.pem：与 .crt 相同（证书链 PEM 扩展名，与上两项同级）
     - {basename}/fullchain.pem、{basename}/privkey.pem：与官方示例一致的命名，便于手写配置或挂载
 
     basename 由域名规范化得到（通配符 * 变为 _star_ 等）。
@@ -267,6 +278,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "message": f"Certbot 证书文件不存在: {source_cert}",
             "cert_path": None,
             "key_path": None,
+            "certificate_pem": None,
             "fullchain_pem": None,
             "privkey_pem": None,
             "ssl_subdir": None,
@@ -278,6 +290,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "message": f"Certbot 私钥文件不存在: {source_key}",
             "cert_path": None,
             "key_path": None,
+            "certificate_pem": None,
             "fullchain_pem": None,
             "privkey_pem": None,
             "ssl_subdir": None,
@@ -289,6 +302,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
     base = _domain_ssl_basename(domain)
     target_cert = ssl_dir / f"{base}.crt"
     target_key = ssl_dir / f"{base}.key"
+    target_flat_pem = ssl_dir / f"{base}.pem"
     subdir = ssl_dir / base
     target_fullchain_pem = subdir / "fullchain.pem"
     target_privkey_pem = subdir / "privkey.pem"
@@ -296,6 +310,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
     try:
         shutil.copy2(source_cert, target_cert)
         shutil.copy2(source_key, target_key)
+        shutil.copy2(source_cert, target_flat_pem)
         subdir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_cert, target_fullchain_pem)
         shutil.copy2(source_key, target_privkey_pem)
@@ -305,6 +320,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "message": "证书已复制到本系统 ssl 目录（含 Nginx 常用 fullchain.pem / privkey.pem）",
             "cert_path": str(target_cert.resolve()),
             "key_path": str(target_key.resolve()),
+            "certificate_pem": str(target_flat_pem.resolve()),
             "fullchain_pem": str(target_fullchain_pem.resolve()),
             "privkey_pem": str(target_privkey_pem.resolve()),
             "ssl_subdir": str(subdir.resolve()),
@@ -315,6 +331,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "message": f"复制证书文件失败: {str(e)}",
             "cert_path": None,
             "key_path": None,
+            "certificate_pem": None,
             "fullchain_pem": None,
             "privkey_pem": None,
             "ssl_subdir": None,

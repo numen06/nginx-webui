@@ -51,7 +51,7 @@ router = APIRouter(prefix="/api/certificates", tags=["certificates"])
 
 
 def _certificate_pem_paths(cert: Certificate) -> Dict[str, Any]:
-    """Certbot 同步到 ssl_dir 时的 fullchain.pem / privkey.pem 绝对路径（与 .crt/.key 同内容）。"""
+    """扁平 {basename}.pem 与子目录 fullchain/privkey 路径（与 .crt/.key 同内容）。"""
     config = get_config()
     ssl_dir = Path(config.nginx.ssl_dir)
     if not ssl_dir.is_absolute():
@@ -61,16 +61,25 @@ def _certificate_pem_paths(cert: Certificate) -> Dict[str, Any]:
             pass
 
     basename = _domain_ssl_basename(cert.domain)
+    flat_pem = ssl_dir / f"{basename}.pem"
     subdir = ssl_dir / basename
     fc = subdir / "fullchain.pem"
     pk = subdir / "privkey.pem"
 
     cert_p = Path(cert.cert_path)
     key_p = Path(cert.key_path)
-    if cert_p.is_file() and key_p.is_file() and not (fc.is_file() and pk.is_file()):
+    if cert_p.is_file() and key_p.is_file():
         ensure_pem_bundle_from_stored_paths(
             cert.domain, str(cert_p.resolve()), str(key_p.resolve())
         )
+
+    pem_path: Optional[str] = None
+    if flat_pem.is_file():
+        try:
+            pem_path = str(flat_pem.resolve())
+        except OSError:
+            pem_path = str(flat_pem)
+
     fullchain_pem_path: Optional[str] = None
     privkey_pem_path: Optional[str] = None
     if fc.is_file() and pk.is_file():
@@ -82,6 +91,7 @@ def _certificate_pem_paths(cert: Certificate) -> Dict[str, Any]:
             privkey_pem_path = str(pk)
 
     return {
+        "pem_path": pem_path,
         "fullchain_pem_path": fullchain_pem_path,
         "privkey_pem_path": privkey_pem_path,
     }
@@ -470,6 +480,7 @@ def _finalize_certbot_issued_certificate(
     request: Request,
     current_user: User,
     db: Session,
+    certificate_pem: Optional[str] = None,
     fullchain_pem: Optional[str] = None,
     privkey_pem: Optional[str] = None,
     ssl_subdir: Optional[str] = None,
@@ -542,6 +553,8 @@ def _finalize_certbot_issued_certificate(
         "cert_path": cert.cert_path,
         "key_path": cert.key_path,
     }
+    if certificate_pem:
+        cert_payload["certificate_pem"] = certificate_pem
     if fullchain_pem:
         cert_payload["fullchain_pem"] = fullchain_pem
     if privkey_pem:
@@ -1199,6 +1212,7 @@ async def dns_challenge_complete(
         request=request,
         current_user=current_user,
         db=db,
+        certificate_pem=copy_result.get("certificate_pem"),
         fullchain_pem=copy_result.get("fullchain_pem"),
         privkey_pem=copy_result.get("privkey_pem"),
         ssl_subdir=copy_result.get("ssl_subdir"),
@@ -1323,6 +1337,7 @@ async def request_cert(
         request=request,
         current_user=current_user,
         db=db,
+        certificate_pem=copy_result.get("certificate_pem"),
         fullchain_pem=copy_result.get("fullchain_pem"),
         privkey_pem=copy_result.get("privkey_pem"),
         ssl_subdir=copy_result.get("ssl_subdir"),
@@ -1437,6 +1452,7 @@ async def renew_cert(
             renew_payload["certificate"] = {
                 "cert_path": cert.cert_path,
                 "key_path": cert.key_path,
+                "certificate_pem": copy_result.get("certificate_pem"),
                 "fullchain_pem": copy_result.get("fullchain_pem"),
                 "privkey_pem": copy_result.get("privkey_pem"),
                 "ssl_subdir": copy_result.get("ssl_subdir"),
