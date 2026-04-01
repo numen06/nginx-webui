@@ -42,10 +42,53 @@ from app.utils.certbot import (
     verify_dns_txt_record,
     verify_certificate_files,
     test_auto_renew_environment,
+    _domain_ssl_basename,
 )
 from app.utils.audit import create_audit_log, get_client_ip
 
 router = APIRouter(prefix="/api/certificates", tags=["certificates"])
+
+
+def _certificate_disk_and_nginx_fields(cert: Certificate) -> Dict[str, Any]:
+    """列表/详情共用：磁盘是否存在、Certbot 风格 PEM 子目录、可复制 nginx 片段。"""
+    cert_p = Path(cert.cert_path)
+    key_p = Path(cert.key_path)
+    cert_exists = cert_p.is_file()
+    key_exists = key_p.is_file()
+
+    config = get_config()
+    ssl_dir = Path(config.nginx.ssl_dir)
+    if not ssl_dir.is_absolute():
+        try:
+            ssl_dir = ssl_dir.resolve()
+        except OSError:
+            pass
+
+    basename = _domain_ssl_basename(cert.domain)
+    subdir = ssl_dir / basename
+    fc = subdir / "fullchain.pem"
+    pk = subdir / "privkey.pem"
+    fullchain_pem_path: Optional[str] = None
+    privkey_pem_path: Optional[str] = None
+    if fc.is_file() and pk.is_file():
+        try:
+            fullchain_pem_path = str(fc.resolve())
+            privkey_pem_path = str(pk.resolve())
+        except OSError:
+            fullchain_pem_path = str(fc)
+            privkey_pem_path = str(pk)
+
+    nginx_ssl_snippet = (
+        f"ssl_certificate {cert.cert_path};\nssl_certificate_key {cert.key_path};"
+    )
+
+    return {
+        "cert_file_exists": cert_exists,
+        "key_file_exists": key_exists,
+        "fullchain_pem_path": fullchain_pem_path,
+        "privkey_pem_path": privkey_pem_path,
+        "nginx_ssl_snippet": nginx_ssl_snippet,
+    }
 
 
 class CertificateRequest(BaseModel):
@@ -529,22 +572,164 @@ async def get_certificates(
         if cert.valid_to:
             days_until_expiry = (cert.valid_to - datetime.now()).days
 
-        result.append(
-            {
-                "id": cert.id,
-                "domain": cert.domain,
-                "cert_path": cert.cert_path,
-                "key_path": cert.key_path,
-                "issuer": cert.issuer,
-                "valid_from": cert.valid_from.isoformat() if cert.valid_from else None,
-                "valid_to": cert.valid_to.isoformat() if cert.valid_to else None,
-                "auto_renew": cert.auto_renew,
-                "days_until_expiry": days_until_expiry,
-                "created_at": cert.created_at.isoformat() if cert.created_at else None,
-            }
-        )
+        row: Dict[str, Any] = {
+            "id": cert.id,
+            "domain": cert.domain,
+            "cert_path": cert.cert_path,
+            "key_path": cert.key_path,
+            "issuer": cert.issuer,
+            "valid_from": cert.valid_from.isoformat() if cert.valid_from else None,
+            "valid_to": cert.valid_to.isoformat() if cert.valid_to else None,
+            "auto_renew": cert.auto_renew,
+            "days_until_expiry": days_until_expiry,
+            "created_at": cert.created_at.isoformat() if cert.created_at else None,
+        }
+        row.update(_certificate_disk_and_nginx_fields(cert))
+        result.append(row)
 
     return {"success": True, "certificates": result}
+
+
+_LETSENCRYPT_LIVE_ROOT = Path("/etc/letsencrypt/live")
+_LETSENCRYPT_ROOT = Path("/etc/letsencrypt")
+
+
+def _validate_letsencrypt_live_domain_segment(domain: str) -> str:
+    """防止路径穿越；返回 strip 后的证书目录名（与 certbot live 子目录一致）。"""
+    if not domain or not isinstance(domain, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="请提供域名（证书目录名）"
+        )
+    d = domain.strip()
+    if not d:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="域名不能为空"
+        )
+    if ".." in d or "/" in d or "\\" in d or "\x00" in d:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法证书目录名：不可包含路径分隔符或 ..",
+        )
+    return d
+
+
+@router.get("/letsencrypt-live/list", summary="列出 /etc/letsencrypt/live 下的证书目录")
+async def list_letsencrypt_live_directories(
+    current_user: User = Depends(get_current_user),
+):
+    """用于迁移：展示本机 certbot live 子目录名；无目录或不可读时返回空列表。"""
+    live = _LETSENCRYPT_LIVE_ROOT
+    if not live.is_dir():
+        return {
+            "success": True,
+            "domains": [],
+            "live_path": str(live),
+            "hint": "本机不存在该目录或未挂载 Certbot 数据（仅用「上传证书」导入时也会出现此情况）",
+        }
+
+    names: List[str] = []
+    try:
+        for p in sorted(live.iterdir(), key=lambda x: x.name.lower()):
+            if not p.is_dir() or p.name.startswith("."):
+                continue
+            fc = p / "fullchain.pem"
+            pk = p / "privkey.pem"
+            if fc.is_file() and pk.is_file():
+                names.append(p.name)
+    except OSError:
+        return {
+            "success": True,
+            "domains": [],
+            "live_path": str(live),
+            "hint": "无法读取目录（权限不足或未挂载）",
+        }
+
+    return {
+        "success": True,
+        "domains": names,
+        "live_path": str(live),
+        "hint": None,
+    }
+
+
+@router.get("/letsencrypt-live/export", summary="从 /etc/letsencrypt/live/<目录名>/ 导出 ZIP")
+async def export_letsencrypt_live_bundle(
+    request: Request,
+    domain: str = Query(..., description="certbot 证书名称，即 live 下子目录名"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    打包 fullchain.pem、privkey.pem（arcname 为标准文件名），便于带到另一台通过「上传证书」导入。
+    """
+    d = _validate_letsencrypt_live_domain_segment(domain)
+
+    try:
+        live_root = _LETSENCRYPT_LIVE_ROOT.resolve()
+    except OSError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法解析 Let's Encrypt 目录",
+        )
+
+    live_dir = (live_root / d).resolve()
+    if live_dir.parent != live_root or not live_dir.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"未找到 /etc/letsencrypt/live/{d}/",
+        )
+
+    fullchain = live_dir / "fullchain.pem"
+    privkey = live_dir / "privkey.pem"
+    if not fullchain.is_file() or not privkey.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="缺少 fullchain.pem 或 privkey.pem",
+        )
+
+    try:
+        le_root = _LETSENCRYPT_ROOT.resolve()
+        fc_res = fullchain.resolve()
+        pk_res = privkey.resolve()
+        fc_res.relative_to(le_root)
+        pk_res.relative_to(le_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="证书路径异常，已拒绝导出",
+        )
+    except OSError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="无法解析证书文件路径",
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(fc_res, arcname="fullchain.pem")
+        zf.write(pk_res, arcname="privkey.pem")
+    buf.seek(0)
+
+    safe_name = re.sub(r"[^\w.\-]+", "_", d).strip("._") or "certificate"
+    filename = f"{safe_name}-letsencrypt-live.zip"
+
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="cert_export_letsencrypt_live",
+        target=d,
+        details={"fullchain": str(fc_res), "privkey": str(pk_res)},
+        ip_address=get_client_ip(request),
+    )
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 
 @router.get("/{cert_id}/download", summary="下载证书与私钥（ZIP）")
@@ -612,28 +797,27 @@ async def get_certificate(
     # 重新获取证书信息（可能已更新）
     cert_info = get_certificate_info(cert.cert_path)
 
-    return {
-        "success": True,
-        "certificate": {
-            "id": cert.id,
-            "domain": cert.domain,
-            "cert_path": cert.cert_path,
-            "key_path": cert.key_path,
-            "issuer": cert.issuer or cert_info.get("issuer"),
-            "valid_from": (
-                cert.valid_from.isoformat()
-                if cert.valid_from
-                else cert_info.get("valid_from")
-            ),
-            "valid_to": (
-                cert.valid_to.isoformat()
-                if cert.valid_to
-                else cert_info.get("valid_to")
-            ),
-            "auto_renew": cert.auto_renew,
-            "created_at": cert.created_at.isoformat() if cert.created_at else None,
-        },
+    detail: Dict[str, Any] = {
+        "id": cert.id,
+        "domain": cert.domain,
+        "cert_path": cert.cert_path,
+        "key_path": cert.key_path,
+        "issuer": cert.issuer or cert_info.get("issuer"),
+        "valid_from": (
+            cert.valid_from.isoformat()
+            if cert.valid_from
+            else cert_info.get("valid_from")
+        ),
+        "valid_to": (
+            cert.valid_to.isoformat()
+            if cert.valid_to
+            else cert_info.get("valid_to")
+        ),
+        "auto_renew": cert.auto_renew,
+        "created_at": cert.created_at.isoformat() if cert.created_at else None,
     }
+    detail.update(_certificate_disk_and_nginx_fields(cert))
+    return {"success": True, "certificate": detail}
 
 
 @router.post("/upload", summary="手动上传证书")

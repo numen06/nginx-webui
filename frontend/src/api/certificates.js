@@ -18,6 +18,21 @@ export const certificatesApi = {
     })
   },
 
+  /** 列出本机 /etc/letsencrypt/live 下可导出的证书目录名 */
+  listLetsencryptLiveDomains() {
+    return api.get('/certificates/letsencrypt-live/list')
+  },
+
+  /**
+   * 从 /etc/letsencrypt/live/<目录名>/ 导出 fullchain.pem + privkey.pem（ZIP，标准文件名）
+   */
+  exportLetsencryptLiveBundle(domain) {
+    return api.get('/certificates/letsencrypt-live/export', {
+      params: { domain },
+      responseType: 'blob'
+    })
+  },
+
   // 上传证书（如果提供certId，则更新现有证书）
   uploadCertificate(domain, certFile, keyFile, autoRenew, certId = null) {
     const formData = new FormData()

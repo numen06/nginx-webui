@@ -52,7 +52,7 @@
             </p>
             <ol class="migration-guide-steps">
               <li>
-                <strong>导出</strong>：从原服务器 <code>/etc/letsencrypt/live/&lt;域名&gt;/</code> 或云厂商面板下载链文件与私钥。
+                <strong>导出</strong>：从原服务器 <code>/etc/letsencrypt/live/&lt;证书目录名&gt;/</code>（一般为 <code>fullchain.pem</code>、<code>privkey.pem</code>）或云厂商面板下载；若<strong>本机</strong>已挂载该目录，可在「<strong>迁移与自动续签</strong>」向导第一步<strong>直接打包下载 ZIP</strong>，带到另一台用「上传证书」导入。
               </li>
               <li>
                 <strong>导入</strong>：本页「上传证书」选择文件或压缩包，域名填实际证书域名。
@@ -88,12 +88,65 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="证书路径 / 私钥路径" min-width="600">
+        <el-table-column label="路径 / 磁盘 / Nginx" min-width="720">
           <template #default="scope">
             <div class="paths-cell">
+              <div class="path-disk-row">
+                <span class="path-meta-label">磁盘</span>
+                <el-tag
+                  v-if="scope.row.cert_file_exists === true"
+                  size="small"
+                  type="success"
+                >
+                  证书在盘
+                </el-tag>
+                <el-tag
+                  v-else-if="scope.row.cert_file_exists === false"
+                  size="small"
+                  type="danger"
+                >
+                  证书缺失
+                </el-tag>
+                <el-tag
+                  v-if="scope.row.key_file_exists === true"
+                  size="small"
+                  type="success"
+                >
+                  私钥在盘
+                </el-tag>
+                <el-tag
+                  v-else-if="scope.row.key_file_exists === false"
+                  size="small"
+                  type="danger"
+                >
+                  私钥缺失
+                </el-tag>
+                <el-button
+                  v-if="scope.row.nginx_ssl_snippet"
+                  size="small"
+                  text
+                  type="primary"
+                  @click="handleCopy(scope.row.nginx_ssl_snippet)"
+                >
+                  复制 Nginx（库内路径）
+                </el-button>
+                <el-button
+                  v-if="nginxPemSnippet(scope.row)"
+                  size="small"
+                  text
+                  type="primary"
+                  @click="handleCopy(nginxPemSnippet(scope.row))"
+                >
+                  复制 Nginx（fullchain.pem）
+                </el-button>
+              </div>
               <div class="path-item">
                 <span class="path-label">证书：</span>
-                <span class="path-text" :title="scope.row.cert_path || '-'">
+                <span
+                  class="path-text"
+                  :class="{ 'path-text-missing': scope.row.cert_file_exists === false }"
+                  :title="scope.row.cert_path || '-'"
+                >
                   {{ scope.row.cert_path || '-' }}
                 </span>
                 <el-tooltip content="复制证书路径" :show-after="200">
@@ -108,7 +161,11 @@
               </div>
               <div class="path-item">
                 <span class="path-label">私钥：</span>
-                <span class="path-text" :title="scope.row.key_path || '-'">
+                <span
+                  class="path-text"
+                  :class="{ 'path-text-missing': scope.row.key_file_exists === false }"
+                  :title="scope.row.key_path || '-'"
+                >
                   {{ scope.row.key_path || '-' }}
                 </span>
                 <el-tooltip content="复制私钥路径" :show-after="200">
@@ -120,6 +177,37 @@
                     @click="handleCopy(scope.row.key_path)"
                   />
                 </el-tooltip>
+              </div>
+              <div v-if="scope.row.fullchain_pem_path && scope.row.privkey_pem_path" class="path-pem-block">
+                <div class="path-item">
+                  <span class="path-label">链：</span>
+                  <span class="path-text" :title="scope.row.fullchain_pem_path">
+                    {{ scope.row.fullchain_pem_path }}
+                  </span>
+                  <el-tooltip content="复制 fullchain.pem 路径" :show-after="200">
+                    <el-button
+                      size="small"
+                      text
+                      :icon="CopyDocument"
+                      @click="handleCopy(scope.row.fullchain_pem_path)"
+                    />
+                  </el-tooltip>
+                </div>
+                <div class="path-item">
+                  <span class="path-label">密钥：</span>
+                  <span class="path-text" :title="scope.row.privkey_pem_path">
+                    {{ scope.row.privkey_pem_path }}
+                  </span>
+                  <el-tooltip content="复制 privkey.pem 路径" :show-after="200">
+                    <el-button
+                      size="small"
+                      text
+                      :icon="CopyDocument"
+                      @click="handleCopy(scope.row.privkey_pem_path)"
+                    />
+                  </el-tooltip>
+                </div>
+                <p class="path-pem-hint">与 Certbot 命名一致；上传导入的证书通常无此项。</p>
               </div>
             </div>
           </template>
@@ -584,6 +672,43 @@
         <el-button size="small" type="primary" plain @click="handleCopyMigrateExportHint">
           复制说明（发给同事）
         </el-button>
+
+        <div class="migrate-le-export-block">
+          <p class="migrate-le-export-title">本机已有 Certbot？从 live 目录导出（迁出到另一台）</p>
+          <p class="migrate-panel-text migrate-le-export-desc">
+            当前 WebUI 所在服务器若存在 <code>/etc/letsencrypt/live/</code>（例如 Docker 挂载了宿主机证书），可选中证书目录名，下载包含 <code>fullchain.pem</code>、<code>privkey.pem</code> 的 ZIP；在<strong>另一台</strong>打开本页「上传证书」或向导下一步即可导入，实现双机互迁。
+          </p>
+          <div class="migrate-le-export-row">
+            <el-select
+              v-model="letsencryptExportDomain"
+              class="migrate-le-select"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              placeholder="选择或输入 live 子目录名（certbot 证书名）"
+              :loading="letsencryptLiveListLoading"
+            >
+              <el-option
+                v-for="name in letsencryptLiveDomains"
+                :key="name"
+                :label="name"
+                :value="name"
+              />
+            </el-select>
+            <el-button
+              type="primary"
+              :loading="letsencryptExporting"
+              :disabled="!letsencryptExportDomain || !String(letsencryptExportDomain).trim()"
+              @click="handleExportLetsencryptLive"
+            >
+              <el-icon><Download /></el-icon>
+              导出 ZIP
+            </el-button>
+          </div>
+          <p v-if="letsencryptLiveHint" class="migrate-le-hint">{{ letsencryptLiveHint }}</p>
+        </div>
+
         <el-alert type="info" :closable="false" show-icon class="migrate-inline-alert">
           <template #title>
             <span class="migrate-alert-inline">没有旧证书？可直接在本系统申请证书，签发后默认开启自动续期。</span>
@@ -768,8 +893,15 @@ const migrateForm = ref({
   certId: null
 })
 
+/** 向导内：从本机 /etc/letsencrypt/live 导出 */
+const letsencryptLiveDomains = ref([])
+const letsencryptLiveListLoading = ref(false)
+const letsencryptLiveHint = ref('')
+const letsencryptExportDomain = ref('')
+const letsencryptExporting = ref(false)
+
 const MIGRATE_EXPORT_HINT_TEXT =
-  '【证书迁移】在原服务器导出证书链与私钥（如 fullchain.pem、privkey.pem，Certbot 一般在 /etc/letsencrypt/live/域名/）。在本系统打开「证书管理 → 迁移与自动续签」，按向导导入。若需本系统自动续签，导入后在向导最后一步点击「申请证书并启用自动续签」（将使用 Let’s Encrypt 在本机签发）。'
+  '【证书迁移】在原服务器取出证书链与私钥（Certbot 一般在 /etc/letsencrypt/live/<证书目录名>/ 的 fullchain.pem、privkey.pem）。若导出方就是本 WebUI 所在服务器且已挂载该目录，可在「迁移与自动续签」向导第一步直接下载 ZIP。在目标系统用「上传证书」或同一向导导入。若需目标机 Certbot 自动续签，导入后在向导最后一步点「申请证书并启用自动续签」。'
 
 const migrateGoStep = (n) => {
   migrateStep.value = n
@@ -808,6 +940,26 @@ const isMigrateUploadDisabled = computed(() => {
   return !migrateForm.value.certFile || !migrateForm.value.keyFile
 })
 
+const fetchLetsencryptLiveDomains = async () => {
+  letsencryptLiveListLoading.value = true
+  letsencryptLiveHint.value = ''
+  try {
+    const res = await certificatesApi.listLetsencryptLiveDomains()
+    if (res && res.success) {
+      letsencryptLiveDomains.value = Array.isArray(res.domains) ? res.domains : []
+      letsencryptLiveHint.value = res.hint || ''
+    } else {
+      letsencryptLiveDomains.value = []
+    }
+  } catch (e) {
+    letsencryptLiveDomains.value = []
+    letsencryptLiveHint.value =
+      typeof e?.detail === 'string' ? e.detail : e?.message || '无法获取 live 目录列表'
+  } finally {
+    letsencryptLiveListLoading.value = false
+  }
+}
+
 const openMigrateWizard = () => {
   migrateGoStep(0)
   migrateForm.value = {
@@ -821,7 +973,11 @@ const openMigrateWizard = () => {
   if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
   if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
   if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
+  letsencryptExportDomain.value = ''
+  letsencryptLiveDomains.value = []
+  letsencryptLiveHint.value = ''
   migrateWizardVisible.value = true
+  fetchLetsencryptLiveDomains()
 }
 
 const resetMigrateWizard = () => {
@@ -837,6 +993,8 @@ const resetMigrateWizard = () => {
   if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
   if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
   if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
+  letsencryptExportDomain.value = ''
+  letsencryptLiveHint.value = ''
 }
 
 const handleCopyMigrateExportHint = async () => {
@@ -1372,6 +1530,46 @@ const handleDownload = async (cert) => {
   }
 }
 
+const handleExportLetsencryptLive = async () => {
+  const d = String(letsencryptExportDomain.value || '').trim()
+  if (!d) {
+    ElMessage.warning('请选择或输入 live 目录名（certbot 证书名）')
+    return
+  }
+  letsencryptExporting.value = true
+  try {
+    const blob = await certificatesApi.exportLetsencryptLiveBundle(d)
+    if (!(blob instanceof Blob)) {
+      ElMessage.error('导出失败')
+      return
+    }
+    if (blob.type && blob.type.includes('application/json')) {
+      ElMessage.error(await parseBlobError(blob))
+      return
+    }
+    const safeName = d.replace(/[^\w.-]+/g, '_')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.style.display = 'none'
+    a.href = url
+    a.download = `${safeName}-letsencrypt-live.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已开始下载，可在另一台通过「上传证书」导入该 ZIP')
+  } catch (error) {
+    const data = error?.data
+    if (data instanceof Blob) {
+      ElMessage.error(await parseBlobError(data))
+    } else {
+      ElMessage.error(error?.detail || error?.message || '导出失败')
+    }
+  } finally {
+    letsencryptExporting.value = false
+  }
+}
+
 const handleVerifyCert = async (cert) => {
   cert._verifying = true
   try {
@@ -1719,6 +1917,12 @@ const handleDelete = async (cert) => {
   }
 }
 
+/** 若 ssl_dir 下存在 Certbot 风格的 fullchain.pem / privkey.pem，生成备用 nginx 片段 */
+const nginxPemSnippet = (row) => {
+  if (!row?.fullchain_pem_path || !row?.privkey_pem_path) return ''
+  return `ssl_certificate ${row.fullchain_pem_path};\nssl_certificate_key ${row.privkey_pem_path};`
+}
+
 const handleCopy = async (text) => {
   if (!text) return
   
@@ -1814,6 +2018,46 @@ onMounted(() => {
 
 .migrate-inline-alert {
   margin-top: 16px;
+}
+
+.migrate-le-export-block {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-blank);
+}
+
+.migrate-le-export-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.migrate-le-export-desc {
+  margin-bottom: 12px !important;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.migrate-le-export-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.migrate-le-select {
+  flex: 1;
+  min-width: 200px;
+}
+
+.migrate-le-hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
 }
 
 .migrate-alert-inline {
@@ -1970,6 +2214,36 @@ onMounted(() => {
   word-break: break-all;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
   line-height: 1.6;
+}
+
+.path-text-missing {
+  color: #f56c6c;
+}
+
+.path-disk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.path-meta-label {
+  font-size: 12px;
+  color: #909399;
+  font-weight: 500;
+  margin-right: 2px;
+}
+
+.path-pem-block {
+  padding-top: 4px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.path-pem-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
 }
 
 .domain-cell {
