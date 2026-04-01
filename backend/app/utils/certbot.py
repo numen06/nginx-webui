@@ -202,7 +202,24 @@ def _domain_ssl_basename(domain: str) -> str:
     )
 
 
-_LETSENCRYPT_RENEWAL_ROOT = Path("/etc/letsencrypt/renewal")
+def get_certbot_config_dir() -> Path:
+    """获取 certbot config-dir（默认 /app/data/letsencrypt）。"""
+    config = get_config()
+    p = Path(config.nginx.certbot_config_dir or "/app/data/letsencrypt")
+    if not p.is_absolute():
+        try:
+            p = p.resolve()
+        except OSError:
+            pass
+    return p
+
+
+def get_certbot_live_root() -> Path:
+    return get_certbot_config_dir() / "live"
+
+
+def get_certbot_renewal_root() -> Path:
+    return get_certbot_config_dir() / "renewal"
 
 
 def validate_certbot_lineage_segment(name: str) -> str:
@@ -257,7 +274,7 @@ def renewal_conf_referenced_paths_ready(paths: Dict[str, str]) -> bool:
 
 def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, Any]:
     """
-    将导出的 Certbot renewal 配置写入 /etc/letsencrypt/renewal/<lineage>.conf。
+    将导出的 Certbot renewal 配置写入 <certbot_config_dir>/renewal/<lineage>.conf。
 
     Returns:
         success, message, renewal_available（配置指向的 archive 等路径是否已存在于本机）,
@@ -275,7 +292,8 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
         }
 
     try:
-        renewal_root_res = _LETSENCRYPT_RENEWAL_ROOT.resolve()
+        renewal_root = get_certbot_renewal_root()
+        renewal_root_res = renewal_root.resolve()
     except OSError as e:
         return {
             "success": False,
@@ -285,7 +303,7 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
             "error_code": "renewal_dir_unresolvable",
         }
 
-    target = (_LETSENCRYPT_RENEWAL_ROOT / f"{lineage}.conf").resolve()
+    target = (renewal_root / f"{lineage}.conf").resolve()
     try:
         if target.parent.resolve() != renewal_root_res:
             return {
@@ -313,7 +331,7 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
     materialized = renewal_conf_referenced_paths_ready(path_map)
 
     try:
-        _LETSENCRYPT_RENEWAL_ROOT.mkdir(parents=True, exist_ok=True)
+        renewal_root.mkdir(parents=True, exist_ok=True)
         target.write_bytes(conf_bytes)
         try:
             os.chmod(target, 0o644)
@@ -327,8 +345,8 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
             "installed_path": None,
             "error_code": "write_failed",
             "suggestions": [
-                "确保运行用户对 /etc/letsencrypt/renewal 可写（常见为 root）",
-                "Docker 场景请挂载宿主机 /etc/letsencrypt 或调整权限",
+                f"确保运行用户对 {renewal_root} 可写（常见为 root）",
+                "Docker 场景请挂载 app/data 并确保 certbot_config_dir 指向持久化目录",
             ],
         }
 
@@ -341,7 +359,7 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
         msg = (
             "已安装 renewal 配置，但配置中指向的 archive/live 文件在本机不完整或不存在；"
             "仅复制 fullchain/privkey 时 certbot renew 仍无法续签，需在同一主机保留完整 "
-            "/etc/letsencrypt/archive/<lineage>/ 或在目标机重新申请"
+            "<certbot_config_dir>/archive/<lineage>/ 或在目标机重新申请"
         )
 
     return {
@@ -420,7 +438,7 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
     """
     config = get_config()
 
-    certbot_live_dir = Path("/etc/letsencrypt/live") / domain
+    certbot_live_dir = get_certbot_live_root() / domain
     source_cert = certbot_live_dir / "fullchain.pem"
     source_key = certbot_live_dir / "privkey.pem"
 
@@ -545,6 +563,8 @@ def request_certificate(
     cmd = [
         str(certbot_path),
         "certonly",
+        "--config-dir",
+        str(get_certbot_config_dir()),
         "--non-interactive",
         "--agree-tos",
         "--email",
@@ -571,8 +591,8 @@ def request_certificate(
 
         if success and domains:
             domain = domains[0]
-            cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-            key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+            cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
+            key_path = str(get_certbot_live_root() / domain / "privkey.pem")
 
             if not Path(cert_path).exists():
                 cert_path = None
@@ -715,6 +735,8 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
     cmd = [
         str(certbot_path),
         "certonly",
+        "--config-dir",
+        str(get_certbot_config_dir()),
         "--manual",
         "--preferred-challenges",
         "dns",
@@ -1143,8 +1165,8 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
     with _dns_jobs_lock:
         _dns_jobs.pop(job_id, None)
 
-    cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-    key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+    cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
+    key_path = str(get_certbot_live_root() / domain / "privkey.pem")
     if success:
         if not Path(cert_path).exists():
             cert_path = None
@@ -1270,7 +1292,7 @@ def test_auto_renew_environment() -> Dict[str, Any]:
     """
     config = get_config()
     certbot_path = Path(config.nginx.certbot_path)
-    letsencrypt_root = Path("/etc/letsencrypt")
+    letsencrypt_root = get_certbot_config_dir()
     checks: List[Dict[str, Any]] = []
 
     def add_check(
@@ -1350,7 +1372,7 @@ def test_auto_renew_environment() -> Dict[str, Any]:
     add_check(
         "letsencrypt_dir",
         True,
-        "默认证书目录 /etc/letsencrypt",
+        "Certbot 证书目录",
         (
             f"存在：{letsencrypt_root}"
             if le_exists
@@ -1369,7 +1391,14 @@ def test_auto_renew_environment() -> Dict[str, Any]:
 
     try:
         dry = subprocess.run(
-            [str(certbot_path), "renew", "--dry-run", "--non-interactive"],
+            [
+                str(certbot_path),
+                "renew",
+                "--config-dir",
+                str(letsencrypt_root),
+                "--dry-run",
+                "--non-interactive",
+            ],
             capture_output=True,
             text=True,
             timeout=300,
@@ -1482,7 +1511,13 @@ def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
             "suggestions": ["安装 certbot 并配置路径"],
         }
 
-    cmd = [str(certbot_path), "renew", "--non-interactive"]
+    cmd = [
+        str(certbot_path),
+        "renew",
+        "--config-dir",
+        str(get_certbot_config_dir()),
+        "--non-interactive",
+    ]
 
     if domain:
         cmd.extend(["--cert-name", domain])
@@ -1538,7 +1573,12 @@ def list_certificates() -> List[Dict[str, str]]:
 
     try:
         result = subprocess.run(
-            [str(certbot_path), "certificates"],
+            [
+                str(certbot_path),
+                "certificates",
+                "--config-dir",
+                str(get_certbot_config_dir()),
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -1558,8 +1598,8 @@ def list_certificates() -> List[Dict[str, str]]:
                 if match:
                     domain = match.group(1)
                     # 默认路径
-                    cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-                    key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+                    cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
+                    key_path = str(get_certbot_live_root() / domain / "privkey.pem")
 
                     certificates.append(
                         {

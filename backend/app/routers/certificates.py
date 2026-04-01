@@ -607,9 +607,19 @@ async def get_certificates(
     return {"success": True, "certificates": result}
 
 
-_LETSENCRYPT_LIVE_ROOT = Path("/etc/letsencrypt/live")
-_LETSENCRYPT_ROOT = Path("/etc/letsencrypt")
-_LETSENCRYPT_RENEWAL_ROOT = Path("/etc/letsencrypt/renewal")
+def _get_letsencrypt_roots() -> Tuple[Path, Path, Path]:
+    """
+    返回 certbot 数据根目录及其 live/renewal 子目录。
+    默认使用 nginx.certbot_config_dir（/app/data/letsencrypt）。
+    """
+    config = get_config()
+    le_root = Path(config.nginx.certbot_config_dir or "/app/data/letsencrypt")
+    if not le_root.is_absolute():
+        try:
+            le_root = le_root.resolve()
+        except OSError:
+            pass
+    return le_root / "live", le_root, le_root / "renewal"
 
 
 def _scan_letsencrypt_live_domains() -> Tuple[List[str], Optional[str]]:
@@ -617,7 +627,7 @@ def _scan_letsencrypt_live_domains() -> Tuple[List[str], Optional[str]]:
     扫描 live 下同时存在 fullchain.pem、privkey.pem 的子目录名（字母序）。
     返回 (names, hint)；hint 仅在无法列出或目录不存在时给出说明。
     """
-    live = _LETSENCRYPT_LIVE_ROOT
+    live, _, _ = _get_letsencrypt_roots()
     if not live.is_dir():
         return [], (
             "本机不存在该目录或未挂载 Certbot 数据（仅用「上传证书」导入时也会出现此情况）"
@@ -655,16 +665,17 @@ def _validate_letsencrypt_live_domain_segment(domain: str) -> str:
     return d
 
 
-@router.get("/letsencrypt-live/list", summary="列出 /etc/letsencrypt/live 下的证书目录")
+@router.get("/letsencrypt-live/list", summary="列出 certbot live 下的证书目录")
 async def list_letsencrypt_live_directories(
     current_user: User = Depends(get_current_user),
 ):
     """用于迁移：展示本机 certbot live 子目录名；无目录或不可读时返回空列表。"""
     names, hint = _scan_letsencrypt_live_domains()
+    live_root, _, _ = _get_letsencrypt_roots()
     return {
         "success": True,
         "domains": names,
-        "live_path": str(_LETSENCRYPT_LIVE_ROOT),
+        "live_path": str(live_root),
         "default_domain": names[0] if names else None,
         "hint": hint if not names else None,
     }
@@ -679,8 +690,9 @@ def _make_letsencrypt_live_zip_response(
     audit_extra: Optional[Dict[str, Any]] = None,
 ) -> StreamingResponse:
     """d 为已校验的 live 子目录名（无路径穿越）。"""
+    live_root, le_root_raw, renewal_root = _get_letsencrypt_roots()
     try:
-        live_root = _LETSENCRYPT_LIVE_ROOT.resolve()
+        live_root = live_root.resolve()
     except OSError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -691,7 +703,7 @@ def _make_letsencrypt_live_zip_response(
     if live_dir.parent != live_root or not live_dir.is_dir():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"未找到 /etc/letsencrypt/live/{d}/",
+            detail=f"未找到 {live_root}/{d}/",
         )
 
     fullchain = live_dir / "fullchain.pem"
@@ -703,7 +715,7 @@ def _make_letsencrypt_live_zip_response(
         )
 
     try:
-        le_root = _LETSENCRYPT_ROOT.resolve()
+        le_root = le_root_raw.resolve()
         fc_res = fullchain.resolve()
         pk_res = privkey.resolve()
         fc_res.relative_to(le_root)
@@ -720,7 +732,7 @@ def _make_letsencrypt_live_zip_response(
         )
 
     buf = io.BytesIO()
-    renewal_conf_path = _LETSENCRYPT_RENEWAL_ROOT / f"{d}.conf"
+    renewal_conf_path = renewal_root / f"{d}.conf"
     renewal_included = False
     renewal_resolved: Optional[Path] = None
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -776,7 +788,7 @@ async def export_letsencrypt_live_auto(
     db: Session = Depends(get_db),
 ):
     """
-    固定读取 `/etc/letsencrypt/live/` 下证书；若有多本，导出按目录名排序后的**第一本**（与列表顺序一致）。
+    固定读取 certbot live 目录下证书；若有多本，导出按目录名排序后的第一本。
     """
     names, hint = _scan_letsencrypt_live_domains()
     if not names:
@@ -795,7 +807,7 @@ async def export_letsencrypt_live_auto(
     )
 
 
-@router.get("/letsencrypt-live/export", summary="从 /etc/letsencrypt/live/<目录名>/ 导出 ZIP")
+@router.get("/letsencrypt-live/export", summary="从 certbot live/<目录名>/ 导出 ZIP")
 async def export_letsencrypt_live_bundle(
     request: Request,
     domain: str = Query(..., description="certbot 证书名称，即 live 下子目录名"),
@@ -1198,7 +1210,7 @@ async def upload_certificate_archive(
             result["renewal_available"] = False
             result["renewal_message"] = (
                 "压缩包未包含 renewal/*.conf（使用本系统「从 live 导出」生成的 ZIP 会附带该文件，"
-                "便于目标机写入 /etc/letsencrypt/renewal/）"
+                "便于目标机写入 certbot 的 renewal 目录）"
             )
             result["renewal_conf_install_success"] = None
 
@@ -1283,7 +1295,7 @@ async def dns_challenge_complete(
             "error_code": "copy_failed",
             "suggestions": [
                 "检查 nginx.ssl_dir（默认 data/ssl）是否可写",
-                "确认 certbot 证书目录 /etc/letsencrypt/live/<域名> 存在",
+                "确认 certbot 证书目录 <certbot_config_dir>/live/<域名> 存在",
             ],
         }
 
@@ -1408,7 +1420,7 @@ async def request_cert(
             "error_code": "copy_failed",
             "suggestions": [
                 "检查 nginx.ssl_dir（默认 data/ssl）是否可写",
-                "确认 /etc/letsencrypt/live/<域名>/fullchain.pem 与 privkey.pem 存在",
+                "确认 <certbot_config_dir>/live/<域名>/fullchain.pem 与 privkey.pem 存在",
             ],
         }
 

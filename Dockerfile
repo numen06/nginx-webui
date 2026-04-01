@@ -124,6 +124,7 @@ RUN BUILD_TIME=$(date +%Y%m%d%H%M%S) && \
     mkdir -p /app/data/backend \
     && mkdir -p /app/data/logs \
     && mkdir -p /app/data/ssl \
+    && mkdir -p /app/data/letsencrypt \
     && mkdir -p /app/data/nginx/versions \
     && mkdir -p /app/data/nginx/build_logs \
     && mkdir -p /app/nginx \
@@ -148,6 +149,18 @@ RUN echo '#!/bin/bash' > /app/start.sh && \
     echo 'set -e' >> /app/start.sh && \
     echo '# 从环境变量读取端口，默认为 8000' >> /app/start.sh && \
     echo 'PORT=${APP_PORT:-8000}' >> /app/start.sh && \
+    echo 'CERTBOT_CONFIG_DIR=${CERTBOT_CONFIG_DIR:-/app/data/letsencrypt}' >> /app/start.sh && \
+    echo 'mkdir -p "$CERTBOT_CONFIG_DIR"' >> /app/start.sh && \
+    echo '# 兼容旧容器：若 /etc/letsencrypt 为真实目录且目标为空，先迁移后再切换为软链' >> /app/start.sh && \
+    echo 'if [ -d /etc/letsencrypt ] && [ ! -L /etc/letsencrypt ]; then' >> /app/start.sh && \
+    echo '  if [ -z "$(ls -A "$CERTBOT_CONFIG_DIR" 2>/dev/null)" ] && [ -n "$(ls -A /etc/letsencrypt 2>/dev/null)" ]; then' >> /app/start.sh && \
+    echo '    echo "检测到旧版 /etc/letsencrypt，正在迁移到 $CERTBOT_CONFIG_DIR ..."' >> /app/start.sh && \
+    echo '    cp -a /etc/letsencrypt/. "$CERTBOT_CONFIG_DIR"/ || true' >> /app/start.sh && \
+    echo '  fi' >> /app/start.sh && \
+    echo '  rm -rf /etc/letsencrypt' >> /app/start.sh && \
+    echo 'fi' >> /app/start.sh && \
+    echo 'if [ ! -e /etc/letsencrypt ]; then ln -s "$CERTBOT_CONFIG_DIR" /etc/letsencrypt; fi' >> /app/start.sh && \
+    echo 'if [ -L /etc/letsencrypt ]; then echo "Certbot 数据目录: $(readlink -f /etc/letsencrypt)"; fi' >> /app/start.sh && \
     echo 'echo "初始化数据库..."' >> /app/start.sh && \
     echo 'cd /app/backend && python3 -c "from app.database import init_db; init_db()"' >> /app/start.sh && \
     echo 'echo "启动 FastAPI 服务在端口 $PORT..."' >> /app/start.sh && \

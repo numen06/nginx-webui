@@ -52,6 +52,7 @@ class NginxConfig(BaseModel):
     error_log: str = "/app/data/logs/error.log"
     ssl_dir: str = "/app/data/ssl"
     certbot_path: str = "/usr/bin/certbot"
+    certbot_config_dir: str = "/app/data/letsencrypt"
     # Nginx 多版本管理相关目录
     versions_root: str = "/app/data/nginx/versions"
     build_root: str = "/app/data/nginx/build"
@@ -158,6 +159,10 @@ class ConfigManager:
         )
         nginx_config["certbot_path"] = os.getenv(
             "CERTBOT_PATH", nginx_config.get("certbot_path", "/usr/bin/certbot")
+        )
+        nginx_config["certbot_config_dir"] = os.getenv(
+            "CERTBOT_CONFIG_DIR",
+            nginx_config.get("certbot_config_dir", f"{data_root}/letsencrypt"),
         )
         # 多版本 Nginx 管理相关目录，可通过环境变量覆盖
         nginx_config["versions_root"] = os.getenv(
