@@ -202,6 +202,158 @@ def _domain_ssl_basename(domain: str) -> str:
     )
 
 
+_LETSENCRYPT_RENEWAL_ROOT = Path("/etc/letsencrypt/renewal")
+
+
+def validate_certbot_lineage_segment(name: str) -> str:
+    """
+    校验 Certbot lineage / live 子目录名（与 renewal 配置文件主文件名一致），防止路径穿越。
+    与 routers.certificates._validate_letsencrypt_live_domain_segment 规则一致。
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError("证书目录名不能为空")
+    d = name.strip()
+    if not d:
+        raise ValueError("证书目录名不能为空")
+    if ".." in d or "/" in d or "\\" in d or "\x00" in d:
+        raise ValueError("非法证书目录名：不可包含路径分隔符或 ..")
+    return d
+
+
+def _parse_renewal_conf_paths(conf_text: str) -> Dict[str, str]:
+    """从 certbot renewal .conf 顶层键值行解析路径（忽略注释与 [section]）。"""
+    paths: Dict[str, str] = {}
+    for line in (conf_text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("["):
+            continue
+        if " = " not in line:
+            continue
+        key, val = line.split(" = ", 1)
+        key, val = key.strip(), val.strip()
+        if key in ("archive_dir", "cert", "privkey", "chain", "fullchain"):
+            paths[key] = val
+    return paths
+
+
+def renewal_conf_referenced_paths_ready(paths: Dict[str, str]) -> bool:
+    """
+    若 renewal 配置中列出的 archive 与主要 PEM 路径在本机均存在，则 certbot 通常可识别并续签该 lineage。
+    """
+    archive_dir = paths.get("archive_dir")
+    if not archive_dir:
+        return False
+    ad = Path(archive_dir)
+    if not ad.is_dir():
+        return False
+    for key in ("cert", "privkey", "chain", "fullchain"):
+        fp = paths.get(key)
+        if not fp:
+            return False
+        if not Path(fp).is_file():
+            return False
+    return True
+
+
+def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, Any]:
+    """
+    将导出的 Certbot renewal 配置写入 /etc/letsencrypt/renewal/<lineage>.conf。
+
+    Returns:
+        success, message, renewal_available（配置指向的 archive 等路径是否已存在于本机）,
+        installed_path, error_code（失败时）
+    """
+    try:
+        lineage = validate_certbot_lineage_segment(lineage_name)
+    except ValueError as e:
+        return {
+            "success": False,
+            "message": str(e),
+            "renewal_available": False,
+            "installed_path": None,
+            "error_code": "invalid_lineage_name",
+        }
+
+    try:
+        renewal_root_res = _LETSENCRYPT_RENEWAL_ROOT.resolve()
+    except OSError as e:
+        return {
+            "success": False,
+            "message": f"无法解析 renewal 目录: {e}",
+            "renewal_available": False,
+            "installed_path": None,
+            "error_code": "renewal_dir_unresolvable",
+        }
+
+    target = (_LETSENCRYPT_RENEWAL_ROOT / f"{lineage}.conf").resolve()
+    try:
+        if target.parent.resolve() != renewal_root_res:
+            return {
+                "success": False,
+                "message": "renewal 目标路径异常，已拒绝写入",
+                "renewal_available": False,
+                "installed_path": None,
+                "error_code": "path_safety",
+            }
+    except OSError as e:
+        return {
+            "success": False,
+            "message": f"无法校验 renewal 路径: {e}",
+            "renewal_available": False,
+            "installed_path": None,
+            "error_code": "path_safety",
+        }
+
+    try:
+        text = conf_bytes.decode("utf-8")
+    except Exception:
+        text = conf_bytes.decode("utf-8", errors="replace")
+
+    path_map = _parse_renewal_conf_paths(text)
+    materialized = renewal_conf_referenced_paths_ready(path_map)
+
+    try:
+        _LETSENCRYPT_RENEWAL_ROOT.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(conf_bytes)
+        try:
+            os.chmod(target, 0o644)
+        except OSError:
+            pass
+    except OSError as e:
+        return {
+            "success": False,
+            "message": f"写入 renewal 配置失败: {e}",
+            "renewal_available": False,
+            "installed_path": None,
+            "error_code": "write_failed",
+            "suggestions": [
+                "确保运行用户对 /etc/letsencrypt/renewal 可写（常见为 root）",
+                "Docker 场景请挂载宿主机 /etc/letsencrypt 或调整权限",
+            ],
+        }
+
+    if materialized:
+        msg = (
+            "已安装 Certbot renewal 配置，且配置中的 archive 路径在本机存在，"
+            "certbot renew 可识别该 lineage"
+        )
+    else:
+        msg = (
+            "已安装 renewal 配置，但配置中指向的 archive/live 文件在本机不完整或不存在；"
+            "仅复制 fullchain/privkey 时 certbot renew 仍无法续签，需在同一主机保留完整 "
+            "/etc/letsencrypt/archive/<lineage>/ 或在目标机重新申请"
+        )
+
+    return {
+        "success": True,
+        "message": msg,
+        "renewal_available": materialized,
+        "installed_path": str(target),
+        "error_code": None,
+        "suggestions": None,
+    }
+
+
 def ensure_pem_bundle_from_stored_paths(
     domain: str, cert_path: str, key_path: str
 ) -> bool:

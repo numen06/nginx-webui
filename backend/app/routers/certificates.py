@@ -43,6 +43,7 @@ from app.utils.certbot import (
     verify_dns_txt_record,
     verify_certificate_files,
     test_auto_renew_environment,
+    install_renewal_config,
     _domain_ssl_basename,
 )
 from app.utils.audit import create_audit_log, get_client_ip
@@ -608,6 +609,7 @@ async def get_certificates(
 
 _LETSENCRYPT_LIVE_ROOT = Path("/etc/letsencrypt/live")
 _LETSENCRYPT_ROOT = Path("/etc/letsencrypt")
+_LETSENCRYPT_RENEWAL_ROOT = Path("/etc/letsencrypt/renewal")
 
 
 def _scan_letsencrypt_live_domains() -> Tuple[List[str], Optional[str]]:
@@ -718,15 +720,33 @@ def _make_letsencrypt_live_zip_response(
         )
 
     buf = io.BytesIO()
+    renewal_conf_path = _LETSENCRYPT_RENEWAL_ROOT / f"{d}.conf"
+    renewal_included = False
+    renewal_resolved: Optional[Path] = None
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(fc_res, arcname="fullchain.pem")
         zf.write(pk_res, arcname="privkey.pem")
+        if renewal_conf_path.is_file():
+            try:
+                rc_res = renewal_conf_path.resolve()
+                rc_res.relative_to(le_root)
+                zf.write(rc_res, arcname=f"renewal/{d}.conf")
+                renewal_included = True
+                renewal_resolved = rc_res
+            except (ValueError, OSError):
+                renewal_included = False
     buf.seek(0)
 
     safe_name = re.sub(r"[^\w.\-]+", "_", d).strip("._") or "certificate"
     filename = f"{safe_name}-letsencrypt-live.zip"
 
-    details: Dict[str, Any] = {"fullchain": str(fc_res), "privkey": str(pk_res)}
+    details: Dict[str, Any] = {
+        "fullchain": str(fc_res),
+        "privkey": str(pk_res),
+        "renewal_conf_included": renewal_included,
+    }
+    if renewal_resolved is not None:
+        details["renewal_conf"] = str(renewal_resolved)
     if audit_extra:
         details.update(audit_extra)
 
@@ -1036,6 +1056,9 @@ async def upload_certificate_archive(
         )
 
     try:
+        renewal_payload: Optional[Tuple[bytes, str]] = None
+        renewal_pick_note: Optional[str] = None
+
         with TemporaryDirectory() as tmp_dir:
             tmp_dir_path = Path(tmp_dir)
             archive_path = tmp_dir_path / (archive_file.filename or "archive")
@@ -1086,6 +1109,42 @@ async def upload_certificate_archive(
                     detail="请提供域名或确保压缩包中的证书包含域名信息",
                 )
 
+            renewal_sub = extracted_dir / "renewal"
+            if renewal_sub.is_dir():
+                conf_files = sorted(
+                    [
+                        p
+                        for p in renewal_sub.iterdir()
+                        if p.is_file() and p.suffix.lower() == ".conf"
+                    ],
+                    key=lambda x: x.name.lower(),
+                )
+                if conf_files:
+                    chosen: Optional[Path] = None
+                    dom = domain.strip()
+                    for p in conf_files:
+                        if p.stem == dom:
+                            chosen = p
+                            break
+                    if chosen is None:
+                        if len(conf_files) == 1:
+                            chosen = conf_files[0]
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=(
+                                    "压缩包内含多个 Certbot renewal 配置，请在「域名」中指定与 lineage "
+                                    "一致的主文件名（不含 .conf）："
+                                    + ", ".join(p.stem for p in conf_files)
+                                ),
+                            )
+                    renewal_payload = (chosen.read_bytes(), chosen.stem)
+                    if chosen.stem != dom:
+                        renewal_pick_note = (
+                            f"注意：renewal 文件名为 {chosen.name}，与当前使用的域名 {dom} 不一致，"
+                            f"Certbot lineage 以 {chosen.stem} 为准。"
+                        )
+
             cert_path, key_path = _discover_cert_and_key(extracted_dir, domain)
 
             if not cert_path or not key_path:
@@ -1101,7 +1160,7 @@ async def upload_certificate_archive(
             cert_filename = cert_path.name
             key_filename = key_path.name
 
-        return _persist_certificate_record(
+        result = _persist_certificate_record(
             domain=domain,
             cert_bytes=cert_bytes,
             key_bytes=key_bytes,
@@ -1115,6 +1174,35 @@ async def upload_certificate_archive(
             cert_filename=cert_filename,
             key_filename=key_filename,
         )
+
+        if renewal_payload:
+            conf_b, lineage_stem = renewal_payload
+            irr = install_renewal_config(conf_b, lineage_stem)
+            result["renewal_conf_installed_path"] = irr.get("installed_path")
+            result["renewal_available"] = bool(irr.get("renewal_available"))
+            parts = []
+            if renewal_pick_note:
+                parts.append(renewal_pick_note)
+            if irr.get("message"):
+                parts.append(str(irr["message"]))
+            result["renewal_message"] = " ".join(parts) if parts else str(
+                irr.get("message") or ""
+            )
+            if not irr.get("success"):
+                result["renewal_conf_install_success"] = False
+                result["renewal_conf_error"] = irr.get("message")
+                result["renewal_conf_error_code"] = irr.get("error_code")
+            else:
+                result["renewal_conf_install_success"] = True
+        else:
+            result["renewal_available"] = False
+            result["renewal_message"] = (
+                "压缩包未包含 renewal/*.conf（使用本系统「从 live 导出」生成的 ZIP 会附带该文件，"
+                "便于目标机写入 /etc/letsencrypt/renewal/）"
+            )
+            result["renewal_conf_install_success"] = None
+
+        return result
     except HTTPException:
         raise
     except Exception as e:
