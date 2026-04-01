@@ -485,6 +485,7 @@ def _finalize_certbot_issued_certificate(
     fullchain_pem: Optional[str] = None,
     privkey_pem: Optional[str] = None,
     ssl_subdir: Optional[str] = None,
+    certbot_cert_name: Optional[str] = None,
 ) -> dict:
     """certbot 签发成功后：应用 SSL、写入数据库、审计，并返回与 /request 一致的结构。"""
     try:
@@ -522,6 +523,7 @@ def _finalize_certbot_issued_certificate(
         valid_from=valid_from,
         valid_to=valid_to,
         auto_renew=True,
+        certbot_cert_name=certbot_cert_name,
         created_by_id=current_user.id,
     )
     db.add(cert)
@@ -1277,6 +1279,8 @@ async def dns_challenge_complete(
 
     domain = result.get("domain")
     email = result.get("email") or ""
+    certbot_cert_name = result.get("certbot_cert_name")
+    base_domain = result.get("_base_domain")
     if not domain:
         return {
             "success": False,
@@ -1286,7 +1290,7 @@ async def dns_challenge_complete(
             "suggestions": [],
         }
 
-    copy_result = copy_certificate_files(domain)
+    copy_result = copy_certificate_files(domain, lineage_name=certbot_cert_name)
     if not copy_result["success"]:
         return {
             "success": False,
@@ -1302,12 +1306,17 @@ async def dns_challenge_complete(
     cert_path = copy_result["cert_path"]
     key_path = copy_result["key_path"]
 
+    # 通配符证书的 domains 包含通配符域名和根域名
+    domains = [domain]
+    if base_domain and base_domain != domain:
+        domains.append(base_domain)
+
     return _finalize_certbot_issued_certificate(
         domain=domain,
         cert_path=cert_path,
         key_path=key_path,
         email=email,
-        domains=[domain],
+        domains=domains,
         raw_output=result.get("output", ""),
         request=request,
         current_user=current_user,
@@ -1316,6 +1325,7 @@ async def dns_challenge_complete(
         fullchain_pem=copy_result.get("fullchain_pem"),
         privkey_pem=copy_result.get("privkey_pem"),
         ssl_subdir=copy_result.get("ssl_subdir"),
+        certbot_cert_name=certbot_cert_name,
     )
 
 
@@ -1458,7 +1468,9 @@ async def renew_cert(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
     # 先尝试通过 certbot 续期（适用于通过certbot申请的证书）
-    result = await asyncio.to_thread(renew_certificate, cert.domain)
+    # 优先使用 certbot_cert_name（lineage 名称），若不存在则回退到 domain
+    _renew_name = cert.certbot_cert_name or cert.domain
+    result = await asyncio.to_thread(renew_certificate, _renew_name)
 
     # 如果续期失败，可能是因为证书是手动上传的，certbot中没有记录
     # 这种情况下，我们可以尝试重新申请证书（如果用户配置了邮箱等信息）
@@ -1486,8 +1498,8 @@ async def renew_cert(
 
     # 如果续期成功，复制新的证书文件并更新nginx配置
     if result["success"]:
-        # 复制新的证书文件
-        copy_result = copy_certificate_files(cert.domain)
+        # 复制新的证书文件（使用 certbot_cert_name 定位 live 目录）
+        copy_result = copy_certificate_files(cert.domain, lineage_name=cert.certbot_cert_name)
         ssl_message = ""
 
         if copy_result["success"]:

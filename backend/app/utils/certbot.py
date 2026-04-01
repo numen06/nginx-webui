@@ -583,9 +583,13 @@ def ensure_pem_bundle_from_stored_paths(
     )
 
 
-def copy_certificate_files(domain: str) -> Dict[str, Any]:
+def copy_certificate_files(domain: str, lineage_name: Optional[str] = None) -> Dict[str, Any]:
     """
     从 certbot 的 live 目录复制到配置项 nginx.ssl_dir（默认 data/ssl），供 Nginx 直接使用。
+
+    Args:
+        domain: 业务域名（用于生成 ssl 子目录名）
+        lineage_name: Certbot lineage 目录名（若提供则优先使用，否则回退到 domain）
 
     写入内容：
     - {basename}.crt：与 fullchain.pem 相同（完整证书链，作 ssl_certificate）
@@ -597,7 +601,9 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
     """
     config = get_config()
 
-    certbot_live_dir = get_certbot_live_root() / domain
+    # 优先用 lineage_name，否则回退到 domain
+    _live_name = lineage_name or domain
+    certbot_live_dir = get_certbot_live_root() / _live_name
     source_cert = certbot_live_dir / "fullchain.pem"
     source_key = certbot_live_dir / "privkey.pem"
 
@@ -919,6 +925,13 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         "--expand",
     ]
 
+    # 通配符域名自动附带根域名（如 *.example.com → 同时申请 example.com）
+    _base_domain = None
+    if domain.startswith("*."):
+        _base_domain = domain[2:]
+        if _base_domain and _base_domain not in cmd:
+            cmd.extend(["-d", _base_domain])
+
     config_dir = get_certbot_config_dir()
     _cleanup_certbot_lock(config_dir)
     acquired = _certbot_exec_lock.acquire(timeout=10)
@@ -1029,6 +1042,7 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             "created_at": time.time(),
             "stdout_tail": "".join(buf),
             "holds_exec_lock": True,
+            "_base_domain": _base_domain,
         }
 
     return {
@@ -1298,6 +1312,31 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
     }
 
 
+def resolve_certbot_lineage(wildcard_or_domain: str) -> Optional[str]:
+    """
+    通过 certbot certificates 列表定位包含指定通配符/域名的真实 lineage 名称。
+    对每个条目用 openssl 读 SAN 来匹配。
+    返回 lineage 名（即 Certificate Name），找不到返回 None。
+    """
+    for entry in list_certificates():
+        name = entry.get("domain") or ""
+        cert_path = entry.get("cert_path") or ""
+        if not cert_path or not Path(cert_path).is_file():
+            continue
+        try:
+            r = subprocess.run(
+                ["openssl", "x509", "-in", cert_path, "-noout", "-ext", "subjectAltName"],
+                capture_output=True, text=True, timeout=10,
+            )
+            san_line = (r.stdout or "") + (r.stderr or "")
+        except Exception:
+            san_line = ""
+        # 匹配 SAN 中的域名（格式：DNS:*.example.com, DNS:example.com）
+        if wildcard_or_domain in san_line or wildcard_or_domain == name:
+            return name
+    return None
+
+
 def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
     """
     向挂起的 certbot 发送回车，等待签发结束。
@@ -1373,13 +1412,28 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
         except RuntimeError:
             pass
 
-    cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
-    key_path = str(get_certbot_live_root() / domain / "privkey.pem")
+    cert_path = None
+    key_path = None
+    certbot_cert_name = None
+
     if success:
-        if not Path(cert_path).exists():
-            cert_path = None
-        if not Path(key_path).exists():
-            key_path = None
+        # 通过 certbot certificates 列表定位真实 lineage（通配符场景下 lineage 名可能与输入域名不同）
+        certbot_cert_name = resolve_certbot_lineage(domain)
+        if certbot_cert_name:
+            cert_path = str(get_certbot_live_root() / certbot_cert_name / "fullchain.pem")
+            key_path = str(get_certbot_live_root() / certbot_cert_name / "privkey.pem")
+            if not Path(cert_path).exists():
+                cert_path = None
+            if not Path(key_path).exists():
+                key_path = None
+        if not cert_path:
+            # 回退：直接用 domain 查找
+            cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
+            key_path = str(get_certbot_live_root() / domain / "privkey.pem")
+            if not Path(cert_path).exists():
+                cert_path = None
+            if not Path(key_path).exists():
+                key_path = None
 
     ret: Dict[str, Any] = {
         "success": success,
@@ -1389,6 +1443,8 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
         "key_path": key_path if success else None,
         "domain": domain,
         "email": job.get("email"),
+        "certbot_cert_name": certbot_cert_name,
+        "_base_domain": job.get("_base_domain"),
     }
     if not success:
         ret = _enrich_failure_result(ret, "dns")

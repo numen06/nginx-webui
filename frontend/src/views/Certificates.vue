@@ -333,9 +333,12 @@
         <el-form-item label="域名" prop="domain">
           <el-input
             v-model="requestForm.domain"
-            placeholder="例如：example.com"
+            :placeholder="requestForm.validation_method === 'dns' ? '例如：example.com 或 *.example.com' : '例如：example.com'"
           />
-          <div class="form-tip">主域名，将用于证书申请和 Nginx 配置</div>
+          <div class="form-tip">
+            主域名，将用于证书申请和 Nginx 配置；
+            DNS 验证支持通配符（如 *.example.com），HTTP 验证不支持通配符
+          </div>
         </el-form-item>
 
         <el-form-item label="邮箱地址" prop="email">
@@ -1520,13 +1523,42 @@ const handleVerifyCert = async (cert) => {
   }
 }
 
+const plainDomainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/
+const wildcardDomainPattern = /^\*\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)+$/
+
+const validateRequestDomain = (rule, value, callback) => {
+  const domain = String(value || '').trim()
+  if (!domain) {
+    callback(new Error('请输入域名'))
+    return
+  }
+
+  const isDns = requestForm.value.validation_method === 'dns'
+  const isPlain = plainDomainPattern.test(domain)
+  const isWildcard = wildcardDomainPattern.test(domain)
+
+  if (isDns) {
+    if (!isPlain && !isWildcard) {
+      callback(new Error('DNS 验证请输入有效域名，支持 *.example.com'))
+      return
+    }
+    callback()
+    return
+  }
+
+  if (!isPlain) {
+    callback(new Error('HTTP 验证仅支持普通域名，不支持 * 通配符'))
+    return
+  }
+  callback()
+}
+
 const requestRules = {
   domain: [
     { required: true, message: '请输入域名', trigger: 'blur' },
     {
-      pattern: /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/,
-      message: '请输入有效的域名',
-      trigger: 'blur'
+      validator: validateRequestDomain,
+      trigger: ['blur', 'change']
     }
   ],
   email: [

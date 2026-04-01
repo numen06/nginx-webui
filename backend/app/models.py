@@ -69,6 +69,7 @@ class Certificate(Base):
     valid_from = Column(DateTime, nullable=True)
     valid_to = Column(DateTime, nullable=True, index=True)
     auto_renew = Column(Boolean, default=False, nullable=False)
+    certbot_cert_name = Column(String(255), nullable=True)  # Certbot lineage 名称（可能与 domain 不同）
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     

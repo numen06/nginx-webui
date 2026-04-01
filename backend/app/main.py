@@ -385,7 +385,9 @@ async def startup_event():
                             )
 
                             for cert in certificates:
-                                copy_result = copy_certificate_files(cert.domain)
+                                copy_result = copy_certificate_files(
+                                    cert.domain, lineage_name=cert.certbot_cert_name
+                                )
                                 if copy_result["success"]:
                                     cert.cert_path = copy_result["cert_path"]
                                     cert.key_path = copy_result["key_path"]

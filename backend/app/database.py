@@ -93,12 +93,34 @@ def _migrate_add_is_last_version():
         db.close()
 
 
+def _migrate_add_certbot_cert_name():
+    """迁移：为 certificates 表添加 certbot_cert_name 字段"""
+    db = SessionLocal()
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table("certificates"):
+            return
+        columns = [col["name"] for col in inspector.get_columns("certificates")]
+
+        if "certbot_cert_name" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE certificates ADD COLUMN certbot_cert_name VARCHAR(255)"))
+                conn.commit()
+            print("已为 certificates 表添加 certbot_cert_name 字段")
+    except Exception as e:
+        if "no such table" not in str(e).lower():
+            print(f"迁移 certbot_cert_name 字段时出错: {e}")
+    finally:
+        db.close()
+
+
 def init_db():
     """初始化数据库，创建所有表"""
     Base.metadata.create_all(bind=engine)
     
     # 执行迁移
     _migrate_add_is_last_version()
+    _migrate_add_certbot_cert_name()
     
     # 创建默认管理员账户（如果不存在）
     db = SessionLocal()
