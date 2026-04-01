@@ -67,6 +67,11 @@
         <div class="sidebar-version" v-if="systemVersion.version && !isCollapsed">
           <span class="version-label">系统版本</span>
           <span class="version-value">{{ systemVersion.version }}</span>
+          <span
+            v-if="updateStatus.hasUpdate"
+            class="version-update-dot"
+            title="发现新版本"
+          ></span>
         </div>
       </div>
     </el-aside>
@@ -128,7 +133,7 @@ import { computed, ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { useSetupStore } from '../store/setup'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { SwitchButton, User, ArrowDown, Fold, Expand } from '@element-plus/icons-vue'
 import { systemApi } from '../api/system'
 import NginxSetupWizard from '../components/NginxSetupWizard.vue'
@@ -146,6 +151,13 @@ const isCollapsed = ref(false)
 // 系统版本信息（用于侧边栏底部展示）
 const systemVersion = ref({
   version: null
+})
+
+const updateStatus = ref({
+  hasUpdate: false,
+  latestVersion: null,
+  releaseUrl: null,
+  releaseName: null
 })
 
 // 使用store中的状态
@@ -189,8 +201,42 @@ const loadSystemVersion = async () => {
   }
 }
 
+const loadUpdateStatus = async () => {
+  try {
+    const res = await systemApi.checkUpdate()
+    updateStatus.value = {
+      hasUpdate: !!res.has_update,
+      latestVersion: res.latest_version || null,
+      releaseUrl: res.release_url || null,
+      releaseName: res.release_name || null
+    }
+
+    if (res.success && res.has_update) {
+      const noticeKey = `update-notified-${res.latest_version || 'unknown'}`
+      if (!sessionStorage.getItem(noticeKey)) {
+        ElNotification({
+          title: '发现新版本',
+          message: `当前版本 ${res.current_version || '-'}，最新版本 ${res.latest_version || '-'}`,
+          type: 'info',
+          duration: 8000,
+          onClick: () => {
+            if (res.release_url) {
+              window.open(res.release_url, '_blank', 'noopener,noreferrer')
+            }
+          }
+        })
+        sessionStorage.setItem(noticeKey, '1')
+      }
+    }
+  } catch (e) {
+    // 更新检查失败不影响主流程
+    console.error('检查系统更新失败:', e)
+  }
+}
+
 onMounted(() => {
   loadSystemVersion()
+  loadUpdateStatus()
 })
 </script>
 
@@ -285,6 +331,15 @@ onMounted(() => {
 .version-value {
   font-weight: 500;
   color: var(--nginx-green-light);
+}
+
+.version-update-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #f56c6c;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.15);
 }
 
 .collapse-btn {

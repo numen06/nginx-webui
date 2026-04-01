@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth import get_current_user, User
 from app.utils.nginx import is_nginx_available, get_nginx_status
-from app.utils.version import get_version_info
+from app.utils.version import get_version_info, check_gitee_update
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -312,5 +312,28 @@ async def get_system_version(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取系统版本信息失败: {str(e)}"
+        )
+
+
+@router.get("/version/check-update", summary="检查系统是否有新版本")
+async def check_system_update(
+    current_user: User = Depends(get_current_user)
+):
+    """检查 Gitee Releases 是否有新版本。"""
+    try:
+        update_info = check_gitee_update()
+        return {
+            "success": update_info.get("success", False),
+            "current_version": update_info.get("current_version"),
+            "latest_version": update_info.get("latest_version"),
+            "has_update": update_info.get("has_update", False),
+            "release_url": update_info.get("release_url"),
+            "release_name": update_info.get("release_name"),
+            "message": update_info.get("message", ""),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"检查系统更新失败: {str(e)}"
         )
 

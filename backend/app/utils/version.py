@@ -8,12 +8,22 @@
 from pathlib import Path
 from datetime import datetime
 import os
+import json
+import re
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from app.config import get_config
 
 # 当前程序版本号（系统版本）
 # 优先使用配置文件中的 app.version，其次使用环境变量 APP_VERSION，最后使用默认值
 DEFAULT_VERSION = "1.0.1"
+GITEE_OWNER = "numen06"
+GITEE_REPO = "nginx-webui"
+GITEE_LATEST_RELEASE_API = (
+    f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases"
+    "?per_page=1&page=1"
+)
 
 
 def get_build_time_file() -> Path:
@@ -135,3 +145,100 @@ def set_build_time(build_time: str = None) -> None:
     except Exception as e:
         # 如果无法写入，忽略错误
         print(f"无法保存构建时间: {e}")
+
+
+def normalize_version(version: str) -> str:
+    """标准化版本号，兼容 v1.2.3 -> 1.2.3。"""
+    if not isinstance(version, str):
+        return ""
+    normalized = version.strip()
+    if normalized.lower().startswith("v"):
+        normalized = normalized[1:]
+    return normalized.strip()
+
+
+def version_to_parts(version: str) -> list[int]:
+    """提取版本中的数字段，用于比较。"""
+    normalized = normalize_version(version)
+    if not normalized:
+        return []
+    return [int(item) for item in re.findall(r"\d+", normalized)]
+
+
+def compare_versions(current: str, latest: str) -> int:
+    """
+    比较两个版本号。
+
+    Returns:
+        -1: current < latest
+         0: current == latest
+         1: current > latest
+    """
+    current_parts = version_to_parts(current)
+    latest_parts = version_to_parts(latest)
+    max_len = max(len(current_parts), len(latest_parts))
+    current_parts.extend([0] * (max_len - len(current_parts)))
+    latest_parts.extend([0] * (max_len - len(latest_parts)))
+
+    if current_parts < latest_parts:
+        return -1
+    if current_parts > latest_parts:
+        return 1
+    return 0
+
+
+def fetch_latest_gitee_release() -> dict:
+    """获取 Gitee 最新 Release 数据。"""
+    request = Request(
+        GITEE_LATEST_RELEASE_API,
+        headers={"User-Agent": "nginx-webui-version-checker"},
+    )
+    with urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+        if isinstance(payload, list) and payload:
+            return payload[0]
+    return {}
+
+
+def check_gitee_update() -> dict:
+    """
+    检查是否有新版本。
+
+    Returns:
+        统一返回结构，失败时也返回可降级字段。
+    """
+    current_version = normalize_version(get_version())
+    result = {
+        "current_version": current_version,
+        "latest_version": None,
+        "has_update": False,
+        "release_url": None,
+        "release_name": None,
+        "success": True,
+        "message": "",
+    }
+
+    try:
+        release = fetch_latest_gitee_release()
+        tag_name = release.get("tag_name") or release.get("name") or ""
+        latest_version = normalize_version(tag_name)
+        release_url = release.get("html_url")
+        release_name = release.get("name") or tag_name
+
+        result["latest_version"] = latest_version or None
+        result["release_url"] = release_url
+        result["release_name"] = release_name
+
+        if latest_version:
+            result["has_update"] = compare_versions(current_version, latest_version) < 0
+        else:
+            result["success"] = False
+            result["message"] = "未获取到有效的 Release 版本号"
+    except (HTTPError, URLError, TimeoutError, ValueError) as e:
+        result["success"] = False
+        result["message"] = f"检查更新失败: {str(e)}"
+    except Exception as e:
+        result["success"] = False
+        result["message"] = f"检查更新失败: {str(e)}"
+
+    return result
