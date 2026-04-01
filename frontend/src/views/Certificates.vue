@@ -88,65 +88,12 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="路径 / 磁盘 / Nginx" min-width="720">
+        <el-table-column label="证书路径 / 私钥路径" min-width="600">
           <template #default="scope">
             <div class="paths-cell">
-              <div class="path-disk-row">
-                <span class="path-meta-label">磁盘</span>
-                <el-tag
-                  v-if="scope.row.cert_file_exists === true"
-                  size="small"
-                  type="success"
-                >
-                  证书在盘
-                </el-tag>
-                <el-tag
-                  v-else-if="scope.row.cert_file_exists === false"
-                  size="small"
-                  type="danger"
-                >
-                  证书缺失
-                </el-tag>
-                <el-tag
-                  v-if="scope.row.key_file_exists === true"
-                  size="small"
-                  type="success"
-                >
-                  私钥在盘
-                </el-tag>
-                <el-tag
-                  v-else-if="scope.row.key_file_exists === false"
-                  size="small"
-                  type="danger"
-                >
-                  私钥缺失
-                </el-tag>
-                <el-button
-                  v-if="scope.row.nginx_ssl_snippet"
-                  size="small"
-                  text
-                  type="primary"
-                  @click="handleCopy(scope.row.nginx_ssl_snippet)"
-                >
-                  复制 Nginx（库内路径）
-                </el-button>
-                <el-button
-                  v-if="nginxPemSnippet(scope.row)"
-                  size="small"
-                  text
-                  type="primary"
-                  @click="handleCopy(nginxPemSnippet(scope.row))"
-                >
-                  复制 Nginx（fullchain.pem）
-                </el-button>
-              </div>
               <div class="path-item">
                 <span class="path-label">证书：</span>
-                <span
-                  class="path-text"
-                  :class="{ 'path-text-missing': scope.row.cert_file_exists === false }"
-                  :title="scope.row.cert_path || '-'"
-                >
+                <span class="path-text" :title="scope.row.cert_path || '-'">
                   {{ scope.row.cert_path || '-' }}
                 </span>
                 <el-tooltip content="复制证书路径" :show-after="200">
@@ -161,11 +108,7 @@
               </div>
               <div class="path-item">
                 <span class="path-label">私钥：</span>
-                <span
-                  class="path-text"
-                  :class="{ 'path-text-missing': scope.row.key_file_exists === false }"
-                  :title="scope.row.key_path || '-'"
-                >
+                <span class="path-text" :title="scope.row.key_path || '-'">
                   {{ scope.row.key_path || '-' }}
                 </span>
                 <el-tooltip content="复制私钥路径" :show-after="200">
@@ -178,36 +121,23 @@
                   />
                 </el-tooltip>
               </div>
-              <div v-if="scope.row.fullchain_pem_path && scope.row.privkey_pem_path" class="path-pem-block">
-                <div class="path-item">
-                  <span class="path-label">链：</span>
-                  <span class="path-text" :title="scope.row.fullchain_pem_path">
-                    {{ scope.row.fullchain_pem_path }}
-                  </span>
-                  <el-tooltip content="复制 fullchain.pem 路径" :show-after="200">
-                    <el-button
-                      size="small"
-                      text
-                      :icon="CopyDocument"
-                      @click="handleCopy(scope.row.fullchain_pem_path)"
-                    />
-                  </el-tooltip>
-                </div>
-                <div class="path-item">
-                  <span class="path-label">密钥：</span>
-                  <span class="path-text" :title="scope.row.privkey_pem_path">
-                    {{ scope.row.privkey_pem_path }}
-                  </span>
-                  <el-tooltip content="复制 privkey.pem 路径" :show-after="200">
-                    <el-button
-                      size="small"
-                      text
-                      :icon="CopyDocument"
-                      @click="handleCopy(scope.row.privkey_pem_path)"
-                    />
-                  </el-tooltip>
-                </div>
-                <p class="path-pem-hint">与 Certbot 命名一致；上传导入的证书通常无此项。</p>
+              <div class="path-item">
+                <span class="path-label">PEM：</span>
+                <span
+                  class="path-text"
+                  :title="scope.row.fullchain_pem_path || '-'"
+                >
+                  {{ scope.row.fullchain_pem_path || '-' }}
+                </span>
+                <el-tooltip content="复制 fullchain.pem 路径（同目录下有 privkey.pem）" :show-after="200">
+                  <el-button
+                    size="small"
+                    text
+                    :icon="CopyDocument"
+                    :disabled="!scope.row.fullchain_pem_path"
+                    @click="handleCopy(scope.row.fullchain_pem_path)"
+                  />
+                </el-tooltip>
               </div>
             </div>
           </template>
@@ -1917,12 +1847,6 @@ const handleDelete = async (cert) => {
   }
 }
 
-/** 若 ssl_dir 下存在 Certbot 风格的 fullchain.pem / privkey.pem，生成备用 nginx 片段 */
-const nginxPemSnippet = (row) => {
-  if (!row?.fullchain_pem_path || !row?.privkey_pem_path) return ''
-  return `ssl_certificate ${row.fullchain_pem_path};\nssl_certificate_key ${row.privkey_pem_path};`
-}
-
 const handleCopy = async (text) => {
   if (!text) return
   
@@ -2214,36 +2138,6 @@ onMounted(() => {
   word-break: break-all;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
   line-height: 1.6;
-}
-
-.path-text-missing {
-  color: #f56c6c;
-}
-
-.path-disk-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.path-meta-label {
-  font-size: 12px;
-  color: #909399;
-  font-weight: 500;
-  margin-right: 2px;
-}
-
-.path-pem-block {
-  padding-top: 4px;
-  border-top: 1px dashed var(--el-border-color-lighter);
-}
-
-.path-pem-hint {
-  margin: 6px 0 0;
-  font-size: 11px;
-  color: #909399;
-  line-height: 1.4;
 }
 
 .domain-cell {

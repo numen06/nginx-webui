@@ -49,13 +49,8 @@ from app.utils.audit import create_audit_log, get_client_ip
 router = APIRouter(prefix="/api/certificates", tags=["certificates"])
 
 
-def _certificate_disk_and_nginx_fields(cert: Certificate) -> Dict[str, Any]:
-    """列表/详情共用：磁盘是否存在、Certbot 风格 PEM 子目录、可复制 nginx 片段。"""
-    cert_p = Path(cert.cert_path)
-    key_p = Path(cert.key_path)
-    cert_exists = cert_p.is_file()
-    key_exists = key_p.is_file()
-
+def _certificate_pem_paths(cert: Certificate) -> Dict[str, Any]:
+    """Certbot 同步到 ssl_dir 时的 fullchain.pem / privkey.pem 绝对路径（与 .crt/.key 同内容）。"""
     config = get_config()
     ssl_dir = Path(config.nginx.ssl_dir)
     if not ssl_dir.is_absolute():
@@ -78,16 +73,9 @@ def _certificate_disk_and_nginx_fields(cert: Certificate) -> Dict[str, Any]:
             fullchain_pem_path = str(fc)
             privkey_pem_path = str(pk)
 
-    nginx_ssl_snippet = (
-        f"ssl_certificate {cert.cert_path};\nssl_certificate_key {cert.key_path};"
-    )
-
     return {
-        "cert_file_exists": cert_exists,
-        "key_file_exists": key_exists,
         "fullchain_pem_path": fullchain_pem_path,
         "privkey_pem_path": privkey_pem_path,
-        "nginx_ssl_snippet": nginx_ssl_snippet,
     }
 
 
@@ -584,7 +572,7 @@ async def get_certificates(
             "days_until_expiry": days_until_expiry,
             "created_at": cert.created_at.isoformat() if cert.created_at else None,
         }
-        row.update(_certificate_disk_and_nginx_fields(cert))
+        row.update(_certificate_pem_paths(cert))
         result.append(row)
 
     return {"success": True, "certificates": result}
@@ -816,7 +804,7 @@ async def get_certificate(
         "auto_renew": cert.auto_renew,
         "created_at": cert.created_at.isoformat() if cert.created_at else None,
     }
-    detail.update(_certificate_disk_and_nginx_fields(cert))
+    detail.update(_certificate_pem_paths(cert))
     return {"success": True, "certificate": detail}
 
 
