@@ -1458,7 +1458,7 @@ async def renew_cert(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
     # 先尝试通过 certbot 续期（适用于通过certbot申请的证书）
-    result = renew_certificate(domain=cert.domain)
+    result = await asyncio.to_thread(renew_certificate, cert.domain)
 
     # 如果续期失败，可能是因为证书是手动上传的，certbot中没有记录
     # 这种情况下，我们可以尝试重新申请证书（如果用户配置了邮箱等信息）

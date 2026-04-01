@@ -21,6 +21,126 @@ from app.config import get_config
 _dns_jobs: Dict[str, Dict[str, Any]] = {}
 _dns_jobs_lock = threading.Lock()
 _JOB_TTL_SEC = 1800  # 30 分钟
+_certbot_exec_lock = threading.Lock()
+
+
+def _get_certbot_lock_holder_pid(config_dir: Path) -> Optional[int]:
+    """读取 certbot 锁文件中的 PID。"""
+    lock_file = config_dir / ".lock"
+    if not lock_file.exists():
+        return None
+    try:
+        content = lock_file.read_text(encoding="utf-8").strip()
+        return int(content)
+    except (ValueError, OSError):
+        return None
+
+
+def _cleanup_certbot_lock(config_dir: Path, max_age_seconds: int = 300) -> None:
+    """清理超时且已无存活进程占用的 certbot 锁文件。"""
+    lock_file = config_dir / ".lock"
+    if not lock_file.exists():
+        return
+    try:
+        stat = lock_file.stat()
+    except OSError:
+        return
+    if time.time() - stat.st_mtime <= max_age_seconds:
+        return
+
+    pid = _get_certbot_lock_holder_pid(config_dir)
+    if pid is None:
+        try:
+            lock_file.unlink()
+        except OSError:
+            pass
+        return
+
+    try:
+        os.kill(pid, 0)
+        # 进程仍存活，保留锁文件。
+        return
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        return
+    except OSError:
+        pass
+
+    try:
+        lock_file.unlink()
+    except OSError:
+        pass
+
+
+def _run_certbot(
+    cmd: List[str],
+    *,
+    timeout: int = 300,
+    lock_timeout: int = 10,
+    cleanup_lock: bool = True,
+) -> Dict[str, Any]:
+    """统一执行 certbot 命令：全局互斥 + 残留锁清理 + 超时兜底。"""
+    config_dir: Optional[Path] = None
+    for i, arg in enumerate(cmd):
+        if arg == "--config-dir" and i + 1 < len(cmd):
+            config_dir = Path(cmd[i + 1])
+            break
+
+    if cleanup_lock and config_dir:
+        _cleanup_certbot_lock(config_dir)
+
+    acquired = _certbot_exec_lock.acquire(timeout=lock_timeout)
+    if not acquired:
+        return {
+            "success": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "",
+            "output": "",
+            "error_code": "certbot_busy",
+            "message": "Certbot 正在被其他任务占用，请稍后重试",
+            "timed_out": False,
+        }
+
+    try:
+        if cleanup_lock and config_dir:
+            _cleanup_certbot_lock(config_dir)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            return {
+                "success": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "stdout": stdout or "",
+                "stderr": stderr or "",
+                "output": (stdout or "") + (stderr or ""),
+                "error_code": None,
+                "message": "",
+                "timed_out": False,
+            }
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": "",
+                "output": "",
+                "error_code": "timeout",
+                "message": f"certbot 命令超时（{timeout}秒）",
+                "timed_out": True,
+            }
+    finally:
+        _certbot_exec_lock.release()
 
 
 def _cleanup_stale_dns_jobs() -> None:
@@ -42,6 +162,11 @@ def _cleanup_stale_dns_jobs() -> None:
                         j["proc"].kill()
                     except Exception:
                         pass
+            if j and j.get("holds_exec_lock"):
+                try:
+                    _certbot_exec_lock.release()
+                except RuntimeError:
+                    pass
 
 
 def classify_certbot_failure(
@@ -272,6 +397,38 @@ def renewal_conf_referenced_paths_ready(paths: Dict[str, str]) -> bool:
     return True
 
 
+def _rewrite_renewal_conf_paths(conf_text: str, local_config_dir: Path) -> str:
+    """将 renewal 配置中的关键路径重写到当前主机的 certbot config-dir。"""
+    local_root = str(local_config_dir).replace("\\", "/").rstrip("/")
+
+    def map_value(key: str, value: str) -> str:
+        raw = (value or "").strip()
+        if not raw:
+            return raw
+        normalized = raw.replace("\\", "/")
+        p = Path(normalized)
+        lineage = p.parent.name if p.name else p.name
+        if key == "archive_dir":
+            lineage = p.name
+            return f"{local_root}/archive/{lineage}"
+        if key in ("cert", "privkey", "chain", "fullchain"):
+            return f"{local_root}/live/{lineage}/{p.name}"
+        return raw
+
+    out_lines: List[str] = []
+    for line in (conf_text or "").splitlines():
+        if " = " not in line:
+            out_lines.append(line)
+            continue
+        key, val = line.split(" = ", 1)
+        key_s = key.strip()
+        if key_s in ("archive_dir", "cert", "privkey", "chain", "fullchain"):
+            out_lines.append(f"{key} = {map_value(key_s, val)}")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines) + ("\n" if conf_text.endswith("\n") else "")
+
+
 def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, Any]:
     """
     将导出的 Certbot renewal 配置写入 <certbot_config_dir>/renewal/<lineage>.conf。
@@ -326,6 +483,8 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
         text = conf_bytes.decode("utf-8")
     except Exception:
         text = conf_bytes.decode("utf-8", errors="replace")
+    text = _rewrite_renewal_conf_paths(text, get_certbot_config_dir())
+    conf_bytes = text.encode("utf-8")
 
     path_map = _parse_renewal_conf_paths(text)
     materialized = renewal_conf_referenced_paths_ready(path_map)
@@ -579,12 +738,36 @@ def request_certificate(
     cmd.extend(["--webroot-path", str(Path(config.nginx.static_dir))])
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300  # 5分钟超时
-        )
+        run = _run_certbot(cmd, timeout=300)
+        if run.get("timed_out"):
+            return {
+                "success": False,
+                "message": "证书申请超时",
+                "output": "",
+                "cert_path": None,
+                "key_path": None,
+                "error_code": "timeout",
+                "suggestions": [
+                    "检查网络与 Let's Encrypt 连通性",
+                    "确认验证过程无长时间阻塞",
+                ],
+            }
+        if run.get("error_code") == "certbot_busy":
+            return {
+                "success": False,
+                "message": "Certbot 正在被其他任务占用，请稍后重试",
+                "output": "",
+                "cert_path": None,
+                "key_path": None,
+                "error_code": "certbot_busy",
+                "suggestions": [
+                    "避免同时执行申请、续签、DNS 验证",
+                    "等待 10-30 秒后重试",
+                ],
+            }
 
-        success = result.returncode == 0
-        output = (result.stdout or "") + (result.stderr or "")
+        success = bool(run.get("success"))
+        output = run.get("output", "")
 
         cert_path = None
         key_path = None
@@ -612,19 +795,6 @@ def request_certificate(
             ret["error_code"] = None
             ret["suggestions"] = None
         return ret
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "message": "证书申请超时",
-            "output": "",
-            "cert_path": None,
-            "key_path": None,
-            "error_code": "timeout",
-            "suggestions": [
-                "检查网络与 Let's Encrypt 连通性",
-                "确认验证过程无长时间阻塞",
-            ],
-        }
     except Exception as e:
         return {
             "success": False,
@@ -749,6 +919,21 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         "--expand",
     ]
 
+    config_dir = get_certbot_config_dir()
+    _cleanup_certbot_lock(config_dir)
+    acquired = _certbot_exec_lock.acquire(timeout=10)
+    if not acquired:
+        return {
+            "success": False,
+            "message": "Certbot 正在被其他任务占用，请稍后重试",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+            "output": "",
+            "error_code": "certbot_busy",
+            "suggestions": ["等待当前 certbot 任务完成后重试"],
+        }
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -759,6 +944,10 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             bufsize=1,
         )
     except Exception as e:
+        try:
+            _certbot_exec_lock.release()
+        except RuntimeError:
+            pass
         return {
             "success": False,
             "message": f"无法启动 certbot: {str(e)}",
@@ -777,6 +966,10 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         if proc.poll() is not None:
             rest = proc.stdout.read() or ""
             full = "".join(buf) + rest
+            try:
+                _certbot_exec_lock.release()
+            except RuntimeError:
+                pass
             return {
                 "success": False,
                 "message": "certbot 在显示 DNS 要求前已退出，请查看输出",
@@ -805,6 +998,10 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
                 proc.kill()
             except Exception:
                 pass
+        try:
+            _certbot_exec_lock.release()
+        except RuntimeError:
+            pass
         full = "".join(buf)
         return {
             "success": False,
@@ -831,6 +1028,7 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             "record_value": record_value,
             "created_at": time.time(),
             "stdout_tail": "".join(buf),
+            "holds_exec_lock": True,
         }
 
     return {
@@ -1147,7 +1345,12 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
         except Exception:
             pass
         with _dns_jobs_lock:
-            _dns_jobs.pop(job_id, None)
+            popped = _dns_jobs.pop(job_id, None)
+        if popped and popped.get("holds_exec_lock"):
+            try:
+                _certbot_exec_lock.release()
+            except RuntimeError:
+                pass
         return {
             "success": False,
             "message": "certbot 执行超时",
@@ -1163,7 +1366,12 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
     success = proc.returncode == 0
 
     with _dns_jobs_lock:
-        _dns_jobs.pop(job_id, None)
+        popped = _dns_jobs.pop(job_id, None)
+    if popped and popped.get("holds_exec_lock"):
+        try:
+            _certbot_exec_lock.release()
+        except RuntimeError:
+            pass
 
     cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
     key_path = str(get_certbot_live_root() / domain / "privkey.pem")
@@ -1390,7 +1598,7 @@ def test_auto_renew_environment() -> Dict[str, Any]:
     )
 
     try:
-        dry = subprocess.run(
+        dry = _run_certbot(
             [
                 str(certbot_path),
                 "renew",
@@ -1399,12 +1607,45 @@ def test_auto_renew_environment() -> Dict[str, Any]:
                 "--dry-run",
                 "--non-interactive",
             ],
-            capture_output=True,
-            text=True,
             timeout=300,
         )
-        out = (dry.stdout or "") + (dry.stderr or "")
-        dry_ok = dry.returncode == 0
+        if dry.get("timed_out"):
+            add_check(
+                "dry_run",
+                False,
+                "续签模拟（dry-run）",
+                "执行超时（300 秒）",
+            )
+            return {
+                "success": False,
+                "environment_ready": False,
+                "summary": "模拟续签超时",
+                "checks": checks,
+                "lineage_count": lineage_count,
+                "dry_run_output": "",
+                "error_code": "timeout",
+                "suggestions": ["检查网络与 Let’s Encrypt 连通性", "证书较多时可稍后重试"],
+            }
+        if dry.get("error_code") == "certbot_busy":
+            add_check(
+                "dry_run",
+                False,
+                "续签模拟（dry-run）",
+                "有其他 certbot 任务正在执行",
+            )
+            return {
+                "success": False,
+                "environment_ready": False,
+                "summary": "Certbot 正在被其他任务占用",
+                "checks": checks,
+                "lineage_count": lineage_count,
+                "dry_run_output": "",
+                "error_code": "certbot_busy",
+                "suggestions": ["等待当前 certbot 操作完成后重试"],
+            }
+
+        out = dry.get("output", "")
+        dry_ok = bool(dry.get("success"))
         if dry_ok:
             add_check(
                 "dry_run",
@@ -1447,23 +1688,6 @@ def test_auto_renew_environment() -> Dict[str, Any]:
             "dry_run_output": out[-8000:] if len(out) > 8000 else out,
             "error_code": enriched.get("error_code"),
             "suggestions": enriched.get("suggestions"),
-        }
-    except subprocess.TimeoutExpired:
-        add_check(
-            "dry_run",
-            False,
-            "续签模拟（dry-run）",
-            "执行超时（300 秒）",
-        )
-        return {
-            "success": False,
-            "environment_ready": False,
-            "summary": "模拟续签超时",
-            "checks": checks,
-            "lineage_count": lineage_count,
-            "dry_run_output": "",
-            "error_code": "timeout",
-            "suggestions": ["检查网络与 Let’s Encrypt 连通性", "证书较多时可稍后重试"],
         }
     except Exception as e:
         add_check(
@@ -1523,12 +1747,26 @@ def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
         cmd.extend(["--cert-name", domain])
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300
-        )
+        result = _run_certbot(cmd, timeout=300)
+        if result.get("timed_out"):
+            return {
+                "success": False,
+                "message": "证书续期超时",
+                "output": "",
+                "error_code": "timeout",
+                "suggestions": [],
+            }
+        if result.get("error_code") == "certbot_busy":
+            return {
+                "success": False,
+                "message": "Certbot 正在被其他任务占用，请稍后重试",
+                "output": "",
+                "error_code": "certbot_busy",
+                "suggestions": ["等待 10-30 秒后重试"],
+            }
 
-        success = result.returncode == 0
-        output = (result.stdout or "") + (result.stderr or "")
+        success = bool(result.get("success"))
+        output = result.get("output", "")
         ret: Dict[str, Any] = {
             "success": success,
             "message": "证书续期成功" if success else "证书续期失败",
@@ -1540,14 +1778,6 @@ def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
             ret["error_code"] = None
             ret["suggestions"] = None
         return ret
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "message": "证书续期超时",
-            "output": "",
-            "error_code": "timeout",
-            "suggestions": [],
-        }
     except Exception as e:
         return {
             "success": False,
@@ -1572,24 +1802,23 @@ def list_certificates() -> List[Dict[str, str]]:
         return []
 
     try:
-        result = subprocess.run(
+        result = _run_certbot(
             [
                 str(certbot_path),
                 "certificates",
                 "--config-dir",
                 str(get_certbot_config_dir()),
             ],
-            capture_output=True,
-            text=True,
             timeout=30,
+            cleanup_lock=False,
         )
 
-        if result.returncode != 0:
+        if not result.get("success"):
             return []
 
         # 解析输出
         certificates = []
-        lines = result.stdout.split("\n")
+        lines = (result.get("stdout") or "").split("\n")
 
         for line in lines:
             # 查找证书名称和路径
