@@ -11,6 +11,7 @@ nginx:
   log_dir: ../data/logs
   access_log: ../data/logs/access.log
   error_log: ../data/logs/error.log
+  # 自动申请/续期成功后：写入 .crt（=fullchain）与 .key，并写入 {域名目录}/fullchain.pem、privkey.pem 供 Nginx 引用
   ssl_dir: ../data/ssl
   # Nginx 多版本管理相关目录（动态下载编译运行的数据）
   versions_root: ../data/nginx/versions

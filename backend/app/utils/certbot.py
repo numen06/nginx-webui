@@ -189,35 +189,45 @@ def _enrich_failure_result(
     return result
 
 
+def _domain_ssl_basename(domain: str) -> str:
+    """用于 ssl_dir 下文件名/子目录名，避免 Windows 等环境下非法字符。"""
+    d = (domain or "").strip()
+    if not d:
+        return "_empty"
+    return (
+        d.replace("*", "_star_")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+    )
+
+
 def copy_certificate_files(domain: str) -> Dict[str, Any]:
     """
-    从 certbot 默认路径复制证书文件到项目的 ssl_dir
+    从 certbot 的 live 目录复制到配置项 nginx.ssl_dir（默认 data/ssl），供 Nginx 直接使用。
 
-    Args:
-        domain: 域名
+    写入内容：
+    - {basename}.crt：与 fullchain.pem 相同（完整证书链，作 ssl_certificate）
+    - {basename}.key：与 privkey.pem 相同（私钥，作 ssl_certificate_key）
+    - {basename}/fullchain.pem、{basename}/privkey.pem：与官方示例一致的命名，便于手写配置或挂载
 
-    Returns:
-        {
-            "success": bool,
-            "message": str,
-            "cert_path": Optional[str],
-            "key_path": Optional[str]
-        }
+    basename 由域名规范化得到（通配符 * 变为 _star_ 等）。
     """
     config = get_config()
 
-    # certbot 默认路径
     certbot_live_dir = Path("/etc/letsencrypt/live") / domain
     source_cert = certbot_live_dir / "fullchain.pem"
     source_key = certbot_live_dir / "privkey.pem"
 
-    # 检查源文件是否存在
     if not source_cert.exists():
         return {
             "success": False,
             "message": f"Certbot 证书文件不存在: {source_cert}",
             "cert_path": None,
             "key_path": None,
+            "fullchain_pem": None,
+            "privkey_pem": None,
+            "ssl_subdir": None,
         }
 
     if not source_key.exists():
@@ -226,29 +236,36 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "message": f"Certbot 私钥文件不存在: {source_key}",
             "cert_path": None,
             "key_path": None,
+            "fullchain_pem": None,
+            "privkey_pem": None,
+            "ssl_subdir": None,
         }
 
-    # 目标路径（项目的 ssl_dir）
     ssl_dir = Path(config.nginx.ssl_dir)
     ssl_dir.mkdir(parents=True, exist_ok=True)
 
-    target_cert = ssl_dir / f"{domain}.crt"
-    target_key = ssl_dir / f"{domain}.key"
+    base = _domain_ssl_basename(domain)
+    target_cert = ssl_dir / f"{base}.crt"
+    target_key = ssl_dir / f"{base}.key"
+    subdir = ssl_dir / base
+    target_fullchain_pem = subdir / "fullchain.pem"
+    target_privkey_pem = subdir / "privkey.pem"
 
     try:
-        # 复制证书文件
         shutil.copy2(source_cert, target_cert)
         shutil.copy2(source_key, target_key)
-
-        # 确保目标路径是绝对路径
-        target_cert_abs = target_cert.resolve()
-        target_key_abs = target_key.resolve()
+        subdir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_cert, target_fullchain_pem)
+        shutil.copy2(source_key, target_privkey_pem)
 
         return {
             "success": True,
-            "message": "证书文件复制成功",
-            "cert_path": str(target_cert_abs),
-            "key_path": str(target_key_abs),
+            "message": "证书已复制到本系统 ssl 目录（含 Nginx 常用 fullchain.pem / privkey.pem）",
+            "cert_path": str(target_cert.resolve()),
+            "key_path": str(target_key.resolve()),
+            "fullchain_pem": str(target_fullchain_pem.resolve()),
+            "privkey_pem": str(target_privkey_pem.resolve()),
+            "ssl_subdir": str(subdir.resolve()),
         }
     except Exception as e:
         return {
@@ -256,6 +273,9 @@ def copy_certificate_files(domain: str) -> Dict[str, Any]:
             "message": f"复制证书文件失败: {str(e)}",
             "cert_path": None,
             "key_path": None,
+            "fullchain_pem": None,
+            "privkey_pem": None,
+            "ssl_subdir": None,
         }
 
 

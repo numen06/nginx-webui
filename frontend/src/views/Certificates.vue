@@ -16,6 +16,12 @@
               <el-icon><UploadFilled /></el-icon>
               <span class="btn-label">上传证书</span>
             </el-button>
+            <el-tooltip content="从原环境导出证书后在此导入，并引导在本机申请 Let’s Encrypt 以启用自动续签" placement="bottom">
+              <el-button type="success" plain @click="openMigrateWizard">
+                <el-icon><Promotion /></el-icon>
+                <span class="btn-label">迁移与自动续签</span>
+              </el-button>
+            </el-tooltip>
             <el-tooltip
               content="执行 certbot 模拟续签（dry-run），检测本机是否具备自动续签条件，不会改动真实证书"
               placement="bottom"
@@ -33,6 +39,47 @@
           </div>
         </div>
       </template>
+
+      <el-collapse v-model="migrationGuideOpen" class="cert-migration-collapse">
+        <el-collapse-item name="guide">
+          <template #title>
+            <span class="migration-guide-title">导出证书 → 在本系统导入（与自动续签说明）</span>
+            <el-tag size="small" type="info" class="migration-guide-tag">常见流程</el-tag>
+          </template>
+          <div class="migration-guide-body">
+            <p class="migration-guide-lead">
+              一般<strong>不必迁移整包 Certbot</strong>：在原环境<strong>导出</strong>证书链与私钥（如 <code>fullchain.pem</code>、<code>privkey.pem</code>），到本页使用<strong>上传证书</strong>完成<strong>导入</strong>即可启用 HTTPS。
+            </p>
+            <ol class="migration-guide-steps">
+              <li>
+                <strong>导出</strong>：从原服务器 <code>/etc/letsencrypt/live/&lt;域名&gt;/</code> 或云厂商面板下载链文件与私钥。
+              </li>
+              <li>
+                <strong>导入</strong>：本页「上传证书」选择文件或压缩包，域名填实际证书域名。
+              </li>
+              <li>
+                <strong>若要本系统自动续签（Certbot）</strong>：仅导入 PEM 时，本机尚未登记这条证；需在本系统对同一域名再点<strong>「申请证书」</strong>走 Let’s Encrypt，签发成功后即可配合「自动续期」与定时任务。不重新申请则可在到期前<strong>再次导出 → 导入</strong>替换。
+              </li>
+              <li>
+                <strong>环境自检</strong>：「<strong>测试自动续签环境</strong>」检查本机 <code>certbot renew</code> 是否正常（不改动真实证书）。
+              </li>
+            </ol>
+            <el-alert type="info" :closable="false" show-icon class="migration-guide-alert">
+              <template #title>
+                <span class="migration-alert-title">与「仅上传」的关系</span>
+              </template>
+              <p class="migration-alert-text">
+                导出再导入与手动上传是同一类操作：都能立刻用起来；<strong>自动续签</strong>依赖本机 Certbot 已签发该域名，通常要在本系统<strong>申请证书</strong>一次，而不是只靠导入文件。
+              </p>
+            </el-alert>
+            <p class="migration-guide-foot">
+              需要分步引导时，可直接使用上方「<strong>迁移与自动续签</strong>」按钮打开向导。可复制给客户的一段话与更多说明见
+              <code>docs/cert-migration.md</code>。
+            </p>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+
       <el-table :data="certificateList" style="width: 100%">
         <el-table-column prop="domain" label="证书名称（域名）" width="200" fixed="left">
           <template #default="scope">
@@ -507,6 +554,180 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 迁移与自动续签向导 -->
+    <el-dialog
+      v-model="migrateWizardVisible"
+      title="迁移与自动续签"
+      width="620px"
+      top="5vh"
+      :close-on-click-modal="false"
+      class="cert-migrate-wizard-dialog"
+      @closed="resetMigrateWizard"
+    >
+      <el-steps :active="migrateStep" finish-status="success" align-center class="migrate-steps">
+        <el-step title="导出" description="在原环境保存证书" />
+        <el-step title="导入" description="上传到本系统" />
+        <el-step title="自动续签" description="申请 Let’s Encrypt" />
+      </el-steps>
+
+      <!-- 步骤 0：导出说明 -->
+      <div v-show="migrateStep === 0" class="migrate-panel">
+        <p class="migrate-panel-text">
+          在<strong>原服务器</strong>或旧面板中，将证书链与私钥保存到本地（常见为 <code>fullchain.pem</code> / <code>privkey.pem</code>，Certbot 一般在
+          <code>/etc/letsencrypt/live/域名/</code>）。
+        </p>
+        <ul class="migrate-panel-list">
+          <li>妥善保管私钥，不要泄露。</li>
+          <li>无需整包迁移 Certbot 目录，导出文件即可。</li>
+        </ul>
+        <el-button size="small" type="primary" plain @click="handleCopyMigrateExportHint">
+          复制说明（发给同事）
+        </el-button>
+        <el-alert type="info" :closable="false" show-icon class="migrate-inline-alert">
+          <template #title>
+            <span class="migrate-alert-inline">没有旧证书？可直接在本系统申请证书，签发后默认开启自动续期。</span>
+          </template>
+        </el-alert>
+      </div>
+
+      <!-- 步骤 1：导入 -->
+      <div v-show="migrateStep === 1" class="migrate-panel">
+        <el-form
+          :model="migrateForm"
+          :rules="migrateUploadRules"
+          ref="migrateFormRef"
+          label-width="90px"
+          class="compact-form"
+        >
+          <el-form-item label="域名" prop="domain">
+            <el-input
+              v-model="migrateForm.domain"
+              placeholder="例如：example.com"
+              :disabled="!!migrateForm.certId"
+            />
+            <div v-if="migrateForm.certId" class="form-tip">已从向导导入，修改文件请直接点「完成导入」更新</div>
+          </el-form-item>
+          <el-form-item label="上传方式">
+            <el-radio-group v-model="migrateForm.mode" size="small">
+              <el-radio-button label="files">文件</el-radio-button>
+              <el-radio-button label="archive">压缩包</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <template v-if="migrateForm.mode === 'files'">
+            <el-form-item label="证书" required>
+              <el-upload
+                ref="migrateCertUploadRef"
+                :auto-upload="false"
+                :limit="1"
+                :on-change="handleMigrateCertFileChange"
+                :on-remove="handleMigrateCertFileRemove"
+                accept=".crt,.pem,.cer"
+                :show-file-list="false"
+              >
+                <el-button size="small" type="primary">
+                  <el-icon><FolderOpened /></el-icon>
+                  选择证书
+                </el-button>
+              </el-upload>
+              <div v-if="migrateForm.certFile" class="file-selected-compact">
+                <span class="file-name-text">{{ migrateForm.certFile?.name || migrateForm.certFile?.raw?.name }}</span>
+                <el-button size="small" text type="danger" @click="handleMigrateCertFileRemove">×</el-button>
+              </div>
+            </el-form-item>
+            <el-form-item label="私钥" required>
+              <el-upload
+                ref="migrateKeyUploadRef"
+                :auto-upload="false"
+                :limit="1"
+                :on-change="handleMigrateKeyFileChange"
+                :on-remove="handleMigrateKeyFileRemove"
+                accept=".key,.pem"
+                :show-file-list="false"
+              >
+                <el-button size="small" type="primary">
+                  <el-icon><FolderOpened /></el-icon>
+                  选择私钥
+                </el-button>
+              </el-upload>
+              <div v-if="migrateForm.keyFile" class="file-selected-compact">
+                <span class="file-name-text">{{ migrateForm.keyFile?.name || migrateForm.keyFile?.raw?.name }}</span>
+                <el-button size="small" text type="danger" @click="handleMigrateKeyFileRemove">×</el-button>
+              </div>
+            </el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item label="压缩包" required>
+              <el-upload
+                ref="migrateArchiveUploadRef"
+                :auto-upload="false"
+                :limit="1"
+                :on-change="handleMigrateArchiveFileChange"
+                :on-remove="handleMigrateArchiveFileRemove"
+                accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2"
+                :show-file-list="false"
+              >
+                <el-button size="small" type="primary">
+                  <el-icon><FolderOpened /></el-icon>
+                  选择压缩包
+                </el-button>
+              </el-upload>
+              <div v-if="migrateForm.archiveFile" class="file-selected-compact">
+                <span class="file-name-text">{{ migrateForm.archiveFile.name }}</span>
+                <el-button size="small" text type="danger" @click="handleMigrateArchiveFileRemove">×</el-button>
+              </div>
+              <div class="upload-tip-small">支持 zip、tar.gz 等；可自动识别域名</div>
+            </el-form-item>
+          </template>
+        </el-form>
+      </div>
+
+      <!-- 步骤 2：自动续签 -->
+      <div v-show="migrateStep === 2" class="migrate-panel">
+        <p class="migrate-panel-text">
+          导入的证书<strong>不会</strong>被本机 Certbot 自动续签。若希望由本系统<strong>定时自动续签</strong>，请使用 Let’s Encrypt 在本机<strong>重新申请</strong>同名域名证书（签发成功后会开启自动续期）。
+        </p>
+        <el-alert v-if="migrateForm.certId" type="warning" :closable="false" show-icon class="migrate-inline-alert">
+          <template #title>
+            <span class="migrate-alert-inline">已导入一条记录。点击下方「申请证书」时，将先删除该导入记录，再打开申请向导（避免域名重复）。</span>
+          </template>
+        </el-alert>
+        <p class="migrate-panel-text muted">
+          若无需自动续签，可关闭向导，继续使用已导入证书，到期前再导出替换即可。
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="migrate-wizard-footer">
+          <template v-if="migrateStep === 0">
+            <el-button type="info" @click="migrateWizardVisible = false">取消</el-button>
+            <el-button type="primary" @click="migrateGoStep(1)">
+              下一步：导入证书
+            </el-button>
+            <el-button type="success" link @click="openRequestFromMigrateShortcut">
+              无旧证书，直接申请（推荐自动续签）
+            </el-button>
+          </template>
+          <template v-else-if="migrateStep === 1">
+            <el-button @click="migrateGoStep(0)">上一步</el-button>
+            <el-button type="primary" :loading="migrateUploading" :disabled="isMigrateUploadDisabled" @click="handleMigrateUploadSubmit">
+              <el-icon><Check /></el-icon>
+              完成导入
+            </el-button>
+          </template>
+          <template v-else>
+            <el-button @click="migrateGoStep(1)">上一步</el-button>
+            <el-button type="info" plain :loading="testingAutoRenewEnv" @click="handleTestAutoRenewEnv">
+              测试自动续签环境
+            </el-button>
+            <el-button type="primary" @click="goToRequestCertFromMigrate">
+              申请证书并启用自动续签
+            </el-button>
+            <el-button type="success" plain @click="finishMigrateWizard">完成</el-button>
+          </template>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -514,10 +735,12 @@
 import { ref, onMounted, computed, watch, onBeforeUnmount } from 'vue'
 import { certificatesApi } from '../api/certificates'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck, Download, Operation } from '@element-plus/icons-vue'
+import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck, Download, Operation, Promotion } from '@element-plus/icons-vue'
 import { formatDateTime } from '../utils/date'
 
 const certificateList = ref([])
+/** 默认折叠，避免占满首屏；需要时客户自行展开 */
+const migrationGuideOpen = ref([])
 const testingAutoRenewEnv = ref(false)
 const uploadDialogVisible = ref(false)
 const uploading = ref(false)
@@ -527,6 +750,245 @@ const keyUploadRef = ref(null)
 const archiveUploadRef = ref(null)
 const copyTextDialogVisible = ref(false)
 const copyTextContent = ref('')
+
+/** 迁移与自动续签向导 */
+const migrateWizardVisible = ref(false)
+const migrateStep = ref(0)
+const migrateUploading = ref(false)
+const migrateFormRef = ref(null)
+const migrateCertUploadRef = ref(null)
+const migrateKeyUploadRef = ref(null)
+const migrateArchiveUploadRef = ref(null)
+const migrateForm = ref({
+  domain: '',
+  certFile: null,
+  keyFile: null,
+  archiveFile: null,
+  mode: 'files',
+  certId: null
+})
+
+const MIGRATE_EXPORT_HINT_TEXT =
+  '【证书迁移】在原服务器导出证书链与私钥（如 fullchain.pem、privkey.pem，Certbot 一般在 /etc/letsencrypt/live/域名/）。在本系统打开「证书管理 → 迁移与自动续签」，按向导导入。若需本系统自动续签，导入后在向导最后一步点击「申请证书并启用自动续签」（将使用 Let’s Encrypt 在本机签发）。'
+
+const migrateGoStep = (n) => {
+  migrateStep.value = n
+}
+
+const migrateUploadRules = {
+  domain: [
+    {
+      required: true,
+      message: '请输入域名或上传压缩包自动识别',
+      trigger: 'blur',
+      validator: (rule, value, callback) => {
+        if (migrateForm.value.mode === 'archive' && !value) {
+          callback()
+        } else if (!value) {
+          callback(new Error('请输入域名'))
+        } else if (
+          !/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/.test(
+            value
+          )
+        ) {
+          callback(new Error('请输入有效的域名'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ]
+}
+
+const isMigrateUploadDisabled = computed(() => {
+  if (migrateForm.value.mode === 'archive') {
+    return !migrateForm.value.archiveFile
+  }
+  if (!migrateForm.value.domain) return true
+  return !migrateForm.value.certFile || !migrateForm.value.keyFile
+})
+
+const openMigrateWizard = () => {
+  migrateGoStep(0)
+  migrateForm.value = {
+    domain: '',
+    certFile: null,
+    keyFile: null,
+    archiveFile: null,
+    mode: 'files',
+    certId: null
+  }
+  if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
+  if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
+  if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
+  migrateWizardVisible.value = true
+}
+
+const resetMigrateWizard = () => {
+  migrateGoStep(0)
+  migrateForm.value = {
+    domain: '',
+    certFile: null,
+    keyFile: null,
+    archiveFile: null,
+    mode: 'files',
+    certId: null
+  }
+  if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
+  if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
+  if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
+}
+
+const handleCopyMigrateExportHint = async () => {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(MIGRATE_EXPORT_HINT_TEXT)
+      ElMessage.success('已复制到剪贴板')
+    } else {
+      copyTextContent.value = MIGRATE_EXPORT_HINT_TEXT
+      copyTextDialogVisible.value = true
+    }
+  } catch {
+    copyTextContent.value = MIGRATE_EXPORT_HINT_TEXT
+    copyTextDialogVisible.value = true
+  }
+}
+
+const openRequestFromMigrateShortcut = () => {
+  migrateWizardVisible.value = false
+  handleRequest()
+}
+
+const handleMigrateCertFileChange = (file) => {
+  migrateForm.value.certFile = file.raw
+}
+
+const handleMigrateCertFileRemove = () => {
+  migrateForm.value.certFile = null
+  if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
+}
+
+const handleMigrateKeyFileChange = (file) => {
+  migrateForm.value.keyFile = file.raw
+}
+
+const handleMigrateKeyFileRemove = () => {
+  migrateForm.value.keyFile = null
+  if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
+}
+
+const handleMigrateArchiveFileChange = async (file) => {
+  migrateForm.value.archiveFile = file.raw
+  if (file.raw) {
+    try {
+      const response = await certificatesApi.parseCertificateArchive(file.raw)
+      if (response.domain) {
+        migrateForm.value.domain = response.domain
+        ElMessage.success(`已自动识别域名: ${response.domain}`)
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+const handleMigrateArchiveFileRemove = () => {
+  migrateForm.value.archiveFile = null
+  if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
+}
+
+const handleMigrateUploadSubmit = async () => {
+  if (!migrateFormRef.value) return
+  try {
+    await migrateFormRef.value.validate()
+  } catch {
+    return
+  }
+
+  const mode = migrateForm.value.mode
+  if (mode === 'archive') {
+    if (!migrateForm.value.archiveFile) {
+      ElMessage.warning('请选择压缩包')
+      return
+    }
+  } else if (!migrateForm.value.certFile || !migrateForm.value.keyFile) {
+    ElMessage.warning('请选择证书与私钥文件')
+    return
+  }
+
+  migrateUploading.value = true
+  try {
+    let res
+    if (mode === 'archive') {
+      res = await certificatesApi.uploadCertificateArchive(
+        migrateForm.value.domain,
+        migrateForm.value.archiveFile,
+        false,
+        migrateForm.value.certId
+      )
+      ElMessage.success(migrateForm.value.certId ? '证书已更新' : '压缩包导入成功')
+    } else {
+      res = await certificatesApi.uploadCertificate(
+        migrateForm.value.domain,
+        migrateForm.value.certFile,
+        migrateForm.value.keyFile,
+        false,
+        migrateForm.value.certId
+      )
+      ElMessage.success(migrateForm.value.certId ? '证书已更新' : '证书导入成功')
+    }
+    const cert = res.certificate || {}
+    migrateForm.value.certId = cert.id ?? migrateForm.value.certId
+    migrateForm.value.domain = cert.domain || migrateForm.value.domain
+    migrateGoStep(2)
+    await loadCertificates()
+  } catch (error) {
+    ElMessage.error(error.detail || error.message || '导入失败')
+  } finally {
+    migrateUploading.value = false
+  }
+}
+
+const goToRequestCertFromMigrate = async () => {
+  const domain = (migrateForm.value.domain || '').trim()
+  if (!domain) {
+    ElMessage.warning('缺少域名')
+    return
+  }
+  if (migrateForm.value.certId) {
+    try {
+      await ElMessageBox.confirm(
+        '将删除本向导中已导入的证书记录（磁盘上的证书与私钥文件也会删除），再打开「申请证书」向导。是否继续？',
+        '申请证书并启用自动续签',
+        { type: 'warning', confirmButtonText: '删除并继续' }
+      )
+    } catch (e) {
+      if (e === 'cancel') return
+      return
+    }
+    try {
+      await certificatesApi.deleteCertificate(migrateForm.value.certId)
+      ElMessage.success('已删除，请完成证书申请')
+      migrateForm.value.certId = null
+      await loadCertificates()
+    } catch (e) {
+      ElMessage.error(e?.detail || e?.message || '删除失败')
+      return
+    }
+  }
+  migrateWizardVisible.value = false
+  requestForm.value = {
+    domain,
+    email: '',
+    validation_method: 'http'
+  }
+  resetRequestWizard()
+  requestDialogVisible.value = true
+}
+
+const finishMigrateWizard = () => {
+  migrateWizardVisible.value = false
+}
 
 // 申请证书对话框
 const requestDialogVisible = ref(false)
@@ -1306,6 +1768,149 @@ onMounted(() => {
 <style scoped>
 .certificates-page {
   padding: 20px;
+}
+
+.cert-migrate-wizard-dialog :deep(.el-dialog__body) {
+  max-height: calc(85vh - 140px);
+  overflow-y: auto;
+  padding-top: 12px;
+}
+
+.migrate-steps {
+  margin-bottom: 20px;
+}
+
+.migrate-panel {
+  min-height: 100px;
+}
+
+.migrate-panel-text {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--el-text-color-regular);
+}
+
+.migrate-panel-text.muted {
+  margin-top: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.migrate-panel-text code {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+}
+
+.migrate-panel-list {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-regular);
+}
+
+.migrate-inline-alert {
+  margin-top: 16px;
+}
+
+.migrate-alert-inline {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.migrate-wizard-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.cert-migration-collapse {
+  margin-bottom: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cert-migration-collapse :deep(.el-collapse-item__header) {
+  padding: 12px 16px;
+  font-weight: 500;
+  align-items: center;
+  gap: 8px;
+}
+
+.cert-migration-collapse :deep(.el-collapse-item__wrap) {
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.cert-migration-collapse :deep(.el-collapse-item__content) {
+  padding-bottom: 16px;
+}
+
+.migration-guide-title {
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.migration-guide-tag {
+  margin-left: 8px;
+  font-weight: normal;
+}
+
+.migration-guide-body {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--el-text-color-regular);
+  padding: 0 4px;
+}
+
+.migration-guide-lead {
+  margin: 0 0 12px;
+}
+
+.migration-guide-steps {
+  margin: 0 0 14px;
+  padding-left: 20px;
+}
+
+.migration-guide-steps li {
+  margin-bottom: 8px;
+}
+
+.migration-guide-steps code {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+}
+
+.migration-guide-alert {
+  margin-bottom: 12px;
+}
+
+.migration-alert-title {
+  font-size: 13px;
+}
+
+.migration-alert-text {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.migration-guide-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.migration-guide-foot code {
+  font-size: 11px;
 }
 
 .card-header {

@@ -10,7 +10,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from fastapi import (
     APIRouter,
@@ -424,6 +424,9 @@ def _finalize_certbot_issued_certificate(
     request: Request,
     current_user: User,
     db: Session,
+    fullchain_pem: Optional[str] = None,
+    privkey_pem: Optional[str] = None,
+    ssl_subdir: Optional[str] = None,
 ) -> dict:
     """certbot 签发成功后：应用 SSL、写入数据库、审计，并返回与 /request 一致的结构。"""
     try:
@@ -487,17 +490,25 @@ def _finalize_certbot_issued_certificate(
 
     verification = verify_certificate_files(cert_path, key_path)
 
+    cert_payload: Dict[str, Any] = {
+        "id": cert.id,
+        "domain": cert.domain,
+        "cert_path": cert.cert_path,
+        "key_path": cert.key_path,
+    }
+    if fullchain_pem:
+        cert_payload["fullchain_pem"] = fullchain_pem
+    if privkey_pem:
+        cert_payload["privkey_pem"] = privkey_pem
+    if ssl_subdir:
+        cert_payload["ssl_subdir"] = ssl_subdir
+
     return {
         "success": True,
         "message": message,
         "output": raw_output,
         "ssl_config": ssl_message,
-        "certificate": {
-            "id": cert.id,
-            "domain": cert.domain,
-            "cert_path": cert.cert_path,
-            "key_path": cert.key_path,
-        },
+        "certificate": cert_payload,
         "verification": verification,
         "error_code": None,
         "suggestions": None,
@@ -940,8 +951,8 @@ async def dns_challenge_complete(
             "output": result.get("output", ""),
             "error_code": "copy_failed",
             "suggestions": [
-                "检查 nginx.ssl_dir 是否可写",
-                "确认 certbot 证书目录 /etc/letsencrypt/live 存在",
+                "检查 nginx.ssl_dir（默认 data/ssl）是否可写",
+                "确认 certbot 证书目录 /etc/letsencrypt/live/<域名> 存在",
             ],
         }
 
@@ -958,6 +969,9 @@ async def dns_challenge_complete(
         request=request,
         current_user=current_user,
         db=db,
+        fullchain_pem=copy_result.get("fullchain_pem"),
+        privkey_pem=copy_result.get("privkey_pem"),
+        ssl_subdir=copy_result.get("ssl_subdir"),
     )
 
 
@@ -1061,8 +1075,8 @@ async def request_cert(
             "output": result["output"],
             "error_code": "copy_failed",
             "suggestions": [
-                "检查 nginx.ssl_dir 是否可写",
-                "确认 certbot 输出目录中证书文件存在",
+                "检查 nginx.ssl_dir（默认 data/ssl）是否可写",
+                "确认 /etc/letsencrypt/live/<域名>/fullchain.pem 与 privkey.pem 存在",
             ],
         }
 
@@ -1079,6 +1093,9 @@ async def request_cert(
         request=request,
         current_user=current_user,
         db=db,
+        fullchain_pem=copy_result.get("fullchain_pem"),
+        privkey_pem=copy_result.get("privkey_pem"),
+        ssl_subdir=copy_result.get("ssl_subdir"),
     )
 
 
@@ -1180,12 +1197,21 @@ async def renew_cert(
             ip_address=get_client_ip(request),
         )
 
-        return {
+        renew_payload: Dict[str, Any] = {
             "success": True,
             "message": f"证书续期成功{f'，{ssl_message}' if ssl_message and '失败' not in ssl_message else ''}",
             "output": result["output"],
-            "ssl_config": ssl_message
+            "ssl_config": ssl_message,
         }
+        if copy_result["success"]:
+            renew_payload["certificate"] = {
+                "cert_path": cert.cert_path,
+                "key_path": cert.key_path,
+                "fullchain_pem": copy_result.get("fullchain_pem"),
+                "privkey_pem": copy_result.get("privkey_pem"),
+                "ssl_subdir": copy_result.get("ssl_subdir"),
+            }
+        return renew_payload
 
     # 记录操作日志
     create_audit_log(
