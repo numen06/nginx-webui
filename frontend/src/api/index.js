@@ -184,12 +184,20 @@ api.interceptors.response.use(
       
       return Promise.reject(errorObj)
     } else if (error.request) {
-      // 请求已发出但没有收到响应
-      console.error('网络错误: 无法连接到服务器', error.request)
+      // 请求已发出但没有收到响应（含超时；DNS 检测等接口可能较慢）
+      const isTimeout =
+        error.code === 'ECONNABORTED' ||
+        (typeof error.message === 'string' && error.message.toLowerCase().includes('timeout'))
+      console.error(
+        isTimeout ? '请求超时' : '网络错误: 无法连接到服务器',
+        error.request
+      )
       const errorObj = {
-        detail: '无法连接到服务器，请检查后端服务是否正在运行',
-        message: '网络连接失败',
-        code: 'NETWORK_ERROR'
+        detail: isTimeout
+          ? '请求超时，请稍后重试（DNS 检测可能较慢或网络不稳定）'
+          : '无法连接到服务器，请检查后端服务是否正在运行',
+        message: isTimeout ? '请求超时' : '网络连接失败',
+        code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR'
       }
       return Promise.reject(errorObj)
     } else {

@@ -66,6 +66,13 @@ export const certificatesApi = {
     })
   },
 
+  /** 查询是否有未完成的 DNS 验证（同一会话下记录值不变） */
+  dnsChallengePending(domain) {
+    return api.get('/certificates/dns-challenge/pending', {
+      params: { domain }
+    })
+  },
+
   /** DNS 验证：启动 certbot 并获取 TXT */
   dnsChallengeStart(domain, email) {
     return api.post('/certificates/dns-challenge/start', { domain, email })
@@ -76,12 +83,16 @@ export const certificatesApi = {
     return api.post('/certificates/dns-challenge/complete', { job_id: jobId })
   },
 
-  /** 检测公网 DNS TXT */
+  /** 检测公网 DNS TXT（可能多次查询，单独放宽超时） */
   verifyDns(recordName, recordValue) {
-    return api.post('/certificates/verify-dns', {
-      record_name: recordName,
-      record_value: recordValue
-    })
+    return api.post(
+      '/certificates/verify-dns',
+      {
+        record_name: recordName,
+        record_value: recordValue
+      },
+      { timeout: 90000 }
+    )
   },
 
   /** 校验证书文件（openssl） */

@@ -2,6 +2,7 @@
 证书管理路由
 """
 
+import asyncio
 import shutil
 import tarfile
 import zipfile
@@ -34,6 +35,7 @@ from app.utils.certbot import (
     copy_certificate_files,
     start_dns_manual_challenge,
     complete_dns_manual_challenge,
+    get_pending_dns_challenge_for_domain,
     verify_dns_txt_record,
     verify_certificate_files,
 )
@@ -814,6 +816,15 @@ async def upload_certificate_archive(
         )
 
 
+@router.get("/dns-challenge/pending", summary="查询未完成的 DNS 验证（刷新后恢复）")
+async def dns_challenge_pending(
+    domain: str = Query(..., description="域名"),
+    current_user: User = Depends(get_current_user),
+):
+    """若服务端仍有该域名挂起的 certbot 会话，返回同一 job_id 与 TXT。"""
+    return get_pending_dns_challenge_for_domain(domain)
+
+
 @router.post("/dns-challenge/start", summary="DNS 验证：获取 TXT 并挂起 certbot")
 async def dns_challenge_start(
     body: DnsChallengeStartRequest,
@@ -901,8 +912,10 @@ async def verify_dns(
     body: VerifyDnsRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """检测公网 DNS 是否已包含指定 TXT 值。"""
-    return verify_dns_txt_record(body.record_name, body.record_value)
+    """检测公网 DNS 是否已包含指定 TXT 值（在线程中执行，避免阻塞事件循环导致前端误判断连）。"""
+    return await asyncio.to_thread(
+        verify_dns_txt_record, body.record_name, body.record_value
+    )
 
 
 @router.post("/verify-cert", summary="校验证书文件是否有效")

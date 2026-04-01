@@ -424,22 +424,46 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
     启动 certbot manual DNS 验证进程，解析出 TXT 后保持进程等待 stdin 回车。
     """
     _cleanup_stale_dns_jobs()
-    # 避免并发启动多个 manual DNS 会话，触发 certbot 锁冲突
+    domain_norm = (domain or "").strip().lower()
+
+    # 同一域名复用已有挂起会话：TXT 与 job_id 不变（避免刷新/重复点击拿到新 challenge）
+    with _dns_jobs_lock:
+        for jid, job in _dns_jobs.items():
+            p = job.get("proc")
+            if not p or p.poll() is not None:
+                continue
+            job_domain = (job.get("domain") or "").strip().lower()
+            if (
+                job_domain == domain_norm
+                and job.get("record_name")
+                and job.get("record_value")
+            ):
+                return {
+                    "success": True,
+                    "message": "已复用进行中的 DNS 验证，记录值不变，请继续配置 DNS 后完成申请",
+                    "job_id": jid,
+                    "record_name": job["record_name"],
+                    "record_value": job["record_value"],
+                    "output": job.get("stdout_tail", ""),
+                    "reused": True,
+                }
+
+    # 其他域名已有会话在跑：不能并行再启 certbot
     with _dns_jobs_lock:
         for jid, job in _dns_jobs.items():
             p = job.get("proc")
             if p and p.poll() is None:
                 return {
                     "success": False,
-                    "message": "已有证书申请会话正在进行，请先完成当前会话后再发起新申请",
+                    "message": "已有其他域名的证书申请正在进行，请先完成或取消该会话后再申请新域名",
                     "job_id": jid,
                     "record_name": job.get("record_name"),
                     "record_value": job.get("record_value"),
                     "output": job.get("stdout_tail", ""),
                     "error_code": "certbot_busy",
                     "suggestions": [
-                        "继续当前 DNS 验证流程（可直接使用已展示的 TXT 记录）",
-                        "完成或等待当前申请结束后，再发起新的申请",
+                        "先完成当前域名的 DNS 验证与「完成申请」",
+                        "或等待当前会话结束（约 30 分钟内有效）后再试其他域名",
                     ],
                 }
 
@@ -562,12 +586,85 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         "record_name": record_name,
         "record_value": record_value,
         "output": "".join(buf),
+        "reused": False,
     }
+
+
+def get_pending_dns_challenge_for_domain(domain: str) -> Dict[str, Any]:
+    """
+    查询指定域名是否有尚未完成的 manual DNS 会话（certbot 仍在等待回车）。
+    用于页面刷新后恢复同一组 TXT / job_id。
+    """
+    _cleanup_stale_dns_jobs()
+    domain_norm = (domain or "").strip().lower()
+    if not domain_norm:
+        return {
+            "success": False,
+            "message": "请提供域名",
+            "job_id": None,
+            "record_name": None,
+            "record_value": None,
+        }
+    with _dns_jobs_lock:
+        for jid, job in _dns_jobs.items():
+            p = job.get("proc")
+            if not p or p.poll() is not None:
+                continue
+            if (job.get("domain") or "").strip().lower() != domain_norm:
+                continue
+            rn = job.get("record_name")
+            rv = job.get("record_value")
+            if rn and rv:
+                return {
+                    "success": True,
+                    "job_id": jid,
+                    "record_name": rn,
+                    "record_value": rv,
+                }
+    return {
+        "success": False,
+        "message": "当前没有该域名未完成的 DNS 验证会话",
+        "job_id": None,
+        "record_name": None,
+        "record_value": None,
+    }
+
+
+def _doh_query_txt(provider: str, url: str, expected: str, timeout_sec: float) -> Optional[Dict[str, Any]]:
+    """单次 DNS-over-HTTPS JSON 查询，成功则返回结果 dict，失败返回 None。"""
+    try:
+        req = Request(
+            url,
+            headers={"Accept": "application/dns-json", "User-Agent": "nginx-webui/1.0"},
+        )
+        with urlopen(req, timeout=timeout_sec) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        answers = data.get("Answer") or []
+        txt_values: List[str] = []
+        for ans in answers:
+            if int(ans.get("type", 0)) != 16:
+                continue
+            val = str(ans.get("data", "")).strip()
+            if val.startswith('"') and val.endswith('"'):
+                val = val[1:-1]
+            txt_values.append(val)
+        joined = " ".join(txt_values)
+        matched = expected in joined or any(expected in v for v in txt_values)
+        return {
+            "success": True,
+            "matched": matched,
+            "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+            "checked_with": provider,
+            "records": txt_values,
+        }
+    except Exception:
+        return None
 
 
 def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, Any]:
     """
-    检查公网 DNS 是否已包含指定 TXT 值（使用 dig 或 nslookup）。
+    检查公网 DNS 是否已包含指定 TXT 值。
+    顺序：DoH（快、不阻塞过久）→ dig → nslookup，避免总耗时超过常见 HTTP 超时。
     """
     name = (record_name or "").strip().strip(".")
     expected = (expected_value or "").strip()
@@ -580,43 +677,60 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
             "records": [],
         }
 
-    # 优先 dig
-    for dig_cmd in (
-        ["dig", "+short", "TXT", name, "@8.8.8.8"],
-        ["dig", "+short", "TXT", name],
+    # 1) DNS-over-HTTPS（国内环境优先 AliDNS / Cloudflare）
+    for provider, url, tmo in (
+        ("CloudflareDoH", f"https://cloudflare-dns.com/dns-query?name={quote(name)}&type=TXT", 6.0),
+        ("AliDNSDoH", f"https://dns.alidns.com/resolve?name={quote(name)}&type=TXT", 6.0),
+        ("GoogleDoH", f"https://dns.google/resolve?name={quote(name)}&type=TXT", 6.0),
     ):
+        got = _doh_query_txt(provider, url, expected, tmo)
+        if got is not None:
+            return got
+
+    # 2) dig（+time/+tries 限制单次查询时长）
+    for server in ("223.5.5.5", "114.114.114.114", "8.8.8.8"):
+        dig_cmd = [
+            "dig",
+            "+short",
+            "+time=2",
+            "+tries=1",
+            "TXT",
+            name,
+            f"@{server}",
+        ]
         try:
             r = subprocess.run(
-                dig_cmd, capture_output=True, text=True, timeout=15
+                dig_cmd, capture_output=True, text=True, timeout=8
             )
             out = (r.stdout or "") + (r.stderr or "")
-            if r.returncode == 0 and out.strip():
-                # 多行带引号
-                chunks = re.findall(r'"([^"]*)"', out)
-                if not chunks:
-                    chunks = [out.strip()]
-                flat = " ".join(chunks)
-                matched = expected in flat or expected in out.replace('"', "")
-                return {
-                    "success": True,
-                    "matched": matched,
-                    "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
-                    "checked_with": " ".join(dig_cmd),
-                    "records": chunks,
-                }
+            if not out.strip():
+                continue
+            chunks = re.findall(r'"([^"]*)"', out)
+            if not chunks:
+                chunks = [out.strip()]
+            flat = " ".join(chunks)
+            matched = expected in flat or expected in out.replace('"', "")
+            return {
+                "success": True,
+                "matched": matched,
+                "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                "checked_with": " ".join(dig_cmd),
+                "records": chunks,
+            }
         except FileNotFoundError:
             break
         except Exception:
             continue
 
-    # nslookup（Windows / 无 dig）
+    # 3) nslookup（Windows / 无 dig）
     for ns_cmd in (
+        ["nslookup", "-type=TXT", name, "223.5.5.5"],
         ["nslookup", "-type=TXT", name, "8.8.8.8"],
         ["nslookup", "-type=TXT", name],
     ):
         try:
             r = subprocess.run(
-                ns_cmd, capture_output=True, text=True, timeout=20
+                ns_cmd, capture_output=True, text=True, timeout=10
             )
             out = (r.stdout or "") + (r.stderr or "")
             matched = expected in out.replace('"', "").replace(" ", "")
@@ -632,41 +746,10 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
         except Exception:
             continue
 
-    # 兜底：DNS-over-HTTPS（不依赖系统安装 dig/nslookup）
-    doh_endpoints = [
-        ("GoogleDoH", f"https://dns.google/resolve?name={quote(name)}&type=TXT"),
-        ("CloudflareDoH", f"https://cloudflare-dns.com/dns-query?name={quote(name)}&type=TXT"),
-    ]
-    for provider, url in doh_endpoints:
-        try:
-            req = Request(url, headers={"Accept": "application/dns-json", "User-Agent": "nginx-webui/1.0"})
-            with urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-            answers = data.get("Answer") or []
-            txt_values: List[str] = []
-            for ans in answers:
-                if int(ans.get("type", 0)) != 16:
-                    continue
-                val = str(ans.get("data", "")).strip()
-                if val.startswith('"') and val.endswith('"'):
-                    val = val[1:-1]
-                txt_values.append(val)
-            joined = " ".join(txt_values)
-            matched = expected in joined or any(expected in v for v in txt_values)
-            return {
-                "success": True,
-                "matched": matched,
-                "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
-                "checked_with": provider,
-                "records": txt_values,
-            }
-        except Exception:
-            continue
-
     return {
         "success": False,
         "matched": False,
-        "message": "系统未找到 dig/nslookup，且 DNS-over-HTTPS 查询失败，无法检测 DNS",
+        "message": "DNS 检测失败：DoH、dig、nslookup 均不可用或查询失败",
         "checked_with": None,
         "records": [],
     }

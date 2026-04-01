@@ -164,7 +164,7 @@
       <div v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1" class="dns-wizard-panel">
         <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
           <template #title>
-            <span class="dns-alert-title">请在域名 DNS 控制台新增 1 条 TXT 记录（把下面字段一字不差填进去）</span>
+            <span class="dns-alert-title">请在域名 DNS 控制台新增 1 条 TXT 记录（把下面字段一字不差填进去）。同一未完成会话内记录值固定；刷新后点「恢复未完成」或再次「下一步」均可复用。</span>
           </template>
         </el-alert>
         <el-card shadow="never" class="dns-guide-card">
@@ -266,6 +266,13 @@
               <div class="radio-desc">在域名 DNS 中添加 TXT 记录；适合无法开放 80 端口的场景</div>
             </el-radio>
           </el-radio-group>
+        </el-form-item>
+
+        <el-form-item v-if="requestForm.validation_method === 'dns'" label=" ">
+          <el-button type="primary" link @click="tryRestoreDnsSession">
+            恢复未完成的 DNS 验证（刷新页面后记录值不变）
+          </el-button>
+          <div class="form-tip">同一域名在服务端会话未结束前会复用同一组 TXT；请勿反复点「下一步」以免启动新验证。</div>
         </el-form-item>
 
         <el-alert
@@ -515,6 +522,67 @@ const dnsAutoPoll = ref(false)
 const dnsLastCheckMsg = ref('')
 let dnsPollTimer = null
 
+/** 浏览器刷新后恢复同一组 TXT（与服务端挂起的 certbot 会话对应） */
+const DNS_SESSION_KEY = 'nginx-webui-cert-dns-v1'
+
+const saveDnsSession = () => {
+  const domain = requestForm.value.domain?.trim().toLowerCase()
+  if (!domain || !dnsJobId.value) return
+  try {
+    sessionStorage.setItem(
+      DNS_SESSION_KEY,
+      JSON.stringify({
+        domain,
+        job_id: dnsJobId.value,
+        record_name: dnsRecordName.value,
+        record_value: dnsRecordValue.value,
+        ts: Date.now()
+      })
+    )
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+const clearDnsSession = () => {
+  try {
+    sessionStorage.removeItem(DNS_SESSION_KEY)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+const tryRestoreDnsSession = async () => {
+  const domain = requestForm.value.domain?.trim()
+  if (!domain) {
+    ElMessage.warning('请先填写域名')
+    return
+  }
+  requesting.value = true
+  try {
+    const p = await certificatesApi.dnsChallengePending(domain)
+    if (p.success && p.job_id && p.record_name && p.record_value) {
+      dnsJobId.value = p.job_id
+      dnsRecordName.value = p.record_name
+      dnsRecordValue.value = p.record_value
+      dnsWizardStep.value = 1
+      dnsVerified.value = false
+      dnsLastCheckMsg.value = ''
+      saveDnsSession()
+      ElMessage.success('已恢复：记录值与当前会话一致')
+    } else {
+      clearDnsSession()
+      ElMessage.warning(
+        p.message || '服务端已无未完成会话，请重新点击「下一步：获取 DNS 要求」'
+      )
+    }
+  } catch (e) {
+    ElMessage.error(e?.detail || e?.message || '恢复失败')
+  } finally {
+    requesting.value = false
+  }
+}
+
 const isRequestDisabled = computed(() => {
   return !requestForm.value.domain || !requestForm.value.email
 })
@@ -590,6 +658,7 @@ const dnsWizardBack = () => {
   dnsJobId.value = null
   dnsRecordName.value = ''
   dnsRecordValue.value = ''
+  clearDnsSession()
 }
 
 const runDnsVerifyOnce = async () => {
@@ -659,7 +728,12 @@ const handleDnsWizardNext = async () => {
       dnsWizardStep.value = 1
       dnsVerified.value = false
       dnsLastCheckMsg.value = ''
-      ElMessage.success('已获取 DNS 验证要求，请添加 TXT 记录')
+      saveDnsSession()
+      ElMessage.success(
+        res.reused
+          ? '已复用当前验证会话，记录值未变，请继续配置 DNS'
+          : '已获取 DNS 验证要求，请添加 TXT 记录'
+      )
     } else {
       showCertFailureDialog({
         message: res.message || '获取 DNS 要求失败',
@@ -694,6 +768,7 @@ const handleDnsCompleteIssue = async () => {
         msg += `（${response.verification.message}）`
       }
       ElMessage.success(msg)
+      clearDnsSession()
       requestDialogVisible.value = false
       loadCertificates()
     } else {
