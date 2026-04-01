@@ -3,6 +3,8 @@
 """
 
 import asyncio
+import io
+import re
 import shutil
 import tarfile
 import zipfile
@@ -21,6 +23,7 @@ from fastapi import (
     Query,
     Request,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 
@@ -38,6 +41,7 @@ from app.utils.certbot import (
     get_pending_dns_challenge_for_domain,
     verify_dns_txt_record,
     verify_certificate_files,
+    test_auto_renew_environment,
 )
 from app.utils.audit import create_audit_log, get_client_ip
 
@@ -532,6 +536,56 @@ async def get_certificates(
     return {"success": True, "certificates": result}
 
 
+@router.get("/{cert_id}/download", summary="下载证书与私钥（ZIP）")
+async def download_certificate_bundle(
+    cert_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """将当前证书链文件与私钥打包为 zip 下载（文件名与磁盘上一致）。"""
+    cert = db.query(Certificate).filter(Certificate.id == cert_id).first()
+
+    if not cert:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
+
+    cert_path = Path(cert.cert_path)
+    key_path = Path(cert.key_path)
+
+    if not cert_path.is_file() or not key_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="证书或私钥文件在服务器上不存在",
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(cert_path.resolve(), arcname=cert_path.name)
+        zf.write(key_path.resolve(), arcname=key_path.name)
+    buf.seek(0)
+
+    safe_domain = re.sub(r"[^\w.\-]+", "_", cert.domain).strip("._") or "certificate"
+    filename = f"{safe_domain}-ssl.zip"
+
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="cert_download",
+        target=cert.domain,
+        details={"cert_path": cert.cert_path, "key_path": cert.key_path},
+        ip_address=get_client_ip(request),
+    )
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
 @router.get("/{cert_id}", summary="获取证书详情")
 async def get_certificate(
     cert_id: int,
@@ -934,6 +988,33 @@ async def verify_cert(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
     return verify_certificate_files(cert.cert_path, cert.key_path)
+
+
+@router.post("/test-auto-renew-env", summary="检测自动续签环境（certbot dry-run）")
+async def test_auto_renew_env(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    检测 certbot/openssl、已管理 lineage 数量，并执行 `certbot renew --dry-run`
+    验证续签链路；不修改磁盘上的真实证书。
+    应用内每天凌晨 3:00 的定时任务亦依赖同一 renew 命令。
+    """
+    result = await asyncio.to_thread(test_auto_renew_environment)
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="cert_test_auto_renew_env",
+        target="environment",
+        details={
+            "environment_ready": result.get("environment_ready"),
+            "lineage_count": result.get("lineage_count"),
+        },
+        ip_address=get_client_ip(request),
+    )
+    return {"success": True, **result}
 
 
 @router.post("/request", summary="通过 certbot 自动申请证书")

@@ -1,6 +1,7 @@
 """
 Certbot 工具封装
 """
+import os
 import subprocess
 import re
 import shutil
@@ -630,8 +631,49 @@ def get_pending_dns_challenge_for_domain(domain: str) -> Dict[str, Any]:
     }
 
 
+def _split_txt_rr_data(raw: Any) -> List[str]:
+    """
+    从 DoH JSON 的 TXT 的 data 字段拆出若干子串（支持一条 RR 内多段 "a" "b" 形式）。
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        out: List[str] = []
+        for item in raw:
+            out.extend(_split_txt_rr_data(item))
+        return out
+    s = str(raw).strip()
+    if not s:
+        return []
+    parts = re.findall(r'"([^"]*)"', s)
+    if parts:
+        return parts
+    if s.startswith('"') and s.endswith('"') and len(s) >= 2:
+        return [s[1:-1]]
+    return [s]
+
+
+def _txt_expected_matches_found(expected: str, fragments: List[str]) -> bool:
+    """判断 ACME 期望 token 是否出现在 DNS 返回的 TXT 片段中（大小写敏感，兼容分段/空白）。"""
+    exp = (expected or "").strip()
+    if not exp or not fragments:
+        return False
+    chunks = [c for c in (f.strip() for f in fragments) if c]
+    if not chunks:
+        return False
+    joined = "".join(chunks)
+    joined_sp = " ".join(chunks)
+    if exp in joined or exp in joined_sp:
+        return True
+    exp_nw = re.sub(r"\s+", "", exp)
+    blob_nw = re.sub(r"\s+", "", joined)
+    if exp_nw and exp_nw in blob_nw:
+        return True
+    return False
+
+
 def _doh_query_txt(provider: str, url: str, expected: str, timeout_sec: float) -> Optional[Dict[str, Any]]:
-    """单次 DNS-over-HTTPS JSON 查询，成功则返回结果 dict，失败返回 None。"""
+    """单次 DNS-over-HTTPS JSON 查询；网络/解析失败返回 None；成功则返回结果 dict（matched 可能为 False）。"""
     try:
         req = Request(
             url,
@@ -639,36 +681,65 @@ def _doh_query_txt(provider: str, url: str, expected: str, timeout_sec: float) -
         )
         with urlopen(req, timeout=timeout_sec) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-        answers = data.get("Answer") or []
-        txt_values: List[str] = []
-        for ans in answers:
-            if int(ans.get("type", 0)) != 16:
-                continue
-            val = str(ans.get("data", "")).strip()
-            if val.startswith('"') and val.endswith('"'):
-                val = val[1:-1]
-            txt_values.append(val)
-        joined = " ".join(txt_values)
-        matched = expected in joined or any(expected in v for v in txt_values)
-        return {
-            "success": True,
-            "matched": matched,
-            "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
-            "checked_with": provider,
-            "records": txt_values,
-        }
     except Exception:
         return None
+
+    status = data.get("Status")
+    try:
+        st = int(status) if status is not None else 0
+    except (TypeError, ValueError):
+        st = 0
+
+    # RFC 8482: 2=SERVFAIL 等瞬时错误，换其它 DoH 再试
+    if st == 2:
+        return None
+
+    answers = data.get("Answer") or []
+    txt_values: List[str] = []
+    for ans in answers:
+        try:
+            t = int(ans.get("type", 0))
+        except (TypeError, ValueError):
+            continue
+        if t != 16:
+            continue
+        txt_values.extend(_split_txt_rr_data(ans.get("data")))
+
+    matched = _txt_expected_matches_found(expected, txt_values)
+    if st != 0 and not matched:
+        msg = (
+            f"DNS 状态 {st}（无匹配 TXT，可能尚未生效或主机名有误）"
+            if not txt_values
+            else "未在 DNS 响应中找到匹配的 TXT 值"
+        )
+    else:
+        msg = "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值"
+
+    return {
+        "success": True,
+        "matched": matched,
+        "message": msg,
+        "checked_with": provider,
+        "records": txt_values,
+    }
+
+
+def _names_for_txt_query(record_name: str) -> List[str]:
+    n = (record_name or "").strip().strip(".")
+    if not n:
+        return []
+    names = [n, f"{n}."]
+    return list(dict.fromkeys(names))
 
 
 def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, Any]:
     """
     检查公网 DNS 是否已包含指定 TXT 值。
-    顺序：DoH（快、不阻塞过久）→ dig → nslookup，避免总耗时超过常见 HTTP 超时。
+    顺序：DoH（多源、多查询名，直到匹配或全部尝试）→ dig → nslookup。
     """
-    name = (record_name or "").strip().strip(".")
     expected = (expected_value or "").strip()
-    if not name or not expected:
+    names = _names_for_txt_query(record_name)
+    if not names or not expected:
         return {
             "success": False,
             "matched": False,
@@ -677,74 +748,95 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
             "records": [],
         }
 
-    # 1) DNS-over-HTTPS（国内环境优先 AliDNS / Cloudflare）
-    for provider, url, tmo in (
-        ("CloudflareDoH", f"https://cloudflare-dns.com/dns-query?name={quote(name)}&type=TXT", 6.0),
-        ("AliDNSDoH", f"https://dns.alidns.com/resolve?name={quote(name)}&type=TXT", 6.0),
-        ("GoogleDoH", f"https://dns.google/resolve?name={quote(name)}&type=TXT", 6.0),
-    ):
-        got = _doh_query_txt(provider, url, expected, tmo)
-        if got is not None:
-            return got
+    last_doh: Optional[Dict[str, Any]] = None
+
+    # 1) DNS-over-HTTPS：同一记录名在多家 DoH 上结果可能不一致，未匹配时继续尝试
+    for qname in names:
+        for provider, url, tmo in (
+            ("CloudflareDoH", f"https://cloudflare-dns.com/dns-query?name={quote(qname)}&type=TXT", 6.0),
+            ("AliDNSDoH", f"https://dns.alidns.com/resolve?name={quote(qname)}&type=TXT", 6.0),
+            ("GoogleDoH", f"https://dns.google/resolve?name={quote(qname)}&type=TXT", 6.0),
+        ):
+            got = _doh_query_txt(provider, url, expected, tmo)
+            if got is None:
+                continue
+            last_doh = got
+            if got.get("matched"):
+                return got
+    if last_doh is not None:
+        return last_doh
 
     # 2) dig（+time/+tries 限制单次查询时长）
-    for server in ("223.5.5.5", "114.114.114.114", "8.8.8.8"):
-        dig_cmd = [
-            "dig",
-            "+short",
-            "+time=2",
-            "+tries=1",
-            "TXT",
-            name,
-            f"@{server}",
-        ]
-        try:
-            r = subprocess.run(
-                dig_cmd, capture_output=True, text=True, timeout=8
-            )
-            out = (r.stdout or "") + (r.stderr or "")
-            if not out.strip():
+    dig_exe_missing = False
+    for qname in names:
+        for server in ("223.5.5.5", "114.114.114.114", "8.8.8.8"):
+            dig_cmd = [
+                "dig",
+                "+short",
+                "+time=2",
+                "+tries=1",
+                "TXT",
+                qname,
+                f"@{server}",
+            ]
+            try:
+                r = subprocess.run(
+                    dig_cmd, capture_output=True, text=True, timeout=8
+                )
+                out = (r.stdout or "") + (r.stderr or "")
+                if not out.strip():
+                    continue
+                chunks = re.findall(r'"([^"]*)"', out)
+                if not chunks:
+                    chunks = [out.strip()]
+                matched = _txt_expected_matches_found(expected, chunks)
+                return {
+                    "success": True,
+                    "matched": matched,
+                    "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                    "checked_with": " ".join(dig_cmd),
+                    "records": chunks,
+                }
+            except FileNotFoundError:
+                dig_exe_missing = True
+                break
+            except Exception:
                 continue
-            chunks = re.findall(r'"([^"]*)"', out)
-            if not chunks:
-                chunks = [out.strip()]
-            flat = " ".join(chunks)
-            matched = expected in flat or expected in out.replace('"', "")
-            return {
-                "success": True,
-                "matched": matched,
-                "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
-                "checked_with": " ".join(dig_cmd),
-                "records": chunks,
-            }
-        except FileNotFoundError:
+        if dig_exe_missing:
             break
-        except Exception:
-            continue
 
     # 3) nslookup（Windows / 无 dig）
-    for ns_cmd in (
-        ["nslookup", "-type=TXT", name, "223.5.5.5"],
-        ["nslookup", "-type=TXT", name, "8.8.8.8"],
-        ["nslookup", "-type=TXT", name],
-    ):
-        try:
-            r = subprocess.run(
-                ns_cmd, capture_output=True, text=True, timeout=10
-            )
-            out = (r.stdout or "") + (r.stderr or "")
-            matched = expected in out.replace('"', "").replace(" ", "")
-            return {
-                "success": True,
-                "matched": matched,
-                "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
-                "checked_with": " ".join(ns_cmd),
-                "records": [out[:2000]],
-            }
-        except FileNotFoundError:
-            continue
-        except Exception:
-            continue
+    for qname in names:
+        for ns_cmd in (
+            ["nslookup", "-type=TXT", qname, "223.5.5.5"],
+            ["nslookup", "-type=TXT", qname, "8.8.8.8"],
+            ["nslookup", "-type=TXT", qname],
+        ):
+            try:
+                r = subprocess.run(
+                    ns_cmd, capture_output=True, text=True, timeout=10
+                )
+                out = (r.stdout or "") + (r.stderr or "")
+                chunks = re.findall(r'"([^"]*)"', out)
+                if not chunks:
+                    chunks = re.findall(
+                        r"(?:text|TXT)\s*=\s*([^\r\n]+)", out, flags=re.IGNORECASE
+                    )
+                chunks = [c.strip().strip('"') for c in chunks if c and str(c).strip()]
+                matched = _txt_expected_matches_found(expected, chunks) or (
+                    expected in out
+                )
+                return {
+                    "success": True,
+                    "matched": matched,
+                    "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                    "checked_with": " ".join(ns_cmd),
+                    "records": chunks if chunks else [out[:2000]],
+                }
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
 
     return {
         "success": False,
@@ -937,6 +1029,198 @@ def verify_certificate_files(cert_path: str, key_path: Optional[str] = None) -> 
             "valid": False,
             "message": f"校验过程异常: {str(e)}",
             "details": details,
+        }
+
+
+def test_auto_renew_environment() -> Dict[str, Any]:
+    """
+    检测当前环境是否具备自动续签能力：certbot/openssl、已管理证书数量、
+    执行 `certbot renew --dry-run` 验证 ACME 续签链路（不修改真实证书）。
+    """
+    config = get_config()
+    certbot_path = Path(config.nginx.certbot_path)
+    letsencrypt_root = Path("/etc/letsencrypt")
+    checks: List[Dict[str, Any]] = []
+
+    def add_check(
+        check_id: str, ok: bool, label: str, detail: str
+    ) -> None:
+        checks.append(
+            {"id": check_id, "ok": ok, "label": label, "detail": detail}
+        )
+
+    if not certbot_path.exists():
+        add_check(
+            "certbot_binary",
+            False,
+            "Certbot 可执行文件",
+            f"路径不存在: {certbot_path}",
+        )
+        return {
+            "success": False,
+            "environment_ready": False,
+            "summary": "未找到 certbot，无法进行自动续签",
+            "checks": checks,
+            "lineage_count": 0,
+            "dry_run_output": "",
+            "error_code": "certbot_missing",
+            "suggestions": [
+                "安装 certbot 并在配置中设置 nginx.certbot_path",
+                "Docker 部署时需镜像内包含 certbot 或挂载可执行文件",
+            ],
+        }
+
+    if not os.access(certbot_path, os.X_OK):
+        add_check(
+            "certbot_binary",
+            False,
+            "Certbot 可执行文件",
+            f"文件存在但不可执行: {certbot_path}",
+        )
+        return {
+            "success": False,
+            "environment_ready": False,
+            "summary": "certbot 不可执行",
+            "checks": checks,
+            "lineage_count": 0,
+            "dry_run_output": "",
+            "error_code": "certbot_not_executable",
+            "suggestions": ["检查文件权限", "确认配置路径指向正确的 certbot"],
+        }
+
+    add_check(
+        "certbot_binary",
+        True,
+        "Certbot 可执行文件",
+        str(certbot_path.resolve()),
+    )
+
+    try:
+        r = subprocess.run(
+            ["openssl", "version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        openssl_ok = r.returncode == 0
+        ver = (r.stdout or r.stderr or "").strip()[:120]
+        add_check(
+            "openssl",
+            openssl_ok,
+            "OpenSSL",
+            ver if ver else "无法获取版本信息",
+        )
+    except FileNotFoundError:
+        add_check("openssl", False, "OpenSSL", "未找到 openssl 命令")
+    except Exception as e:
+        add_check("openssl", False, "OpenSSL", f"检测异常: {e}")
+
+    le_exists = letsencrypt_root.is_dir()
+    add_check(
+        "letsencrypt_dir",
+        True,
+        "默认证书目录 /etc/letsencrypt",
+        (
+            f"存在：{letsencrypt_root}"
+            if le_exists
+            else "不存在（Windows 或未使用默认路径时常见；certbot 仍可能正常工作）"
+        ),
+    )
+
+    lineages = list_certificates()
+    lineage_count = len(lineages)
+    add_check(
+        "lineages",
+        True,
+        "Certbot 已管理证书",
+        f"共 {lineage_count} 个 lineage（无则 dry-run 仍会验证环境）",
+    )
+
+    try:
+        dry = subprocess.run(
+            [str(certbot_path), "renew", "--dry-run", "--non-interactive"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        out = (dry.stdout or "") + (dry.stderr or "")
+        dry_ok = dry.returncode == 0
+        if dry_ok:
+            add_check(
+                "dry_run",
+                True,
+                "续签模拟（dry-run）",
+                "通过：ACME 续签链路可用（未修改真实证书）",
+            )
+            summary = (
+                "环境支持自动续签：模拟续签成功。"
+                if lineage_count
+                else "环境可用：当前无 Certbot 证书 lineage，模拟续签已通过（申请证书后定时任务将执行 renew）。"
+            )
+            return {
+                "success": True,
+                "environment_ready": True,
+                "summary": summary,
+                "checks": checks,
+                "lineage_count": lineage_count,
+                "dry_run_output": out[-8000:] if len(out) > 8000 else out,
+                "error_code": None,
+                "suggestions": None,
+            }
+
+        add_check(
+            "dry_run",
+            False,
+            "续签模拟（dry-run）",
+            "失败：请查看下方输出",
+        )
+        enriched = _enrich_failure_result(
+            {"success": False, "message": "证书续期失败", "output": out},
+            "http",
+        )
+        return {
+            "success": False,
+            "environment_ready": False,
+            "summary": enriched.get("message") or "模拟续签失败",
+            "checks": checks,
+            "lineage_count": lineage_count,
+            "dry_run_output": out[-8000:] if len(out) > 8000 else out,
+            "error_code": enriched.get("error_code"),
+            "suggestions": enriched.get("suggestions"),
+        }
+    except subprocess.TimeoutExpired:
+        add_check(
+            "dry_run",
+            False,
+            "续签模拟（dry-run）",
+            "执行超时（300 秒）",
+        )
+        return {
+            "success": False,
+            "environment_ready": False,
+            "summary": "模拟续签超时",
+            "checks": checks,
+            "lineage_count": lineage_count,
+            "dry_run_output": "",
+            "error_code": "timeout",
+            "suggestions": ["检查网络与 Let’s Encrypt 连通性", "证书较多时可稍后重试"],
+        }
+    except Exception as e:
+        add_check(
+            "dry_run",
+            False,
+            "续签模拟（dry-run）",
+            str(e),
+        )
+        return {
+            "success": False,
+            "environment_ready": False,
+            "summary": f"模拟续签异常: {e}",
+            "checks": checks,
+            "lineage_count": lineage_count,
+            "dry_run_output": "",
+            "error_code": "exception",
+            "suggestions": [str(e)],
         }
 
 

@@ -11,6 +11,13 @@ export const certificatesApi = {
     return api.get(`/certificates/${certId}`)
   },
 
+  /** 下载证书与私钥（ZIP） */
+  downloadCertificateBundle(certId) {
+    return api.get(`/certificates/${certId}/download`, {
+      responseType: 'blob'
+    })
+  },
+
   // 上传证书（如果提供certId，则更新现有证书）
   uploadCertificate(domain, certFile, keyFile, autoRenew, certId = null) {
     const formData = new FormData()
@@ -98,6 +105,11 @@ export const certificatesApi = {
   /** 校验证书文件（openssl） */
   verifyCert(certId) {
     return api.post('/certificates/verify-cert', { cert_id: certId })
+  },
+
+  /** 检测自动续签环境（certbot renew --dry-run，不修改真实证书） */
+  testAutoRenewEnvironment() {
+    return api.post('/certificates/test-auto-renew-env', {}, { timeout: 360000 })
   },
 
   // 续期证书

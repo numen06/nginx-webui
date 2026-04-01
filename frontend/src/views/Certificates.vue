@@ -16,6 +16,20 @@
               <el-icon><UploadFilled /></el-icon>
               <span class="btn-label">上传证书</span>
             </el-button>
+            <el-tooltip
+              content="执行 certbot 模拟续签（dry-run），检测本机是否具备自动续签条件，不会改动真实证书"
+              placement="bottom"
+            >
+              <el-button
+                type="info"
+                plain
+                :loading="testingAutoRenewEnv"
+                @click="handleTestAutoRenewEnv"
+              >
+                <el-icon><Operation /></el-icon>
+                <span class="btn-label">测试自动续签环境</span>
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
       </template>
@@ -85,9 +99,21 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="230" align="center">
+        <el-table-column label="操作" width="280" align="center">
           <template #default="scope">
             <div class="action-buttons">
+              <el-tooltip content="下载证书包（ZIP）" placement="top">
+                <el-button
+                  circle
+                  size="small"
+                  type="info"
+                  class="action-icon-btn"
+                  :loading="scope.row._downloading"
+                  @click="handleDownload(scope.row)"
+                >
+                  <el-icon><Download /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip content="重新上传" placement="top">
                 <el-button
                   circle
@@ -488,10 +514,11 @@
 import { ref, onMounted, computed, watch, onBeforeUnmount } from 'vue'
 import { certificatesApi } from '../api/certificates'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck } from '@element-plus/icons-vue'
+import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck, Download, Operation } from '@element-plus/icons-vue'
 import { formatDateTime } from '../utils/date'
 
 const certificateList = ref([])
+const testingAutoRenewEnv = ref(false)
 const uploadDialogVisible = ref(false)
 const uploading = ref(false)
 const uploadFormRef = ref(null)
@@ -833,6 +860,56 @@ const handleRequestSubmitHttp = async () => {
   }
 }
 
+const parseBlobError = async (blob) => {
+  if (!blob || typeof blob.text !== 'function') return '下载失败'
+  try {
+    const text = await blob.text()
+    const j = JSON.parse(text)
+    if (typeof j.detail === 'string') return j.detail
+    if (Array.isArray(j.detail)) {
+      return j.detail.map((x) => x.msg || JSON.stringify(x)).join('; ')
+    }
+    return j.message || text || '下载失败'
+  } catch {
+    return '下载失败'
+  }
+}
+
+const handleDownload = async (cert) => {
+  cert._downloading = true
+  try {
+    const blob = await certificatesApi.downloadCertificateBundle(cert.id)
+    if (!(blob instanceof Blob)) {
+      ElMessage.error('下载失败')
+      return
+    }
+    if (blob.type && blob.type.includes('application/json')) {
+      ElMessage.error(await parseBlobError(blob))
+      return
+    }
+    const safeName = String(cert.domain || 'certificate').replace(/[^\w.-]+/g, '_')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.style.display = 'none'
+    a.href = url
+    a.download = `${safeName}-ssl.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已开始下载')
+  } catch (error) {
+    const data = error?.data
+    if (data instanceof Blob) {
+      ElMessage.error(await parseBlobError(data))
+    } else {
+      ElMessage.error(error?.detail || error?.message || '下载失败')
+    }
+  } finally {
+    cert._downloading = false
+  }
+}
+
 const handleVerifyCert = async (cert) => {
   cert._verifying = true
   try {
@@ -920,6 +997,48 @@ const loadCertificates = async () => {
     certificateList.value = response.certificates || []
   } catch (error) {
     ElMessage.error('加载证书列表失败')
+  }
+}
+
+const handleTestAutoRenewEnv = async () => {
+  testingAutoRenewEnv.value = true
+  try {
+    const res = await certificatesApi.testAutoRenewEnvironment()
+    const checks = res.checks || []
+    const checkRows = checks
+      .map(
+        (c) =>
+          `<tr><td style="padding:4px 8px;vertical-align:top">${c.ok ? '✓' : '✗'}</td><td style="padding:4px 8px"><strong>${escapeHtml(c.label)}</strong></td><td style="padding:4px 8px;word-break:break-all">${escapeHtml(c.detail)}</td></tr>`
+      )
+      .join('')
+    const sug = res.suggestions && res.suggestions.length
+      ? `<p style="margin-top:12px;font-weight:600">建议</p><ul style="margin:4px 0;padding-left:18px;text-align:left">${res.suggestions.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+      : ''
+    const code = res.error_code
+      ? `<p style="font-size:12px;color:#909399;margin-top:8px">错误代码: ${escapeHtml(res.error_code)}</p>`
+      : ''
+    const out = res.dry_run_output
+      ? `<details style="margin-top:12px;text-align:left"><summary style="cursor:pointer">certbot dry-run 输出</summary><pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:240px;overflow:auto;margin-top:8px">${escapeHtml(res.dry_run_output)}</pre></details>`
+      : ''
+    const hint =
+      '<p style="font-size:12px;color:#909399;margin-top:10px;line-height:1.5">说明：本应用在每天凌晨 3:00 通过同一 <code>certbot renew</code> 为已开启「自动续期」的证书续签并同步到 ssl 目录；本检测仅模拟续签，不修改磁盘证书。</p>'
+    ElMessageBox.alert(
+      `<div style="text-align:left;max-width:520px">
+        <p style="font-weight:600;margin-bottom:8px">${escapeHtml(res.summary || (res.environment_ready ? '检测完成' : '检测未通过'))}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">${checkRows}</table>
+        ${code}${sug}${out}${hint}
+      </div>`,
+      '自动续签环境检测',
+      {
+        dangerouslyUseHTMLString: true,
+        type: res.environment_ready ? 'success' : 'warning',
+        customClass: 'cert-fail-msgbox'
+      }
+    )
+  } catch (e) {
+    ElMessage.error(e?.detail || e?.message || '检测失败')
+  } finally {
+    testingAutoRenewEnv.value = false
   }
 }
 
