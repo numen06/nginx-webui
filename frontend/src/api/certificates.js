@@ -24,7 +24,16 @@ export const certificatesApi = {
   },
 
   /**
-   * 从 /etc/letsencrypt/live/<目录名>/ 导出 fullchain.pem + privkey.pem（ZIP，标准文件名）
+   * 一键导出：固定扫描 /etc/letsencrypt/live/，默认导出字母序第一本（ZIP）
+   */
+  exportLetsencryptLiveAuto() {
+    return api.get('/certificates/letsencrypt-live/export-auto', {
+      responseType: 'blob'
+    })
+  },
+
+  /**
+   * 指定 live 子目录名导出（多本证书时需非默认项时使用）
    */
   exportLetsencryptLiveBundle(domain) {
     return api.get('/certificates/letsencrypt-live/export', {

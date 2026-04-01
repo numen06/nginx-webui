@@ -36,6 +36,7 @@ from app.utils.certbot import (
     renew_certificate,
     get_certificate_info,
     copy_certificate_files,
+    ensure_pem_bundle_from_stored_paths,
     start_dns_manual_challenge,
     complete_dns_manual_challenge,
     get_pending_dns_challenge_for_domain,
@@ -63,6 +64,13 @@ def _certificate_pem_paths(cert: Certificate) -> Dict[str, Any]:
     subdir = ssl_dir / basename
     fc = subdir / "fullchain.pem"
     pk = subdir / "privkey.pem"
+
+    cert_p = Path(cert.cert_path)
+    key_p = Path(cert.key_path)
+    if cert_p.is_file() and key_p.is_file() and not (fc.is_file() and pk.is_file()):
+        ensure_pem_bundle_from_stored_paths(
+            cert.domain, str(cert_p.resolve()), str(key_p.resolve())
+        )
     fullchain_pem_path: Optional[str] = None
     privkey_pem_path: Optional[str] = None
     if fc.is_file() and pk.is_file():
@@ -325,6 +333,13 @@ def _persist_certificate_record(
         db.commit()
         db.refresh(cert)
 
+    try:
+        ensure_pem_bundle_from_stored_paths(
+            cert.domain, cert.cert_path, cert.key_path
+        )
+    except Exception:
+        pass
+
     create_audit_log(
         db=db,
         user_id=current_user.id,
@@ -582,6 +597,30 @@ _LETSENCRYPT_LIVE_ROOT = Path("/etc/letsencrypt/live")
 _LETSENCRYPT_ROOT = Path("/etc/letsencrypt")
 
 
+def _scan_letsencrypt_live_domains() -> Tuple[List[str], Optional[str]]:
+    """
+    扫描 live 下同时存在 fullchain.pem、privkey.pem 的子目录名（字母序）。
+    返回 (names, hint)；hint 仅在无法列出或目录不存在时给出说明。
+    """
+    live = _LETSENCRYPT_LIVE_ROOT
+    if not live.is_dir():
+        return [], (
+            "本机不存在该目录或未挂载 Certbot 数据（仅用「上传证书」导入时也会出现此情况）"
+        )
+    names: List[str] = []
+    try:
+        for p in sorted(live.iterdir(), key=lambda x: x.name.lower()):
+            if not p.is_dir() or p.name.startswith("."):
+                continue
+            fc = p / "fullchain.pem"
+            pk = p / "privkey.pem"
+            if fc.is_file() and pk.is_file():
+                names.append(p.name)
+    except OSError:
+        return [], "无法读取目录（权限不足或未挂载）"
+    return names, None
+
+
 def _validate_letsencrypt_live_domain_segment(domain: str) -> str:
     """防止路径穿越；返回 strip 后的证书目录名（与 certbot live 子目录一致）。"""
     if not domain or not isinstance(domain, str):
@@ -606,52 +645,25 @@ async def list_letsencrypt_live_directories(
     current_user: User = Depends(get_current_user),
 ):
     """用于迁移：展示本机 certbot live 子目录名；无目录或不可读时返回空列表。"""
-    live = _LETSENCRYPT_LIVE_ROOT
-    if not live.is_dir():
-        return {
-            "success": True,
-            "domains": [],
-            "live_path": str(live),
-            "hint": "本机不存在该目录或未挂载 Certbot 数据（仅用「上传证书」导入时也会出现此情况）",
-        }
-
-    names: List[str] = []
-    try:
-        for p in sorted(live.iterdir(), key=lambda x: x.name.lower()):
-            if not p.is_dir() or p.name.startswith("."):
-                continue
-            fc = p / "fullchain.pem"
-            pk = p / "privkey.pem"
-            if fc.is_file() and pk.is_file():
-                names.append(p.name)
-    except OSError:
-        return {
-            "success": True,
-            "domains": [],
-            "live_path": str(live),
-            "hint": "无法读取目录（权限不足或未挂载）",
-        }
-
+    names, hint = _scan_letsencrypt_live_domains()
     return {
         "success": True,
         "domains": names,
-        "live_path": str(live),
-        "hint": None,
+        "live_path": str(_LETSENCRYPT_LIVE_ROOT),
+        "default_domain": names[0] if names else None,
+        "hint": hint if not names else None,
     }
 
 
-@router.get("/letsencrypt-live/export", summary="从 /etc/letsencrypt/live/<目录名>/ 导出 ZIP")
-async def export_letsencrypt_live_bundle(
+def _make_letsencrypt_live_zip_response(
+    d: str,
     request: Request,
-    domain: str = Query(..., description="certbot 证书名称，即 live 下子目录名"),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    打包 fullchain.pem、privkey.pem（arcname 为标准文件名），便于带到另一台通过「上传证书」导入。
-    """
-    d = _validate_letsencrypt_live_domain_segment(domain)
-
+    current_user: User,
+    db: Session,
+    *,
+    audit_extra: Optional[Dict[str, Any]] = None,
+) -> StreamingResponse:
+    """d 为已校验的 live 子目录名（无路径穿越）。"""
     try:
         live_root = _LETSENCRYPT_LIVE_ROOT.resolve()
     except OSError:
@@ -701,13 +713,17 @@ async def export_letsencrypt_live_bundle(
     safe_name = re.sub(r"[^\w.\-]+", "_", d).strip("._") or "certificate"
     filename = f"{safe_name}-letsencrypt-live.zip"
 
+    details: Dict[str, Any] = {"fullchain": str(fc_res), "privkey": str(pk_res)}
+    if audit_extra:
+        details.update(audit_extra)
+
     create_audit_log(
         db=db,
         user_id=current_user.id,
         username=current_user.username,
         action="cert_export_letsencrypt_live",
         target=d,
-        details={"fullchain": str(fc_res), "privkey": str(pk_res)},
+        details=details,
         ip_address=get_client_ip(request),
     )
 
@@ -717,6 +733,48 @@ async def export_letsencrypt_live_bundle(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+@router.get("/letsencrypt-live/export-auto", summary="一键导出：默认导出字母序第一本证书 ZIP")
+async def export_letsencrypt_live_auto(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    固定读取 `/etc/letsencrypt/live/` 下证书；若有多本，导出按目录名排序后的**第一本**（与列表顺序一致）。
+    """
+    names, hint = _scan_letsencrypt_live_domains()
+    if not names:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=hint
+            or "未找到可导出的证书（live 下无同时存在的 fullchain.pem 与 privkey.pem）",
+        )
+    d = names[0]
+    return _make_letsencrypt_live_zip_response(
+        d,
+        request,
+        current_user,
+        db,
+        audit_extra={"export_mode": "auto", "total_on_host": len(names)},
+    )
+
+
+@router.get("/letsencrypt-live/export", summary="从 /etc/letsencrypt/live/<目录名>/ 导出 ZIP")
+async def export_letsencrypt_live_bundle(
+    request: Request,
+    domain: str = Query(..., description="certbot 证书名称，即 live 下子目录名"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    打包 fullchain.pem、privkey.pem（arcname 为标准文件名），便于带到另一台通过「上传证书」导入。
+    """
+    d = _validate_letsencrypt_live_domain_segment(domain)
+    return _make_letsencrypt_live_zip_response(
+        d, request, current_user, db, audit_extra={"export_mode": "manual"}
     )
 
 

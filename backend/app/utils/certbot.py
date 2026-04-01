@@ -202,6 +202,48 @@ def _domain_ssl_basename(domain: str) -> str:
     )
 
 
+def ensure_pem_bundle_from_stored_paths(
+    domain: str, cert_path: str, key_path: str
+) -> bool:
+    """
+    当 ssl_dir/{basename}/ 下缺少 fullchain.pem 或 privkey.pem 时，从已有证书链与私钥文件复制生成
+    （内容与入库的 .crt/.key 一致）。用于仅存在扁平 .crt/.key、或历史数据未写 PEM 子目录的情况。
+
+    Returns:
+        True：子目录下两个 PEM 均存在（原本就有或已成功写入）；False：源文件不存在或写入失败。
+    """
+    cert_p = Path(cert_path)
+    key_p = Path(key_path)
+    if not cert_p.is_file() or not key_p.is_file():
+        return False
+
+    config = get_config()
+    ssl_dir = Path(config.nginx.ssl_dir)
+    if not ssl_dir.is_absolute():
+        try:
+            ssl_dir = ssl_dir.resolve()
+        except OSError:
+            pass
+    ssl_dir.mkdir(parents=True, exist_ok=True)
+
+    base = _domain_ssl_basename(domain)
+    subdir = ssl_dir / base
+    target_fc = subdir / "fullchain.pem"
+    target_pk = subdir / "privkey.pem"
+
+    if target_fc.is_file() and target_pk.is_file():
+        return True
+
+    try:
+        subdir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cert_p, target_fc)
+        shutil.copy2(key_p, target_pk)
+    except OSError:
+        return False
+
+    return target_fc.is_file() and target_pk.is_file()
+
+
 def copy_certificate_files(domain: str) -> Dict[str, Any]:
     """
     从 certbot 的 live 目录复制到配置项 nginx.ssl_dir（默认 data/ssl），供 Nginx 直接使用。

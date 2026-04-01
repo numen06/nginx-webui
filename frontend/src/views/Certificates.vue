@@ -52,7 +52,7 @@
             </p>
             <ol class="migration-guide-steps">
               <li>
-                <strong>导出</strong>：从原服务器 <code>/etc/letsencrypt/live/&lt;证书目录名&gt;/</code>（一般为 <code>fullchain.pem</code>、<code>privkey.pem</code>）或云厂商面板下载；若<strong>本机</strong>已挂载该目录，可在「<strong>迁移与自动续签</strong>」向导第一步<strong>直接打包下载 ZIP</strong>，带到另一台用「上传证书」导入。
+                <strong>导出</strong>：从原服务器 <code>/etc/letsencrypt/live/&lt;证书目录名&gt;/</code>（一般为 <code>fullchain.pem</code>、<code>privkey.pem</code>）或云厂商面板下载；若<strong>本机</strong>已挂载该目录，可在「<strong>迁移与自动续签</strong>」向导第一步<strong>一键导出 ZIP</strong>（固定扫描该目录，多本时默认第一本），带到另一台用「上传证书」导入。
               </li>
               <li>
                 <strong>导入</strong>：本页「上传证书」选择文件或压缩包，域名填实际证书域名。
@@ -604,38 +604,32 @@
         </el-button>
 
         <div class="migrate-le-export-block">
-          <p class="migrate-le-export-title">本机已有 Certbot？从 live 目录导出（迁出到另一台）</p>
+          <p class="migrate-le-export-title">本机已有 Certbot？一键导出（固定目录）</p>
           <p class="migrate-panel-text migrate-le-export-desc">
-            当前 WebUI 所在服务器若存在 <code>/etc/letsencrypt/live/</code>（例如 Docker 挂载了宿主机证书），可选中证书目录名，下载包含 <code>fullchain.pem</code>、<code>privkey.pem</code> 的 ZIP；在<strong>另一台</strong>打开本页「上传证书」或向导下一步即可导入，实现双机互迁。
+            从固定路径 <code>/etc/letsencrypt/live/</code> 打包 <code>fullchain.pem</code> + <code>privkey.pem</code>（标准 ZIP，便于另一台「上传证书」导入）。仅检测到<strong>一本</strong>时即导出该本；有<strong>多本</strong>时默认导出按名称排序后的<strong>第一本</strong>。
           </p>
-          <div class="migrate-le-export-row">
-            <el-select
-              v-model="letsencryptExportDomain"
-              class="migrate-le-select"
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              placeholder="选择或输入 live 子目录名（certbot 证书名）"
-              :loading="letsencryptLiveListLoading"
-            >
-              <el-option
-                v-for="name in letsencryptLiveDomains"
-                :key="name"
-                :label="name"
-                :value="name"
-              />
-            </el-select>
-            <el-button
-              type="primary"
-              :loading="letsencryptExporting"
-              :disabled="!letsencryptExportDomain || !String(letsencryptExportDomain).trim()"
-              @click="handleExportLetsencryptLive"
-            >
-              <el-icon><Download /></el-icon>
-              导出 ZIP
-            </el-button>
-          </div>
+          <p v-if="letsencryptLiveListLoading" class="migrate-le-hint migrate-le-scanning">
+            正在检测 <code>/etc/letsencrypt/live/</code> …
+          </p>
+          <p v-else-if="letsencryptDefaultDomain && !letsencryptLiveHint" class="migrate-le-default-line">
+            将导出：<code>{{ letsencryptDefaultDomain }}</code>
+            <template v-if="letsencryptLiveDomains.length > 1">
+              （共 {{ letsencryptLiveDomains.length }} 本，默认取字母序第一本）
+            </template>
+          </p>
+          <el-button
+            type="primary"
+            class="migrate-le-oneclick-btn"
+            :loading="letsencryptExporting"
+            :disabled="
+              letsencryptExporting ||
+              (letsencryptLiveScanDone && !letsencryptLiveDomains.length)
+            "
+            @click="handleExportLetsencryptLiveAuto"
+          >
+            <el-icon><Download /></el-icon>
+            一键导出 Let's Encrypt 证书（ZIP）
+          </el-button>
           <p v-if="letsencryptLiveHint" class="migrate-le-hint">{{ letsencryptLiveHint }}</p>
         </div>
 
@@ -823,15 +817,19 @@ const migrateForm = ref({
   certId: null
 })
 
-/** 向导内：从本机 /etc/letsencrypt/live 导出 */
+/** 向导内：从本机 /etc/letsencrypt/live 一键导出 */
 const letsencryptLiveDomains = ref([])
 const letsencryptLiveListLoading = ref(false)
+const letsencryptLiveScanDone = ref(false)
 const letsencryptLiveHint = ref('')
-const letsencryptExportDomain = ref('')
 const letsencryptExporting = ref(false)
 
+const letsencryptDefaultDomain = computed(() =>
+  letsencryptLiveDomains.value.length ? letsencryptLiveDomains.value[0] : ''
+)
+
 const MIGRATE_EXPORT_HINT_TEXT =
-  '【证书迁移】在原服务器取出证书链与私钥（Certbot 一般在 /etc/letsencrypt/live/<证书目录名>/ 的 fullchain.pem、privkey.pem）。若导出方就是本 WebUI 所在服务器且已挂载该目录，可在「迁移与自动续签」向导第一步直接下载 ZIP。在目标系统用「上传证书」或同一向导导入。若需目标机 Certbot 自动续签，导入后在向导最后一步点「申请证书并启用自动续签」。'
+  '【证书迁移】在原服务器取出证书链与私钥（Certbot 一般在 /etc/letsencrypt/live/<证书目录名>/ 的 fullchain.pem、privkey.pem）。若导出方就是本 WebUI 所在服务器且已挂载该目录，可在「迁移与自动续签」向导第一步点「一键导出 Let's Encrypt 证书」下载 ZIP（多本时默认字母序第一本）。在目标系统用「上传证书」或同一向导导入。若需目标机 Certbot 自动续签，导入后在向导最后一步点「申请证书并启用自动续签」。'
 
 const migrateGoStep = (n) => {
   migrateStep.value = n
@@ -871,6 +869,7 @@ const isMigrateUploadDisabled = computed(() => {
 })
 
 const fetchLetsencryptLiveDomains = async () => {
+  letsencryptLiveScanDone.value = false
   letsencryptLiveListLoading.value = true
   letsencryptLiveHint.value = ''
   try {
@@ -887,6 +886,7 @@ const fetchLetsencryptLiveDomains = async () => {
       typeof e?.detail === 'string' ? e.detail : e?.message || '无法获取 live 目录列表'
   } finally {
     letsencryptLiveListLoading.value = false
+    letsencryptLiveScanDone.value = true
   }
 }
 
@@ -903,7 +903,7 @@ const openMigrateWizard = () => {
   if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
   if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
   if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
-  letsencryptExportDomain.value = ''
+  letsencryptLiveScanDone.value = false
   letsencryptLiveDomains.value = []
   letsencryptLiveHint.value = ''
   migrateWizardVisible.value = true
@@ -923,7 +923,7 @@ const resetMigrateWizard = () => {
   if (migrateCertUploadRef.value) migrateCertUploadRef.value.clearFiles()
   if (migrateKeyUploadRef.value) migrateKeyUploadRef.value.clearFiles()
   if (migrateArchiveUploadRef.value) migrateArchiveUploadRef.value.clearFiles()
-  letsencryptExportDomain.value = ''
+  letsencryptLiveScanDone.value = false
   letsencryptLiveHint.value = ''
 }
 
@@ -1460,15 +1460,10 @@ const handleDownload = async (cert) => {
   }
 }
 
-const handleExportLetsencryptLive = async () => {
-  const d = String(letsencryptExportDomain.value || '').trim()
-  if (!d) {
-    ElMessage.warning('请选择或输入 live 目录名（certbot 证书名）')
-    return
-  }
+const handleExportLetsencryptLiveAuto = async () => {
   letsencryptExporting.value = true
   try {
-    const blob = await certificatesApi.exportLetsencryptLiveBundle(d)
+    const blob = await certificatesApi.exportLetsencryptLiveAuto()
     if (!(blob instanceof Blob)) {
       ElMessage.error('导出失败')
       return
@@ -1477,7 +1472,8 @@ const handleExportLetsencryptLive = async () => {
       ElMessage.error(await parseBlobError(blob))
       return
     }
-    const safeName = d.replace(/[^\w.-]+/g, '_')
+    const d = letsencryptDefaultDomain.value || 'certificate'
+    const safeName = String(d).replace(/[^\w.-]+/g, '_')
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.style.display = 'none'
@@ -1965,16 +1961,23 @@ onMounted(() => {
   line-height: 1.6;
 }
 
-.migrate-le-export-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
+.migrate-le-default-line {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
 }
 
-.migrate-le-select {
-  flex: 1;
-  min-width: 200px;
+.migrate-le-default-line code {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+}
+
+.migrate-le-oneclick-btn {
+  width: 100%;
+  margin-top: 4px;
 }
 
 .migrate-le-hint {
@@ -1982,6 +1985,10 @@ onMounted(() => {
   font-size: 12px;
   line-height: 1.5;
   color: var(--el-text-color-secondary);
+}
+
+.migrate-le-scanning {
+  margin: 0 0 10px;
 }
 
 .migrate-alert-inline {
