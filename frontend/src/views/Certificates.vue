@@ -829,7 +829,7 @@ const letsencryptDefaultDomain = computed(() =>
 )
 
 const MIGRATE_EXPORT_HINT_TEXT =
-  '【证书迁移】在原服务器取出证书链与私钥（Certbot 一般在 /etc/letsencrypt/live/<证书目录名>/ 的 fullchain.pem、privkey.pem）。若导出方就是本 WebUI 所在服务器且已挂载该目录，可在「迁移与自动续签」向导第一步点「一键导出 Let's Encrypt 证书」下载 ZIP（多本时默认字母序第一本）。在目标系统用「上传证书」或同一向导导入。若需目标机 Certbot 自动续签，导入后在向导最后一步点「申请证书并启用自动续签」。'
+  "【证书迁移】在原服务器取出证书链与私钥（Certbot 一般在 /etc/letsencrypt/live/<证书目录名>/ 的 fullchain.pem、privkey.pem）。若导出方就是本 WebUI 所在服务器且已挂载该目录，可在「迁移与自动续签」向导第一步点「一键导出 Let's Encrypt 证书」下载 ZIP（多本时默认字母序第一本）。在目标系统用「上传证书」或同一向导导入。若需目标机 Certbot 自动续签，导入后在向导最后一步点「申请证书并启用自动续签」。"
 
 const migrateGoStep = (n) => {
   migrateStep.value = n
