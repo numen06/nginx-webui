@@ -64,7 +64,28 @@
           :icon="isCollapsed ? Expand : Fold"
           @click="toggleCollapse"
         />
-        <div class="sidebar-version" v-if="systemVersion.version && !isCollapsed">
+        <el-tooltip
+          v-if="isCollapsed"
+          content="版本与更新"
+          placement="right"
+        >
+          <el-button
+            class="version-info-btn"
+            text
+            circle
+            :icon="InfoFilled"
+            @click="openVersionDialog"
+          />
+        </el-tooltip>
+        <div
+          v-else-if="systemVersion.version"
+          class="sidebar-version sidebar-version--clickable"
+          role="button"
+          tabindex="0"
+          @click="openVersionDialog"
+          @keydown.enter.prevent="openVersionDialog"
+          @keydown.space.prevent="openVersionDialog"
+        >
           <span class="version-label">系统版本</span>
           <span class="version-value">{{ systemVersion.version }}</span>
           <span
@@ -126,6 +147,97 @@
       </el-footer>
     </el-container>
   </el-container>
+
+  <el-dialog
+      v-model="versionDialogVisible"
+      title="版本与更新"
+      width="520px"
+      class="version-dialog"
+      append-to-body
+      destroy-on-close
+    >
+      <div v-loading="checkLoading" class="version-dialog-body">
+        <el-descriptions :column="1" border size="small" class="version-desc">
+          <el-descriptions-item label="当前运行版本">
+            {{ displayCurrentVersion }}
+          </el-descriptions-item>
+          <el-descriptions-item label="Gitee 最新版本">
+            {{ updateStatus.latestVersion || '—' }}
+          </el-descriptions-item>
+          <el-descriptions-item
+            v-if="updateStatus.releaseName"
+            label="Release 名称"
+          >
+            {{ updateStatus.releaseName }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <el-alert
+          v-if="!updateStatus.checkSuccess"
+          type="error"
+          :closable="false"
+          show-icon
+          class="version-alert"
+        >
+          {{ updateStatus.checkMessage || '检查更新失败' }}
+        </el-alert>
+        <el-alert
+          v-else-if="updateStatus.hasUpdate"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="发现新版本"
+          description="请前往 Gitee Release 下载镜像或按项目说明升级。"
+          class="version-alert"
+        />
+        <el-alert
+          v-else-if="updateStatus.latestVersion"
+          type="success"
+          :closable="false"
+          show-icon
+          title="已是最新版本"
+          class="version-alert"
+        />
+
+        <template v-if="updateStatus.checkSuccess && updateStatus.releaseBody">
+          <div class="version-body-label">发行说明（与 Gitee 一致）</div>
+          <div class="version-release-body">{{ updateStatus.releaseBody }}</div>
+        </template>
+        <div
+          v-else-if="
+            updateStatus.checkSuccess &&
+            updateStatus.latestVersion &&
+            !updateStatus.releaseBody
+          "
+          class="version-body-empty"
+        >
+          本 Release 暂无正文说明，可点击「在 Gitee 查看」打开页面。
+        </div>
+
+        <div class="version-dialog-links">
+          <a
+            href="https://gitee.com/numen06/nginx-webui/releases"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            全部发行版
+          </a>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="versionDialogVisible = false">关闭</el-button>
+        <el-button :loading="checkLoading" @click="refreshVersionCheck">
+          重新检查
+        </el-button>
+        <el-button
+          type="primary"
+          :disabled="!updateStatus.releaseUrl"
+          @click="openReleaseUrl"
+        >
+          在 Gitee 查看
+        </el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup>
@@ -134,7 +246,14 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { useSetupStore } from '../store/setup'
 import { ElMessage, ElNotification } from 'element-plus'
-import { SwitchButton, User, ArrowDown, Fold, Expand } from '@element-plus/icons-vue'
+import {
+  SwitchButton,
+  User,
+  ArrowDown,
+  Fold,
+  Expand,
+  InfoFilled
+} from '@element-plus/icons-vue'
 import { systemApi } from '../api/system'
 import NginxSetupWizard from '../components/NginxSetupWizard.vue'
 
@@ -165,7 +284,22 @@ const updateStatus = ref({
   latestVersion: null,
   releaseUrl: null,
   releaseName: null,
-  releaseBodySummary: null
+  releaseBodySummary: null,
+  currentVersion: null,
+  releaseBody: null,
+  checkSuccess: true,
+  checkMessage: ''
+})
+
+const versionDialogVisible = ref(false)
+const checkLoading = ref(false)
+
+const displayCurrentVersion = computed(() => {
+  return (
+    updateStatus.value.currentVersion ||
+    systemVersion.value.version ||
+    '—'
+  )
 })
 
 // 使用store中的状态
@@ -215,7 +349,10 @@ const loadSystemVersion = async () => {
   }
 }
 
-const loadUpdateStatus = async () => {
+const loadUpdateStatus = async (options = { showLoading: false }) => {
+  if (options.showLoading) {
+    checkLoading.value = true
+  }
   try {
     const res = await systemApi.checkUpdate()
     updateStatus.value = {
@@ -223,7 +360,11 @@ const loadUpdateStatus = async () => {
       latestVersion: res.latest_version || null,
       releaseUrl: res.release_url || null,
       releaseName: res.release_name || null,
-      releaseBodySummary: res.release_body_summary || null
+      releaseBodySummary: res.release_body_summary || null,
+      currentVersion: res.current_version || null,
+      releaseBody: res.release_body || null,
+      checkSuccess: !!res.success,
+      checkMessage: res.message || ''
     }
 
     if (res.success && res.has_update) {
@@ -247,8 +388,33 @@ const loadUpdateStatus = async () => {
       }
     }
   } catch (e) {
-    // 更新检查失败不影响主流程
     console.error('检查系统更新失败:', e)
+    const detail =
+      e?.response?.data?.detail ||
+      e?.message ||
+      '网络错误，检查更新失败'
+    updateStatus.value = {
+      ...updateStatus.value,
+      checkSuccess: false,
+      checkMessage: typeof detail === 'string' ? detail : '检查更新失败'
+    }
+  } finally {
+    if (options.showLoading) {
+      checkLoading.value = false
+    }
+  }
+}
+
+const openVersionDialog = async () => {
+  versionDialogVisible.value = true
+  await loadUpdateStatus({ showLoading: true })
+}
+
+const refreshVersionCheck = () => loadUpdateStatus({ showLoading: true })
+
+const openReleaseUrl = () => {
+  if (updateStatus.value.releaseUrl) {
+    window.open(updateStatus.value.releaseUrl, '_blank', 'noopener,noreferrer')
   }
 }
 
@@ -340,6 +506,23 @@ onMounted(() => {
   gap: 4px;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+.sidebar-version--clickable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background-color 0.2s;
+}
+
+.sidebar-version--clickable:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.version-info-btn {
+  color: var(--nginx-green-light);
+  padding: 4px;
 }
 
 .version-label {
@@ -438,6 +621,54 @@ onMounted(() => {
   background-color: rgba(0, 0, 0, 0.5);
   z-index: 2000;
   pointer-events: auto;
+}
+
+.version-dialog-body {
+  min-height: 80px;
+}
+
+.version-desc {
+  margin-bottom: 12px;
+}
+
+.version-alert {
+  margin-bottom: 12px;
+}
+
+.version-body-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.version-release-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.version-body-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.version-dialog-links {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.version-dialog-links a {
+  color: var(--nginx-green-light);
 }
 </style>
 
