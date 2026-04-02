@@ -20,9 +20,10 @@ from app.config import get_config
 DEFAULT_VERSION = "1.0.2"
 GITEE_OWNER = "numen06"
 GITEE_REPO = "nginx-webui"
-GITEE_LATEST_RELEASE_API = (
+# Gitee 返回的 Release 列表按创建时间正序（旧在前），不能只取第一条；拉一页后在本地按语义版本取最大
+GITEE_RELEASES_LIST_API = (
     f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases"
-    "?per_page=1&page=1"
+    "?per_page=30&page=1"
 )
 
 
@@ -197,16 +198,36 @@ def summarize_release_body(body: str | None, max_len: int = 200) -> str:
     return text[: max_len - 1] + "…"
 
 
+def _pick_highest_semver_release(releases: list) -> dict:
+    """
+    从 Gitee 返回的 Release 列表中选出 tag/name 语义版本号最大的一条。
+    跳过无法解析出版本数字的条目。
+    """
+    best: dict = {}
+    best_ver = ""
+    for item in releases:
+        if not isinstance(item, dict):
+            continue
+        tag_name = item.get("tag_name") or item.get("name") or ""
+        ver = normalize_version(tag_name)
+        if not ver or not version_to_parts(ver):
+            continue
+        if not best_ver or compare_versions(best_ver, ver) < 0:
+            best_ver = ver
+            best = item
+    return best
+
+
 def fetch_latest_gitee_release() -> dict:
-    """获取 Gitee 最新 Release 数据。"""
+    """获取 Gitee 上语义版本号最大的 Release（兼容接口按创建时间正序返回）。"""
     request = Request(
-        GITEE_LATEST_RELEASE_API,
+        GITEE_RELEASES_LIST_API,
         headers={"User-Agent": "nginx-webui-version-checker"},
     )
     with urlopen(request, timeout=8) as response:
         payload = json.loads(response.read().decode("utf-8"))
         if isinstance(payload, list) and payload:
-            return payload[0]
+            return _pick_highest_semver_release(payload)
     return {}
 
 
