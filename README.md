@@ -2,6 +2,8 @@
 
 一个基于 **FastAPI** 和 **Vue 3** 的 Nginx 管理 Web 界面，提供 Nginx 多版本管理、配置管理、证书管理、文件管理、静态包下发、日志与审计、系统监控等功能。
 
+各版本功能说明与升级步骤见 [release-notes/](release-notes/)（发布 Gitee Release 时可从此处复制正文）。
+
 ![主页](docs/image.png)
 ![主页](docs/申请免费证书.png)
 
@@ -65,6 +67,7 @@ nginx-webui/
 ├── scripts/              # 构建和启动脚本（前后端、本地/容器）
 ├── docker-compose.yml    # Docker 编排文件
 ├── Dockerfile            # 应用镜像构建文件
+├── release-notes/        # 各版本发行说明（供 Gitee Releases 等使用）
 ├── QUICKSTART.md         # 本地开发/调试快速上手指南
 └── README.md
 ```

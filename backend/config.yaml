@@ -23,8 +23,7 @@ app:
   port: 8000
   secret_key: # 从环境变量读取
   debug: true  # 调试模式，启用代码更改自动重载
-  # 应用版本号（系统版本），推荐通过配置统一管理
-  version: "1.0.2"
+  # 应用版本见同目录 VERSION 文件（与 config.yaml 分离，避免合并冲突）；勿在此写 version
 
 backup:
   max_backups: 10

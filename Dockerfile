@@ -1,9 +1,14 @@
 # ==================== 第一阶段：构建前端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/node:20.16 AS frontend-builder
 
-# 与 backend/config.yaml 中 app.version 保持一致；构建时可覆盖：docker build --build-arg APP_VERSION=x.y.z .
-ARG APP_VERSION=1.0.2
-ENV VITE_APP_VERSION=${APP_VERSION}
+# 应用版本唯一来源：backend/VERSION（与 config.yaml 分离，供 Vite 构建注入）
+WORKDIR /app
+COPY backend/VERSION /tmp/app-version.txt
+RUN set -eux; \
+    V=$$(head -n1 /tmp/app-version.txt | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+    test -n "$$V" || (echo '无法从 backend/VERSION 读取应用版本' >&2; exit 1); \
+    echo "$$V" > /tmp/vite_app_version; \
+    chmod 644 /tmp/vite_app_version
 
 # 设置工作目录并确保权限
 WORKDIR /app/frontend
@@ -20,9 +25,10 @@ RUN npm install --registry=${NPM_REGISTRY} && \
     npm cache clean --force && \
     rm -f /home/node/.npmrc
 
-# 复制剩余前端代码并构建
+# 复制剩余前端代码并构建（VITE_APP_VERSION 与 backend/VERSION 一致）
 COPY --chown=node:node frontend/ ./
-RUN npm run build && \
+RUN export VITE_APP_VERSION=$$(cat /tmp/vite_app_version) && \
+    npm run build && \
     rm -rf node_modules && \
     rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
@@ -70,13 +76,9 @@ RUN chmod +x /app/scripts/build-default-nginx.sh && \
 # ==================== 第三阶段：运行后端 ====================
 FROM alinux-dnf-base
 
-# 与 frontend-builder 阶段使用相同构建参数，注入运行环境（避免数据卷覆盖 config 后版本不一致）
-ARG APP_VERSION=1.0.2
-
-# 设置环境变量
+# 应用版本以镜像内 /app/backend/config.yaml 的 app.version 为准（不在此硬编码）
 ENV PYTHONUNBUFFERED=1
 ENV APP_PORT=8000
-ENV APP_VERSION=${APP_VERSION}
 
 ARG DNF_TIMEOUT=30
 ARG DNF_RETRIES=10

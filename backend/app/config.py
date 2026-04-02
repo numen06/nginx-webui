@@ -11,6 +11,25 @@ from pydantic import BaseModel, Field
 from functools import lru_cache
 
 
+def _read_app_version_file(backend_dir: Path) -> Optional[str]:
+    """
+    读取与 config.yaml 同目录的 VERSION 文件（单行语义化版本，首尾空白忽略）。
+    不存在或无效时返回 None。
+    """
+    path = backend_dir / "VERSION"
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        ver = line.strip()
+        if ver and not ver.startswith("#"):
+            return ver
+    return None
+
+
 def _safe_mkdir(path: Path) -> None:
     """安全地创建目录，处理挂载点等特殊情况"""
     if path.exists():
@@ -66,7 +85,7 @@ class AppConfig(BaseModel):
     port: int = 8000
     secret_key: Optional[str] = None
     debug: bool = False  # 调试模式，启用自动重载
-    # 应用版本号（与 backend/config.yaml 中 app.version 一致；可被环境变量 APP_VERSION 覆盖）
+    # 应用版本号：运行时由 load_config 从 backend/VERSION 注入，缺省时可用 YAML app.version 兜底
     version: str = "0.0.0"
 
 
@@ -183,9 +202,10 @@ class ConfigManager:
         app_config["host"] = os.getenv("APP_HOST", app_config.get("host", "127.0.0.1"))
         app_config["port"] = int(os.getenv("APP_PORT", app_config.get("port", 8000)))
         app_config["secret_key"] = os.getenv("SECRET_KEY", app_config.get("secret_key"))
-        _app_version_env = os.getenv("APP_VERSION")
-        if _app_version_env is not None and str(_app_version_env).strip():
-            app_config["version"] = str(_app_version_env).strip()
+        # 版本：优先 backend/VERSION，其次 YAML 中遗留的 app.version（兼容旧配置）
+        version_from_file = _read_app_version_file(self.config_path.parent)
+        if version_from_file:
+            app_config["version"] = version_from_file
         else:
             app_config["version"] = app_config.get("version", "0.0.0")
         # 调试模式：可通过环境变量 DEBUG 或配置文件设置

@@ -272,7 +272,7 @@ const systemVersion = ref({
   version: null
 })
 
-// 构建时注入（Docker 多阶段与 config.yaml 同步）；开发环境通常为空
+// 构建时注入（Docker 多阶段与 backend/VERSION 同步）；开发环境通常为空
 const embeddedAppVersion =
   typeof import.meta.env.VITE_APP_VERSION === 'string' &&
   import.meta.env.VITE_APP_VERSION.trim()
@@ -338,7 +338,7 @@ const loadSystemVersion = async () => {
   try {
     const res = await systemApi.getVersion()
     if (res.success && res.version) {
-      // 无构建注入时以接口为准；有注入时保持镜像内嵌版本（与 APP_VERSION 一致）
+      // 无构建注入时以接口为准；有注入时保持镜像内嵌版本（与 backend/VERSION 一致）
       if (!embeddedAppVersion) {
         systemVersion.value.version = res.version
       }

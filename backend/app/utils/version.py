@@ -1,7 +1,7 @@
 """
 系统版本管理工具
 
-- APP 版本号：表示当前程序版本，例如 1.0.0（来自环境变量或默认值）
+- APP 版本号：来自 backend/VERSION（经 config 加载）；缺省顺序见 get_version
 - 构建时间：镜像 / 程序的构建时间，用于辅助排查问题
 """
 
@@ -15,9 +15,8 @@ from urllib.error import URLError, HTTPError
 
 from app.config import get_config
 
-# 当前程序版本号（系统版本）
-# 优先使用环境变量 APP_VERSION，其次配置文件 app.version，最后使用默认值
-DEFAULT_VERSION = "1.0.2"
+# 当前程序版本号（系统版本）：以 get_config().app.version 为准（由 VERSION 文件或 YAML 注入）；仅当皆无有效值时用默认值
+DEFAULT_VERSION = "1.0.3"
 GITEE_OWNER = "numen06"
 GITEE_REPO = "nginx-webui"
 # Gitee 返回的 Release 列表按创建时间正序（旧在前），不能只取第一条；拉一页后在本地按语义版本取最大
@@ -68,27 +67,20 @@ def get_build_time() -> str:
 
 def get_version() -> str:
     """
-    获取系统版本号（当前程序版本，而不是 Nginx 编译时间）
+    获取系统版本号（当前程序版本，而不是 Nginx 编译时间）。
+    值来自 ConfigManager：优先 backend/VERSION，其次 config.yaml 中遗留的 app.version，最后 DEFAULT_VERSION。
 
     Returns:
-        版本号字符串，例如：1.0.2
+        版本号字符串，例如：1.0.3
     """
-    # 1) 优先使用环境变量 APP_VERSION（Docker 构建注入，不被数据卷挂载的 config 覆盖）
-    env_version = os.getenv("APP_VERSION")
-    if env_version and env_version.strip():
-        return env_version.strip()
-
-    # 2) 其次从配置文件读取（config.yaml -> app.version，含 load_config 中的 APP_VERSION 合并）
     try:
         config = get_config()
         app_version = getattr(getattr(config, "app", None), "version", None)
         if isinstance(app_version, str) and app_version.strip():
             return app_version.strip()
     except Exception:
-        # 配置读取异常时静默降级
         pass
 
-    # 3) 最后使用默认版本
     return DEFAULT_VERSION
 
 
