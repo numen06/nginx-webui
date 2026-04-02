@@ -153,11 +153,19 @@ const systemVersion = ref({
   version: null
 })
 
+// 构建时注入（Docker 多阶段与 config.yaml 同步）；开发环境通常为空
+const embeddedAppVersion =
+  typeof import.meta.env.VITE_APP_VERSION === 'string' &&
+  import.meta.env.VITE_APP_VERSION.trim()
+    ? import.meta.env.VITE_APP_VERSION.trim()
+    : ''
+
 const updateStatus = ref({
   hasUpdate: false,
   latestVersion: null,
   releaseUrl: null,
-  releaseName: null
+  releaseName: null,
+  releaseBodySummary: null
 })
 
 // 使用store中的状态
@@ -190,10 +198,16 @@ const toggleCollapse = () => {
 }
 
 const loadSystemVersion = async () => {
+  if (embeddedAppVersion) {
+    systemVersion.value.version = embeddedAppVersion
+  }
   try {
     const res = await systemApi.getVersion()
-    if (res.success) {
-      systemVersion.value.version = res.version
+    if (res.success && res.version) {
+      // 无构建注入时以接口为准；有注入时保持镜像内嵌版本（与 APP_VERSION 一致）
+      if (!embeddedAppVersion) {
+        systemVersion.value.version = res.version
+      }
     }
   } catch (e) {
     // 版本信息非关键，不弹错误
@@ -208,15 +222,19 @@ const loadUpdateStatus = async () => {
       hasUpdate: !!res.has_update,
       latestVersion: res.latest_version || null,
       releaseUrl: res.release_url || null,
-      releaseName: res.release_name || null
+      releaseName: res.release_name || null,
+      releaseBodySummary: res.release_body_summary || null
     }
 
     if (res.success && res.has_update) {
       const noticeKey = `update-notified-${res.latest_version || 'unknown'}`
       if (!sessionStorage.getItem(noticeKey)) {
+        const summary = res.release_body_summary
+          ? `\n${res.release_body_summary}`
+          : ''
         ElNotification({
           title: '发现新版本',
-          message: `当前版本 ${res.current_version || '-'}，最新版本 ${res.latest_version || '-'}`,
+          message: `当前版本 ${res.current_version || '-'}，最新版本 ${res.latest_version || '-'}${summary}`,
           type: 'info',
           duration: 8000,
           onClick: () => {

@@ -1,6 +1,10 @@
 # ==================== 第一阶段：构建前端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/node:20.16 AS frontend-builder
 
+# 与 backend/config.yaml 中 app.version 保持一致；构建时可覆盖：docker build --build-arg APP_VERSION=x.y.z .
+ARG APP_VERSION=1.0.2
+ENV VITE_APP_VERSION=${APP_VERSION}
+
 # 设置工作目录并确保权限
 WORKDIR /app/frontend
 RUN mkdir -p /app/frontend && chown -R node:node /app/frontend
@@ -66,9 +70,13 @@ RUN chmod +x /app/scripts/build-default-nginx.sh && \
 # ==================== 第三阶段：运行后端 ====================
 FROM alinux-dnf-base
 
+# 与 frontend-builder 阶段使用相同构建参数，注入运行环境（避免数据卷覆盖 config 后版本不一致）
+ARG APP_VERSION=1.0.2
+
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
 ENV APP_PORT=8000
+ENV APP_VERSION=${APP_VERSION}
 
 ARG DNF_TIMEOUT=30
 ARG DNF_RETRIES=10

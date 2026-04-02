@@ -16,8 +16,8 @@ from urllib.error import URLError, HTTPError
 from app.config import get_config
 
 # 当前程序版本号（系统版本）
-# 优先使用配置文件中的 app.version，其次使用环境变量 APP_VERSION，最后使用默认值
-DEFAULT_VERSION = "1.0.1"
+# 优先使用环境变量 APP_VERSION，其次配置文件 app.version，最后使用默认值
+DEFAULT_VERSION = "1.0.2"
 GITEE_OWNER = "numen06"
 GITEE_REPO = "nginx-webui"
 GITEE_LATEST_RELEASE_API = (
@@ -70,9 +70,14 @@ def get_version() -> str:
     获取系统版本号（当前程序版本，而不是 Nginx 编译时间）
 
     Returns:
-        版本号字符串，例如：1.0.1
+        版本号字符串，例如：1.0.2
     """
-    # 1) 优先从配置文件读取（config.yaml -> app.version）
+    # 1) 优先使用环境变量 APP_VERSION（Docker 构建注入，不被数据卷挂载的 config 覆盖）
+    env_version = os.getenv("APP_VERSION")
+    if env_version and env_version.strip():
+        return env_version.strip()
+
+    # 2) 其次从配置文件读取（config.yaml -> app.version，含 load_config 中的 APP_VERSION 合并）
     try:
         config = get_config()
         app_version = getattr(getattr(config, "app", None), "version", None)
@@ -81,11 +86,6 @@ def get_version() -> str:
     except Exception:
         # 配置读取异常时静默降级
         pass
-
-    # 2) 其次使用环境变量 APP_VERSION（便于 CI/CD 注入）
-    env_version = os.getenv("APP_VERSION")
-    if env_version:
-        return env_version
 
     # 3) 最后使用默认版本
     return DEFAULT_VERSION
@@ -187,6 +187,16 @@ def compare_versions(current: str, latest: str) -> int:
     return 0
 
 
+def summarize_release_body(body: str | None, max_len: int = 200) -> str:
+    """将 Gitee Release 正文压缩为单行摘要，便于通知展示。"""
+    if not isinstance(body, str) or not body.strip():
+        return ""
+    text = " ".join(body.split())
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
 def fetch_latest_gitee_release() -> dict:
     """获取 Gitee 最新 Release 数据。"""
     request = Request(
@@ -214,6 +224,8 @@ def check_gitee_update() -> dict:
         "has_update": False,
         "release_url": None,
         "release_name": None,
+        "release_body": None,
+        "release_body_summary": None,
         "success": True,
         "message": "",
     }
@@ -224,6 +236,10 @@ def check_gitee_update() -> dict:
         latest_version = normalize_version(tag_name)
         release_url = release.get("html_url")
         release_name = release.get("name") or tag_name
+        raw_body = release.get("body")
+        if isinstance(raw_body, str) and raw_body.strip():
+            result["release_body"] = raw_body.strip()
+            result["release_body_summary"] = summarize_release_body(raw_body) or None
 
         result["latest_version"] = latest_version or None
         result["release_url"] = release_url

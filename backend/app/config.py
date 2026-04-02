@@ -66,6 +66,8 @@ class AppConfig(BaseModel):
     port: int = 8000
     secret_key: Optional[str] = None
     debug: bool = False  # 调试模式，启用自动重载
+    # 应用版本号（与 backend/config.yaml 中 app.version 一致；可被环境变量 APP_VERSION 覆盖）
+    version: str = "0.0.0"
 
 
 class BackupConfig(BaseModel):
@@ -181,6 +183,11 @@ class ConfigManager:
         app_config["host"] = os.getenv("APP_HOST", app_config.get("host", "127.0.0.1"))
         app_config["port"] = int(os.getenv("APP_PORT", app_config.get("port", 8000)))
         app_config["secret_key"] = os.getenv("SECRET_KEY", app_config.get("secret_key"))
+        _app_version_env = os.getenv("APP_VERSION")
+        if _app_version_env is not None and str(_app_version_env).strip():
+            app_config["version"] = str(_app_version_env).strip()
+        else:
+            app_config["version"] = app_config.get("version", "0.0.0")
         # 调试模式：可通过环境变量 DEBUG 或配置文件设置
         debug_env = os.getenv("DEBUG", "").lower() in ("true", "1", "yes")
         app_config["debug"] = debug_env or app_config.get("debug", False)

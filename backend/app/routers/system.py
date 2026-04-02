@@ -329,6 +329,8 @@ async def check_system_update(
             "has_update": update_info.get("has_update", False),
             "release_url": update_info.get("release_url"),
             "release_name": update_info.get("release_name"),
+            "release_body": update_info.get("release_body"),
+            "release_body_summary": update_info.get("release_body_summary"),
             "message": update_info.get("message", ""),
         }
     except Exception as e:
