@@ -272,13 +272,6 @@ const systemVersion = ref({
   version: null
 })
 
-// 构建时注入（Docker 多阶段与 backend/VERSION 同步）；开发环境通常为空
-const embeddedAppVersion =
-  typeof import.meta.env.VITE_APP_VERSION === 'string' &&
-  import.meta.env.VITE_APP_VERSION.trim()
-    ? import.meta.env.VITE_APP_VERSION.trim()
-    : ''
-
 const updateStatus = ref({
   hasUpdate: false,
   latestVersion: null,
@@ -332,16 +325,10 @@ const toggleCollapse = () => {
 }
 
 const loadSystemVersion = async () => {
-  if (embeddedAppVersion) {
-    systemVersion.value.version = embeddedAppVersion
-  }
   try {
     const res = await systemApi.getVersion()
     if (res.success && res.version) {
-      // 无构建注入时以接口为准；有注入时保持镜像内嵌版本（与 backend/VERSION 一致）
-      if (!embeddedAppVersion) {
-        systemVersion.value.version = res.version
-      }
+      systemVersion.value.version = res.version
     }
   } catch (e) {
     // 版本信息非关键，不弹错误

@@ -1,21 +1,7 @@
 # ==================== 第一阶段：构建前端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/node:20.16 AS frontend-builder
 
-# 应用版本：默认读 backend/VERSION（与 config.yaml 分离）；首行空白或文件为空时可传 --build-arg APP_VERSION=x.y.z
-ARG APP_VERSION=
-WORKDIR /app
-COPY backend/VERSION /tmp/app-version.txt
-RUN set -eux; \
-    if [ -n "${APP_VERSION}" ]; then \
-      V="${APP_VERSION}"; \
-    else \
-      V=$$(awk 'NF { gsub(/\r/,""); sub(/^[[:space:]]+/,""); sub(/[[:space:]]+$$/,""); print; exit }' /tmp/app-version.txt); \
-    fi; \
-    test -n "$$V" || (echo '无法确定应用版本: 请保证 backend/VERSION 含非空版本行，或传入构建参数 APP_VERSION' >&2; exit 1); \
-    printf '%s\n' "$$V" > /tmp/vite_app_version; \
-    chmod 644 /tmp/vite_app_version
-
-# 设置工作目录并确保权限
+# 前端构建不注入应用版本；展示版本由运行时后端（backend/VERSION / 配置）通过接口提供
 WORKDIR /app/frontend
 RUN mkdir -p /app/frontend && chown -R node:node /app/frontend
 USER node
@@ -30,10 +16,8 @@ RUN npm install --registry=${NPM_REGISTRY} && \
     npm cache clean --force && \
     rm -f /home/node/.npmrc
 
-# 复制剩余前端代码并构建（VITE_APP_VERSION 与 backend/VERSION 一致）
 COPY --chown=node:node frontend/ ./
-RUN export VITE_APP_VERSION=$$(cat /tmp/vite_app_version) && \
-    npm run build && \
+RUN npm run build && \
     rm -rf node_modules && \
     rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
