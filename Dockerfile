@@ -1,13 +1,18 @@
 # ==================== 第一阶段：构建前端 ====================
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/node:20.16 AS frontend-builder
 
-# 应用版本唯一来源：backend/VERSION（与 config.yaml 分离，供 Vite 构建注入）
+# 应用版本：默认读 backend/VERSION（与 config.yaml 分离）；首行空白或文件为空时可传 --build-arg APP_VERSION=x.y.z
+ARG APP_VERSION=
 WORKDIR /app
 COPY backend/VERSION /tmp/app-version.txt
 RUN set -eux; \
-    V=$$(head -n1 /tmp/app-version.txt | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
-    test -n "$$V" || (echo '无法从 backend/VERSION 读取应用版本' >&2; exit 1); \
-    echo "$$V" > /tmp/vite_app_version; \
+    if [ -n "${APP_VERSION}" ]; then \
+      V="${APP_VERSION}"; \
+    else \
+      V=$$(awk 'NF { gsub(/\r/,""); sub(/^[[:space:]]+/,""); sub(/[[:space:]]+$$/,""); print; exit }' /tmp/app-version.txt); \
+    fi; \
+    test -n "$$V" || (echo '无法确定应用版本: 请保证 backend/VERSION 含非空版本行，或传入构建参数 APP_VERSION' >&2; exit 1); \
+    printf '%s\n' "$$V" > /tmp/vite_app_version; \
     chmod 644 /tmp/vite_app_version
 
 # 设置工作目录并确保权限
