@@ -1461,16 +1461,12 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
 
     proc: subprocess.Popen = job["proc"]
     domain = job["domain"]
-    challenge_count = job.get("challenge_count", 1)
 
     try:
         if proc.stdin:
-            # 通配符证书需要多次 Enter（每个 challenge 一次）
-            enter_input = "\n" * challenge_count
-            proc.stdin.write(enter_input)
+            # 先发第一个 Enter
+            proc.stdin.write("\n")
             proc.stdin.flush()
-            # 关闭 stdin，让 certbot 知道输入结束
-            proc.stdin.close()
     except Exception as e:
         return {
             "success": False,
@@ -1484,10 +1480,15 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
         }
 
     try:
-        # 读取剩余输出直到进程结束
+        # 读取剩余输出，检查是否有第二个 challenge
         deadline = time.time() + 300
         remaining_buf: List[str] = []
         assert proc.stdout is not None
+
+        # 阶段 1：发第一个 Enter 后，等待看是否有第二个 challenge
+        second_challenge_wait = time.time() + 60
+        found_second_challenge = False
+
         while time.time() < deadline:
             if proc.poll() is not None:
                 rest = proc.stdout.read() or ""
@@ -1498,6 +1499,31 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
                 time.sleep(0.05)
                 continue
             remaining_buf.append(line)
+            partial = "".join(remaining_buf)
+
+            # 检测是否出现第二个 challenge（"with the following value" 再次出现）
+            if not found_second_challenge and "with the following value" in partial.lower():
+                # 统计出现了几次 "with the following value"
+                count = partial.lower().count("with the following value")
+                if count >= 2:
+                    found_second_challenge = True
+                    # 等待 certbot 提示 "Press Enter" 后再发第二个 Enter
+                    # 给 certbot 一点时间输出完
+                    time.sleep(2)
+                    try:
+                        if proc.stdin and not proc.stdin.closed:
+                            proc.stdin.write("\n")
+                            proc.stdin.flush()
+                    except Exception:
+                        pass
+
+            # 如果已过等待期且进程仍在运行，可能卡住了
+            if not found_second_challenge and time.time() > second_challenge_wait:
+                # 非通配符场景，进程应该很快就结束；通配符场景应该出现第二个 challenge
+                if domain.startswith("*."):
+                    # 通配符但没看到第二个 challenge，继续等
+                    pass
+
         rest_out = "".join(remaining_buf)
     except subprocess.TimeoutExpired:
         try:
