@@ -847,6 +847,46 @@ def parse_dns_challenge_from_output(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def parse_all_dns_challenges_from_output(text: str) -> List[Tuple[str, str]]:
+    """
+    从 certbot manual DNS 输出中解析所有 TXT 记录名与值。
+    通配符证书需要两个 TXT 记录，此函数返回全部。
+    """
+    if not text:
+        return []
+    results: List[Tuple[str, str]] = []
+    # 匹配所有 "with the following value:" 后面的 token
+    seen_values: set = set()
+    for m in re.finditer(
+        r"(_acme-challenge[^\s]+)\s+with the following value:\s*\r?\n\s*\r?\n?\s*([^\s\r\n]+)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        name = m.group(1).strip()
+        value = m.group(2).strip()
+        if value not in seen_values:
+            seen_values.add(value)
+            results.append((name, value))
+    if results:
+        return results
+    # 备选：分行查找
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if "following value" in line.lower():
+            name_match = re.search(r"(_acme-challenge[^\s]+)", line, re.IGNORECASE)
+            if not name_match:
+                continue
+            name = name_match.group(1).strip()
+            for j in range(i + 1, min(i + 8, len(lines))):
+                cand = lines[j].strip()
+                if len(cand) > 20 and re.match(r"^[A-Za-z0-9_-]+$", cand):
+                    if cand not in seen_values:
+                        seen_values.add(cand)
+                        results.append((name, cand))
+                    break
+    return results
+
+
 def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
     """
     启动 certbot manual DNS 验证进程，解析出 TXT 后保持进程等待 stdin 回车。
@@ -972,7 +1012,11 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
 
     buf: List[str] = []
     deadline = time.time() + 120
-    parsed: Optional[Tuple[str, str]] = None
+    all_challenges: List[Tuple[str, str]] = []
+    # 记录上一次遇到 "Press Enter" 后已经解析的 challenge 数量，
+    # 当连续几次读取都没有新 challenge 时说明 certbot 已输出全部要求
+    last_challenge_count = 0
+    stable_rounds = 0
 
     assert proc.stdout is not None
     while time.time() < deadline:
@@ -998,11 +1042,19 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             continue
         buf.append(line)
         full = "".join(buf)
-        parsed = parse_dns_challenge_from_output(full)
-        if parsed:
-            break
+        all_challenges = parse_all_dns_challenges_from_output(full)
 
-    if not parsed:
+        if all_challenges:
+            last_challenge_count = len(all_challenges)
+            stable_rounds = 0
+        elif last_challenge_count > 0:
+            stable_rounds += 1
+            # 已经有至少一个 challenge，且连续 15 次读取（约 0.75 秒）没有新 challenge，
+            # 并且输出中包含 "Press Enter"，说明 certbot 已输出全部 DNS 要求
+            if stable_rounds >= 15 and "press enter" in full.lower():
+                break
+
+    if not all_challenges:
         try:
             proc.terminate()
             proc.wait(timeout=5)
@@ -1031,7 +1083,9 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         }
 
     job_id = str(uuid.uuid4())
-    record_name, record_value = parsed
+    record_name, record_value = all_challenges[0]
+    # 收集所有不同的 TXT 值（通配符场景有多个）
+    all_record_values = [v for _, v in all_challenges]
     with _dns_jobs_lock:
         _dns_jobs[job_id] = {
             "proc": proc,
@@ -1039,18 +1093,26 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             "email": email,
             "record_name": record_name,
             "record_value": record_value,
+            "all_record_values": all_record_values,
+            "challenge_count": len(all_challenges),
             "created_at": time.time(),
             "stdout_tail": "".join(buf),
             "holds_exec_lock": True,
             "_base_domain": _base_domain,
         }
 
+    extra_msg = ""
+    if len(all_challenges) > 1:
+        extra_msg = f"（共 {len(all_challenges)} 个 TXT 记录需添加，请全部配置后再完成申请）"
+
     return {
         "success": True,
-        "message": "已获取 DNS 验证信息，请在 DNS 中添加 TXT 后点击检测并完成申请",
+        "message": f"已获取 DNS 验证信息，请在 DNS 中添加 TXT 后点击检测并完成申请{extra_msg}",
         "job_id": job_id,
         "record_name": record_name,
         "record_value": record_value,
+        "all_record_values": all_record_values,
+        "challenge_count": len(all_challenges),
         "output": "".join(buf),
         "reused": False,
     }
@@ -1081,11 +1143,14 @@ def get_pending_dns_challenge_for_domain(domain: str) -> Dict[str, Any]:
             rn = job.get("record_name")
             rv = job.get("record_value")
             if rn and rv:
+                all_vals = job.get("all_record_values", [rv])
                 return {
                     "success": True,
                     "job_id": jid,
                     "record_name": rn,
                     "record_value": rv,
+                    "all_record_values": all_vals,
+                    "challenge_count": job.get("challenge_count", 1),
                 }
     return {
         "success": False,
@@ -1197,9 +1262,10 @@ def _names_for_txt_query(record_name: str) -> List[str]:
     return list(dict.fromkeys(names))
 
 
-def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, Any]:
+def verify_dns_txt_record(record_name: str, expected_value: str, expected_values: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     检查公网 DNS 是否已包含指定 TXT 值。
+    支持多个期望值（通配符证书场景），当 expected_values 非空时逐个检查。
     顺序：DoH（多源、多查询名，直到匹配或全部尝试）→ dig → nslookup。
     """
     expected = (expected_value or "").strip()
@@ -1213,6 +1279,23 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
             "records": [],
         }
 
+    # 构建所有期望值的列表
+    all_expected: List[str] = []
+    if expected_values:
+        all_expected = [v.strip() for v in expected_values if v and v.strip()]
+    if expected and expected not in all_expected:
+        all_expected.insert(0, expected)
+    if not all_expected:
+        return {
+            "success": False,
+            "matched": False,
+            "message": "记录名或验证值为空",
+            "checked_with": None,
+            "records": [],
+        }
+
+    need_all = len(all_expected) > 1
+
     last_doh: Optional[Dict[str, Any]] = None
 
     # 1) DNS-over-HTTPS：同一记录名在多家 DoH 上结果可能不一致，未匹配时继续尝试
@@ -1222,10 +1305,25 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
             ("AliDNSDoH", f"https://dns.alidns.com/resolve?name={quote(qname)}&type=TXT", 6.0),
             ("GoogleDoH", f"https://dns.google/resolve?name={quote(qname)}&type=TXT", 6.0),
         ):
-            got = _doh_query_txt(provider, url, expected, tmo)
+            if need_all:
+                # 多值模式：检查第一个期望值即可获取 TXT 列表，然后自行比对
+                got = _doh_query_txt(provider, url, all_expected[0], tmo)
+            else:
+                got = _doh_query_txt(provider, url, all_expected[0], tmo)
             if got is None:
                 continue
             last_doh = got
+            found_records = got.get("records", [])
+            if need_all:
+                # 检查所有期望值是否都存在
+                missing = [v for v in all_expected if not _txt_expected_matches_found(v, found_records)]
+                if not missing:
+                    got["matched"] = True
+                    got["message"] = f"全部 {len(all_expected)} 个 TXT 记录均已匹配"
+                    return got
+                else:
+                    got["matched"] = False
+                    got["message"] = f"已匹配 {len(all_expected) - len(missing)}/{len(all_expected)} 个 TXT 记录（缺少 {len(missing)} 个）"
             if got.get("matched"):
                 return got
     if last_doh is not None:
@@ -1254,11 +1352,21 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
                 chunks = re.findall(r'"([^"]*)"', out)
                 if not chunks:
                     chunks = [out.strip()]
-                matched = _txt_expected_matches_found(expected, chunks)
+                if need_all:
+                    missing = [v for v in all_expected if not _txt_expected_matches_found(v, chunks)]
+                    matched = len(missing) == 0
+                    msg = (
+                        f"全部 {len(all_expected)} 个 TXT 记录均已匹配"
+                        if matched
+                        else f"已匹配 {len(all_expected) - len(missing)}/{len(all_expected)} 个 TXT 记录（缺少 {len(missing)} 个）"
+                    )
+                else:
+                    matched = _txt_expected_matches_found(all_expected[0], chunks)
+                    msg = "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值"
                 return {
                     "success": True,
                     "matched": matched,
-                    "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                    "message": msg,
                     "checked_with": " ".join(dig_cmd),
                     "records": chunks,
                 }
@@ -1288,13 +1396,23 @@ def verify_dns_txt_record(record_name: str, expected_value: str) -> Dict[str, An
                         r"(?:text|TXT)\s*=\s*([^\r\n]+)", out, flags=re.IGNORECASE
                     )
                 chunks = [c.strip().strip('"') for c in chunks if c and str(c).strip()]
-                matched = _txt_expected_matches_found(expected, chunks) or (
-                    expected in out
-                )
+                if need_all:
+                    missing = [v for v in all_expected if not _txt_expected_matches_found(v, chunks)]
+                    matched = len(missing) == 0 or any(v in out for v in all_expected)
+                    msg = (
+                        f"全部 {len(all_expected)} 个 TXT 记录均已匹配"
+                        if matched
+                        else f"已匹配 {len(all_expected) - len(missing)}/{len(all_expected)} 个 TXT 记录"
+                    )
+                else:
+                    matched = _txt_expected_matches_found(all_expected[0], chunks) or (
+                        all_expected[0] in out
+                    )
+                    msg = "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值"
                 return {
                     "success": True,
                     "matched": matched,
-                    "message": "TXT 记录已匹配" if matched else "未在 DNS 响应中找到匹配的 TXT 值",
+                    "message": msg,
                     "checked_with": " ".join(ns_cmd),
                     "records": chunks if chunks else [out[:2000]],
                 }
@@ -1359,11 +1477,16 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
 
     proc: subprocess.Popen = job["proc"]
     domain = job["domain"]
+    challenge_count = job.get("challenge_count", 1)
 
     try:
         if proc.stdin:
-            proc.stdin.write("\n")
+            # 通配符证书需要多次 Enter（每个 challenge 一次）
+            enter_input = "\n" * challenge_count
+            proc.stdin.write(enter_input)
             proc.stdin.flush()
+            # 关闭 stdin，让 certbot 知道输入结束
+            proc.stdin.close()
     except Exception as e:
         return {
             "success": False,
@@ -1377,7 +1500,21 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
         }
 
     try:
-        rest_out, _ = proc.communicate(timeout=300)
+        # 读取剩余输出直到进程结束
+        deadline = time.time() + 300
+        remaining_buf: List[str] = []
+        assert proc.stdout is not None
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                rest = proc.stdout.read() or ""
+                remaining_buf.append(rest)
+                break
+            line = proc.stdout.readline()
+            if not line:
+                time.sleep(0.05)
+                continue
+            remaining_buf.append(line)
+        rest_out = "".join(remaining_buf)
     except subprocess.TimeoutExpired:
         try:
             proc.kill()

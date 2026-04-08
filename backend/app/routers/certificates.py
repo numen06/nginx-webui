@@ -130,6 +130,7 @@ class VerifyDnsRequest(BaseModel):
 
     record_name: str
     record_value: str
+    all_record_values: Optional[List[str]] = None  # 通配符证书需检测多个 TXT
 
 
 class VerifyCertRequest(BaseModel):
@@ -1336,7 +1337,7 @@ async def verify_dns(
 ):
     """检测公网 DNS 是否已包含指定 TXT 值（在线程中执行，避免阻塞事件循环导致前端误判断连）。"""
     return await asyncio.to_thread(
-        verify_dns_txt_record, body.record_name, body.record_value
+        verify_dns_txt_record, body.record_name, body.record_value, body.all_record_values
     )
 
 
