@@ -1012,11 +1012,7 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
 
     buf: List[str] = []
     deadline = time.time() + 120
-    all_challenges: List[Tuple[str, str]] = []
-    # 记录上一次遇到 "Press Enter" 后已经解析的 challenge 数量，
-    # 当连续几次读取都没有新 challenge 时说明 certbot 已输出全部要求
-    last_challenge_count = 0
-    stable_rounds = 0
+    parsed: Optional[Tuple[str, str]] = None
 
     assert proc.stdout is not None
     while time.time() < deadline:
@@ -1042,19 +1038,11 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             continue
         buf.append(line)
         full = "".join(buf)
-        all_challenges = parse_all_dns_challenges_from_output(full)
+        parsed = parse_dns_challenge_from_output(full)
+        if parsed:
+            break
 
-        if all_challenges:
-            last_challenge_count = len(all_challenges)
-            stable_rounds = 0
-        elif last_challenge_count > 0:
-            stable_rounds += 1
-            # 已经有至少一个 challenge，且连续 15 次读取（约 0.75 秒）没有新 challenge，
-            # 并且输出中包含 "Press Enter"，说明 certbot 已输出全部 DNS 要求
-            if stable_rounds >= 15 and "press enter" in full.lower():
-                break
-
-    if not all_challenges:
+    if not parsed:
         try:
             proc.terminate()
             proc.wait(timeout=5)
@@ -1083,9 +1071,7 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         }
 
     job_id = str(uuid.uuid4())
-    record_name, record_value = all_challenges[0]
-    # 收集所有不同的 TXT 值（通配符场景有多个）
-    all_record_values = [v for _, v in all_challenges]
+    record_name, record_value = parsed
     with _dns_jobs_lock:
         _dns_jobs[job_id] = {
             "proc": proc,
@@ -1093,8 +1079,7 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             "email": email,
             "record_name": record_name,
             "record_value": record_value,
-            "all_record_values": all_record_values,
-            "challenge_count": len(all_challenges),
+            "challenge_count": 2 if domain.startswith("*.") else 1,
             "created_at": time.time(),
             "stdout_tail": "".join(buf),
             "holds_exec_lock": True,
@@ -1102,8 +1087,8 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         }
 
     extra_msg = ""
-    if len(all_challenges) > 1:
-        extra_msg = f"（共 {len(all_challenges)} 个 TXT 记录需添加，请全部配置后再完成申请）"
+    if domain.startswith("*."):
+        extra_msg = "（通配符证书需要 2 个 TXT 记录，请先添加第一个，完成申请后系统会提示添加第二个）"
 
     return {
         "success": True,
@@ -1111,8 +1096,7 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
         "job_id": job_id,
         "record_name": record_name,
         "record_value": record_value,
-        "all_record_values": all_record_values,
-        "challenge_count": len(all_challenges),
+        "challenge_count": 2 if domain.startswith("*.") else 1,
         "output": "".join(buf),
         "reused": False,
     }
