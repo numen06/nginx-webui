@@ -1127,13 +1127,11 @@ def get_pending_dns_challenge_for_domain(domain: str) -> Dict[str, Any]:
             rn = job.get("record_name")
             rv = job.get("record_value")
             if rn and rv:
-                all_vals = job.get("all_record_values", [rv])
                 return {
                     "success": True,
                     "job_id": jid,
                     "record_name": rn,
                     "record_value": rv,
-                    "all_record_values": all_vals,
                     "challenge_count": job.get("challenge_count", 1),
                 }
     return {
