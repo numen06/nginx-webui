@@ -280,14 +280,32 @@ def _get_source_tar_path(version: str) -> Path:
 
 
 def _get_default_nginx_tar_path() -> Optional[Path]:
-    """获取默认nginx压缩包路径（系统自带的）"""
+    """获取默认 nginx 源码包路径（backend/default-nginx/ 下随镜像或仓库提供）"""
     # 当前文件在 backend/app/routers/nginx_manager.py
     # parents[2] -> backend 目录
     backend_dir = Path(__file__).resolve().parents[2]
-    default_tar = backend_dir / "default-nginx" / "nginx-1.29.3.tar.gz"
-    if default_tar.exists():
-        return default_tar
-    return None
+    default_dir = backend_dir / "default-nginx"
+    preferred = default_dir / "nginx-1.29.3.tar.gz"
+    if preferred.exists():
+        return preferred
+
+    candidates = list(default_dir.glob("nginx-*.tar.gz")) + list(
+        default_dir.glob("nginx-*.tgz")
+    )
+    if not candidates:
+        return None
+
+    def _version_tuple(name: str):
+        v = _infer_version_from_filename(name)
+        if not v:
+            return (0, 0, 0)
+        try:
+            return tuple(int(x) for x in v.split("."))
+        except ValueError:
+            return (0, 0, 0)
+
+    candidates.sort(key=lambda p: _version_tuple(p.name), reverse=True)
+    return candidates[0]
 
 
 def _ensure_nginx_dirs() -> None:

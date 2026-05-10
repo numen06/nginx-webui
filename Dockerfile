@@ -21,8 +21,8 @@ RUN npm run build && \
     rm -rf node_modules && \
     rm -rf /tmp/* /home/node/.npm /home/node/.cache
 
-# ==================== 共用：基础 RPM（运行镜像与预编译 nginx 共用，含源码编译链）====================
-# 说明：最终镜像内需支持用户自行编译 Nginx 等，故 gcc/make/*-devel 与运行时库放在同一基础层，只 dnf 一次。
+# ==================== 共用：基础 RPM（含 Nginx 源码编译链，供容器启动时或用户界面编译）====================
+# 说明：镜像构建阶段不编译 Nginx；运行时首次启动可从 default-nginx 源码包自动编译。gcc/make/*-devel 与运行时库同层，只 dnf 一次。
 FROM ac2-registry.cn-hangzhou.cr.aliyuncs.com/ac2/base:alinux3.2104-py312 AS alinux-dnf-base
 
 ARG DNF_TIMEOUT=30
@@ -47,22 +47,8 @@ RUN set -eux; \
     dnf clean all && \
     rm -rf /var/cache/dnf/* /tmp/* /var/tmp/*
 
-# ==================== 第二阶段：构建默认 Nginx ====================
-FROM alinux-dnf-base AS nginx-builder
-
-ARG NGINX_VERSION=1.29.3
-
-WORKDIR /app
-
-# 仅复制预编译所需文件
-COPY scripts/build-default-nginx.sh /app/scripts/build-default-nginx.sh
-COPY backend/default-nginx/ /app/backend/default-nginx/
-
-# 编译并安装到 /app/data/nginx/versions/<version>
-RUN chmod +x /app/scripts/build-default-nginx.sh && \
-    NGINX_VERSION=${NGINX_VERSION} /app/scripts/build-default-nginx.sh
-
-# ==================== 第三阶段：运行后端 ====================
+# ==================== 第二阶段：运行后端 ====================
+# 说明：不在镜像构建阶段编译 Nginx；将官方源码包放入镜像，由应用首次启动时自动编译并同步到 versions/last。
 FROM alinux-dnf-base
 
 # 应用版本以镜像内 /app/backend/config.yaml 的 app.version 为准（不在此硬编码）
@@ -74,6 +60,8 @@ ARG DNF_RETRIES=10
 ARG DNF_MAX_PARALLEL_DOWNLOADS=10
 ARG DNF_INSTALL_WEAK_DEPS=False
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+# 默认随镜像打包的 Nginx 源码版本（构建时下载 tar.gz，运行时由后端自动编译）
+ARG NGINX_DEFAULT_SOURCE_VERSION=1.29.3
 
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
@@ -113,8 +101,11 @@ RUN pip install --upgrade pip --index-url=${PIP_INDEX_URL} && \
     cd /app/backend && pip install --no-cache-dir --index-url=${PIP_INDEX_URL} -r requirements.txt && \
     rm -rf /root/.cache/pip /root/.config/pip
 
-# 从 nginx-builder 复制预编译产物
-COPY --from=nginx-builder /app/data/nginx/versions/1.29.3 /app/data/nginx/versions/1.29.3
+# 将默认 Nginx 源码包放入镜像（不编译）；首次启动时由 FastAPI 检测 last 并触发编译
+RUN set -eux; \
+    mkdir -p /app/backend/default-nginx; \
+    curl -fsSL "https://nginx.org/download/nginx-${NGINX_DEFAULT_SOURCE_VERSION}.tar.gz" \
+        -o "/app/backend/default-nginx/nginx-${NGINX_DEFAULT_SOURCE_VERSION}.tar.gz"
 
 # 准备数据目录结构，便于通过 /app/data 单目录持久化
 # 同时清理临时文件和缓存
@@ -125,6 +116,7 @@ RUN BUILD_TIME=$(date +%Y%m%d%H%M%S) && \
     && mkdir -p /app/data/ssl \
     && mkdir -p /app/data/letsencrypt \
     && mkdir -p /app/data/nginx/versions \
+    && mkdir -p /app/data/nginx/build \
     && mkdir -p /app/data/nginx/build_logs \
     && mkdir -p /app/nginx \
     && echo "$BUILD_TIME" > /app/data/backend/.build_time \

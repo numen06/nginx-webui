@@ -25,7 +25,6 @@ from app.routers.nginx_manager import (
     _get_install_path,
     _get_nginx_executable,
     _get_default_nginx_tar_path,
-    _get_build_root,
     _compile_nginx_from_source,
 )
 from app.routers import (
@@ -87,6 +86,73 @@ app.include_router(statistics.router)
 app.include_router(system.router)
 
 
+def _ensure_last_nginx_from_default_tar() -> None:
+    """
+    若运行版目录 last 下尚无 nginx 可执行文件，但存在默认源码包
+   （backend/default-nginx/nginx-*.tar.gz），则自动编译对应版本并同步到 last。
+    """
+    from app.routers.nginx_manager import (
+        _infer_version_from_filename,
+        _get_source_tar_path,
+        _upgrade_to_production_version,
+        _ensure_nginx_dirs,
+    )
+    from app.utils.nginx_status_cache import clear_nginx_status_cache
+
+    last_path = _get_install_path("last")
+    last_exe = _get_nginx_executable(last_path)
+    if last_path.exists() and last_exe.exists():
+        return
+
+    default_tar = _get_default_nginx_tar_path()
+    if default_tar is None or not default_tar.exists():
+        return
+
+    version = _infer_version_from_filename(default_tar.name)
+    if not version:
+        logging.warning(
+            "[startup] 无法从默认源码包文件名解析版本号: %s", default_tar.name
+        )
+        return
+
+    _ensure_nginx_dirs()
+    build_tar = _get_source_tar_path(version)
+    build_tar.parent.mkdir(parents=True, exist_ok=True)
+    if not build_tar.exists():
+        try:
+            shutil.copy2(default_tar, build_tar)
+        except Exception as e:
+            logging.error("[startup] 复制默认源码包到构建目录失败: %s", e)
+            return
+
+    install_path = _get_install_path(version)
+    exe = _get_nginx_executable(install_path)
+    if not (install_path.exists() and exe.exists()):
+        print(
+            f"检测到运行版 last 未就绪，正在从源码包自动编译 Nginx {version}（首次可能较慢）..."
+        )
+        logging.info("[startup] 自动编译 Nginx %s，源码包: %s", version, build_tar)
+        result = _compile_nginx_from_source(build_tar, version, None, None)
+        if not result.success:
+            print(f"✗ 自动编译 Nginx 失败: {result.message}")
+            if result.build_log_path:
+                print(f"   编译日志: {result.build_log_path}")
+            logging.error("[startup] 自动编译失败: %s", result.message)
+            return
+        print(f"✓ 自动编译完成: {result.message}")
+        if result.build_log_path:
+            print(f"   编译日志: {result.build_log_path}")
+
+    up = _upgrade_to_production_version(version)
+    if not up.get("success"):
+        print(f"✗ 同步到运行版 last 失败: {up.get('message')}")
+        logging.error("[startup] 同步到 last 失败: %s", up.get("message"))
+        return
+
+    clear_nginx_status_cache()
+    print(f"✓ {up.get('message', '运行版 Nginx (last) 已就绪')}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时打印核心配置信息并自动启动nginx"""
@@ -145,6 +211,9 @@ async def startup_event():
 
     # 自动启动nginx（如果有已安装的版本）
     try:
+        # 无 last 时：若镜像/仓库带有默认源码包，则首次启动自动编译并同步到 last
+        _ensure_last_nginx_from_default_tar()
+
         # 检查是否有运行中的nginx
         active = get_active_version()
         if active is not None:
