@@ -63,26 +63,6 @@
                 {{ analysisTagText }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="监听状态" :span="2">
-              <el-text type="info" size="small">
-                <el-tag
-                  v-if="taskStatus.watcher_enabled"
-                  type="success"
-                  size="small"
-                  effect="plain"
-                >
-                  已启用
-                </el-tag>
-                <el-tag
-                  v-else
-                  type="info"
-                  size="small"
-                  effect="plain"
-                >
-                  未启用
-                </el-tag>
-              </el-text>
-            </el-descriptions-item>
             <el-descriptions-item label="任务分析行数" :span="1">
               <el-text type="info" size="small">
                 <span v-if="taskStatus.analyzed_lines != null && taskStatus.analyzed_lines > 0">
@@ -402,7 +382,6 @@ const taskStatus = ref({
   is_running: false,          // 后台任务是否在执行
   last_analysis_time: null,   // 上次分析到的日志时间
   analyzed_lines: 0,          // 任务分析行数
-  watcher_enabled: false,     // 是否启用了日志监听
   last_start_time: null,      // 最近一次任务开始时间
   last_end_time: null,        // 最近一次任务结束时间
   last_error: null,           // 最近一次任务错误
@@ -656,7 +635,6 @@ const loadTaskStatus = async () => {
         is_running: response.is_running || false,
         last_analysis_time: response.last_analysis_time || null,
         analyzed_lines: response.analyzed_lines || 0,
-        watcher_enabled: response.watcher_enabled || false,
         last_start_time: response.last_start_time || null,
         last_end_time: response.last_end_time || null,
         last_error: response.last_error || null,
