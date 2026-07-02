@@ -398,6 +398,69 @@ def renewal_conf_referenced_paths_ready(paths: Dict[str, str]) -> bool:
     return True
 
 
+def renewal_conf_certbot_layout_ready(paths: Dict[str, str]) -> bool:
+    """
+    Certbot renewal 配置可被 renew 识别的最低要求：
+    archive 目录存在，且 live 下 cert/privkey/chain/fullchain 都存在并是 symlink。
+    仅复制 PEM 文件不是完整 Certbot lineage，不能安装为 active renewal 配置。
+    """
+    if not renewal_conf_referenced_paths_ready(paths):
+        return False
+    for key in ("cert", "privkey", "chain", "fullchain"):
+        fp = paths.get(key)
+        if not fp:
+            return False
+        p = Path(fp)
+        if not p.is_file() or not p.is_symlink():
+            return False
+    return True
+
+
+def _disabled_renewal_root() -> Path:
+    return get_certbot_config_dir() / "renewal-disabled"
+
+
+def quarantine_broken_renewal_configs() -> List[Dict[str, Any]]:
+    """
+    将明显不完整的 active renewal 配置移到 renewal-disabled，避免一个坏配置
+    让 `certbot renew --dry-run` 整体 parsefail。
+    """
+    renewal_root = get_certbot_renewal_root()
+    if not renewal_root.is_dir():
+        return []
+
+    disabled_root = _disabled_renewal_root()
+    moved: List[Dict[str, Any]] = []
+    for conf in sorted(renewal_root.glob("*.conf"), key=lambda p: p.name.lower()):
+        try:
+            text = conf.read_text(encoding="utf-8", errors="replace")
+            paths = _parse_renewal_conf_paths(text)
+            if renewal_conf_certbot_layout_ready(paths):
+                continue
+            disabled_root.mkdir(parents=True, exist_ok=True)
+            target = disabled_root / conf.name
+            if target.exists():
+                stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                target = disabled_root / f"{conf.stem}.{stamp}.conf"
+            shutil.move(str(conf), str(target))
+            moved.append(
+                {
+                    "source": str(conf),
+                    "target": str(target),
+                    "reason": "renewal 配置缺少完整 archive/live symlink 结构",
+                }
+            )
+        except Exception as exc:
+            moved.append(
+                {
+                    "source": str(conf),
+                    "target": None,
+                    "reason": f"检查失败: {exc}",
+                }
+            )
+    return moved
+
+
 def _rewrite_renewal_conf_paths(conf_text: str, local_config_dir: Path) -> str:
     """将 renewal 配置中的关键路径重写到当前主机的 certbot config-dir。"""
     local_root = str(local_config_dir).replace("\\", "/").rstrip("/")
@@ -461,7 +524,8 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
             "error_code": "renewal_dir_unresolvable",
         }
 
-    target = (renewal_root / f"{lineage}.conf").resolve()
+    active_target = (renewal_root / f"{lineage}.conf").resolve()
+    target = active_target
     try:
         if target.parent.resolve() != renewal_root_res:
             return {
@@ -488,10 +552,46 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
     conf_bytes = text.encode("utf-8")
 
     path_map = _parse_renewal_conf_paths(text)
-    materialized = renewal_conf_referenced_paths_ready(path_map)
+    materialized = renewal_conf_certbot_layout_ready(path_map)
+    active_install = materialized
+
+    if not active_install:
+        disabled_root = _disabled_renewal_root()
+        target = (disabled_root / f"{lineage}.conf").resolve()
+        try:
+            disabled_root_res = disabled_root.resolve()
+            if target.parent.resolve() != disabled_root_res:
+                return {
+                    "success": False,
+                    "message": "renewal 目标路径异常，已拒绝写入",
+                    "renewal_available": False,
+                    "installed_path": None,
+                    "error_code": "path_safety",
+                }
+        except OSError as e:
+            return {
+                "success": False,
+                "message": f"无法校验 disabled renewal 路径: {e}",
+                "renewal_available": False,
+                "installed_path": None,
+                "error_code": "path_safety",
+            }
+        if active_target.exists():
+            try:
+                existing_text = active_target.read_text(encoding="utf-8", errors="replace")
+                existing_paths = _parse_renewal_conf_paths(existing_text)
+                if not renewal_conf_certbot_layout_ready(existing_paths):
+                    disabled_root.mkdir(parents=True, exist_ok=True)
+                    old_target = disabled_root / active_target.name
+                    if old_target.exists():
+                        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                        old_target = disabled_root / f"{active_target.stem}.{stamp}.conf"
+                    shutil.move(str(active_target), str(old_target))
+            except OSError:
+                pass
 
     try:
-        renewal_root.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(conf_bytes)
         try:
             os.chmod(target, 0o644)
@@ -510,16 +610,16 @@ def install_renewal_config(conf_bytes: bytes, lineage_name: str) -> Dict[str, An
             ],
         }
 
-    if materialized:
+    if active_install:
         msg = (
             "已安装 Certbot renewal 配置，且配置中的 archive 路径在本机存在，"
             "certbot renew 可识别该 lineage"
         )
     else:
         msg = (
-            "已安装 renewal 配置，但配置中指向的 archive/live 文件在本机不完整或不存在；"
-            "仅复制 fullchain/privkey 时 certbot renew 仍无法续签，需在同一主机保留完整 "
-            "<certbot_config_dir>/archive/<lineage>/ 或在目标机重新申请"
+            "已保存 renewal 配置到 renewal-disabled，未安装为 active renewal；"
+            "因为当前压缩包不包含完整 Certbot archive/live symlink 结构。"
+            "仅复制 fullchain/privkey 不能通过 certbot renew 自动续签，需在本机重新申请一次证书"
         )
 
     return {
@@ -1892,6 +1992,19 @@ def test_auto_renew_environment() -> Dict[str, Any]:
             else "不存在（Windows 或未使用默认路径时常见；certbot 仍可能正常工作）"
         ),
     )
+
+    quarantined = quarantine_broken_renewal_configs()
+    if quarantined:
+        add_check(
+            "renewal_config_repair",
+            True,
+            "损坏 renewal 配置隔离",
+            "已隔离："
+            + "; ".join(
+                f"{Path(item['source']).name} -> {item.get('target') or item.get('reason')}"
+                for item in quarantined[:5]
+            ),
+        )
 
     acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
     add_check(
