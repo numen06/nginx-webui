@@ -1,5 +1,8 @@
 import api from './index'
 
+const CERTBOT_OPERATION_TIMEOUT = 360000
+const DNS_VERIFY_TIMEOUT = 90000
+
 export const certificatesApi = {
   // 获取证书列表
   getCertificates() {
@@ -90,11 +93,15 @@ export const certificatesApi = {
 
   // 申请证书
   requestCertificate(domains, email, validationMethod) {
-    return api.post('/certificates/request', {
-      domains,
-      email,
-      validation_method: validationMethod
-    })
+    return api.post(
+      '/certificates/request',
+      {
+        domains,
+        email,
+        validation_method: validationMethod
+      },
+      { timeout: CERTBOT_OPERATION_TIMEOUT }
+    )
   },
 
   /** 查询是否有未完成的 DNS 验证（同一会话下记录值不变） */
@@ -111,7 +118,11 @@ export const certificatesApi = {
 
   /** DNS 验证：TXT 生效后继续签发 */
   dnsChallengeComplete(jobId) {
-    return api.post('/certificates/dns-challenge/complete', { job_id: jobId })
+    return api.post(
+      '/certificates/dns-challenge/complete',
+      { job_id: jobId },
+      { timeout: CERTBOT_OPERATION_TIMEOUT }
+    )
   },
 
   /** 检测公网 DNS TXT（可能多次查询，单独放宽超时） */
@@ -122,7 +133,7 @@ export const certificatesApi = {
         record_name: recordName,
         record_value: recordValue
       },
-      { timeout: 90000 }
+      { timeout: DNS_VERIFY_TIMEOUT }
     )
   },
 
@@ -133,17 +144,23 @@ export const certificatesApi = {
 
   /** 检测自动续签环境（certbot renew --dry-run，不修改真实证书） */
   testAutoRenewEnvironment() {
-    return api.post('/certificates/test-auto-renew-env', {}, { timeout: 360000 })
+    return api.post('/certificates/test-auto-renew-env', {}, {
+      timeout: CERTBOT_OPERATION_TIMEOUT
+    })
   },
 
   // 续期证书
   renewCertificate(certId) {
-    return api.post(`/certificates/renew/${certId}`)
+    return api.post(`/certificates/renew/${certId}`, {}, {
+      timeout: CERTBOT_OPERATION_TIMEOUT
+    })
   },
 
   // 续期所有证书
   renewAllCertificates() {
-    return api.post('/certificates/renew-all')
+    return api.post('/certificates/renew-all', {}, {
+      timeout: CERTBOT_OPERATION_TIMEOUT
+    })
   },
 
   // 删除证书

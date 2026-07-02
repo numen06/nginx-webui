@@ -114,6 +114,50 @@ def _migrate_add_certbot_cert_name():
         db.close()
 
 
+def _migrate_add_certificate_issue_fields():
+    """迁移：为 certificates 表添加 DNS 自动签发状态字段"""
+    db = SessionLocal()
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table("certificates"):
+            return
+        columns = [col["name"] for col in inspector.get_columns("certificates")]
+        migrations = [
+            ("status", "ALTER TABLE certificates ADD COLUMN status VARCHAR(50) DEFAULT 'issued' NOT NULL"),
+            ("issue_method", "ALTER TABLE certificates ADD COLUMN issue_method VARCHAR(20)"),
+            ("dns_job_id", "ALTER TABLE certificates ADD COLUMN dns_job_id VARCHAR(64)"),
+            ("dns_record_name", "ALTER TABLE certificates ADD COLUMN dns_record_name VARCHAR(255)"),
+            ("dns_record_value", "ALTER TABLE certificates ADD COLUMN dns_record_value TEXT"),
+            ("dns_challenge_count", "ALTER TABLE certificates ADD COLUMN dns_challenge_count INTEGER DEFAULT 1 NOT NULL"),
+            ("dns_auto_issue", "ALTER TABLE certificates ADD COLUMN dns_auto_issue BOOLEAN DEFAULT 0 NOT NULL"),
+            ("dns_email", "ALTER TABLE certificates ADD COLUMN dns_email VARCHAR(255)"),
+            ("issue_error", "ALTER TABLE certificates ADD COLUMN issue_error TEXT"),
+            ("issue_output", "ALTER TABLE certificates ADD COLUMN issue_output TEXT"),
+            ("updated_at", "ALTER TABLE certificates ADD COLUMN updated_at DATETIME"),
+        ]
+
+        with engine.connect() as conn:
+            changed = False
+            for column_name, sql in migrations:
+                if column_name not in columns:
+                    conn.execute(text(sql))
+                    changed = True
+            if changed:
+                conn.execute(
+                    text(
+                        "UPDATE certificates SET updated_at = created_at "
+                        "WHERE updated_at IS NULL"
+                    )
+                )
+                conn.commit()
+                print("已为 certificates 表添加证书签发状态字段")
+    except Exception as e:
+        if "no such table" not in str(e).lower():
+            print(f"迁移证书签发状态字段时出错: {e}")
+    finally:
+        db.close()
+
+
 def init_db():
     """初始化数据库，创建所有表"""
     Base.metadata.create_all(bind=engine)
@@ -121,6 +165,7 @@ def init_db():
     # 执行迁移
     _migrate_add_is_last_version()
     _migrate_add_certbot_cert_name()
+    _migrate_add_certificate_issue_fields()
     
     # 创建默认管理员账户（如果不存在）
     db = SessionLocal()
@@ -169,4 +214,3 @@ def reset_db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     init_db()
-

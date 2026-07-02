@@ -40,6 +40,7 @@ from app.utils.certbot import (
     start_dns_manual_challenge,
     complete_dns_manual_challenge,
     get_pending_dns_challenge_for_domain,
+    cancel_dns_manual_challenge,
     verify_dns_txt_record,
     verify_certificate_files,
     test_auto_renew_environment,
@@ -50,9 +51,31 @@ from app.utils.audit import create_audit_log, get_client_ip
 
 router = APIRouter(prefix="/api/certificates", tags=["certificates"])
 
+CERT_STATUS_ISSUED = "issued"
+CERT_STATUS_DNS_PENDING = "dns_pending"
+CERT_STATUS_DNS_ISSUING = "dns_issuing"
+CERT_STATUS_FAILED = "failed"
+CERT_STATUS_EXPIRED = "expired"
+CERT_PENDING_STATUSES = {
+    CERT_STATUS_DNS_PENDING,
+    CERT_STATUS_DNS_ISSUING,
+}
+
 
 def _certificate_pem_paths(cert: Certificate) -> Dict[str, Any]:
     """扁平 {basename}.pem 与子目录 fullchain/privkey 路径（与 .crt/.key 同内容）。"""
+    if getattr(cert, "status", CERT_STATUS_ISSUED) != CERT_STATUS_ISSUED:
+        return {
+            "pem_path": None,
+            "fullchain_pem_path": None,
+            "privkey_pem_path": None,
+        }
+    if not cert.cert_path or not cert.key_path:
+        return {
+            "pem_path": None,
+            "fullchain_pem_path": None,
+            "privkey_pem_path": None,
+        }
     config = get_config()
     ssl_dir = Path(config.nginx.ssl_dir)
     if not ssl_dir.is_absolute():
@@ -327,6 +350,10 @@ def _persist_certificate_record(
         cert.valid_from = valid_from
         cert.valid_to = valid_to
         cert.auto_renew = auto_renew
+        cert.status = CERT_STATUS_ISSUED
+        cert.issue_method = "upload"
+        cert.issue_error = None
+        cert.issue_output = None
         db.commit()
         db.refresh(cert)
         success_message = "证书更新成功"
@@ -339,6 +366,8 @@ def _persist_certificate_record(
             valid_from=valid_from,
             valid_to=valid_to,
             auto_renew=auto_renew,
+            status=CERT_STATUS_ISSUED,
+            issue_method="upload",
             created_by_id=current_user.id,
         )
         db.add(cert)
@@ -487,6 +516,7 @@ def _finalize_certbot_issued_certificate(
     privkey_pem: Optional[str] = None,
     ssl_subdir: Optional[str] = None,
     certbot_cert_name: Optional[str] = None,
+    existing_cert_id: Optional[int] = None,
 ) -> dict:
     """certbot 签发成功后：应用 SSL、写入数据库、审计，并返回与 /request 一致的结构。"""
     try:
@@ -516,18 +546,48 @@ def _finalize_certbot_issued_certificate(
         except Exception:
             pass
 
-    cert = Certificate(
-        domain=domain,
-        cert_path=cert_path,
-        key_path=key_path,
-        issuer=cert_info.get("issuer", "Let's Encrypt"),
-        valid_from=valid_from,
-        valid_to=valid_to,
-        auto_renew=True,
-        certbot_cert_name=certbot_cert_name,
-        created_by_id=current_user.id,
-    )
-    db.add(cert)
+    cert: Optional[Certificate] = None
+    if existing_cert_id:
+        cert = db.query(Certificate).filter(Certificate.id == existing_cert_id).first()
+    if cert is None:
+        cert = (
+            db.query(Certificate)
+            .filter(
+                Certificate.domain == domain,
+                Certificate.status.in_(list(CERT_PENDING_STATUSES | {CERT_STATUS_FAILED, CERT_STATUS_EXPIRED})),
+            )
+            .order_by(Certificate.created_at.desc())
+            .first()
+        )
+
+    if cert is None:
+        cert = Certificate(
+            domain=domain,
+            cert_path=cert_path,
+            key_path=key_path,
+            issuer=cert_info.get("issuer", "Let's Encrypt"),
+            valid_from=valid_from,
+            valid_to=valid_to,
+            auto_renew=True,
+            certbot_cert_name=certbot_cert_name,
+            status=CERT_STATUS_ISSUED,
+            issue_method="dns" if any(d.startswith("*.") for d in domains) else "http",
+            created_by_id=current_user.id,
+        )
+        db.add(cert)
+    else:
+        cert.domain = domain
+        cert.cert_path = cert_path
+        cert.key_path = key_path
+        cert.issuer = cert_info.get("issuer", "Let's Encrypt")
+        cert.valid_from = valid_from
+        cert.valid_to = valid_to
+        cert.auto_renew = True
+        cert.certbot_cert_name = certbot_cert_name
+        cert.status = CERT_STATUS_ISSUED
+        cert.issue_method = cert.issue_method or ("dns" if any(d.startswith("*.") for d in domains) else "http")
+        cert.issue_error = None
+        cert.issue_output = raw_output
     db.commit()
     db.refresh(cert)
 
@@ -589,7 +649,7 @@ async def get_certificates(
     for cert in certificates:
         # 检查证书是否即将过期（30天内）
         days_until_expiry = None
-        if cert.valid_to:
+        if getattr(cert, "status", CERT_STATUS_ISSUED) == CERT_STATUS_ISSUED and cert.valid_to:
             days_until_expiry = (cert.valid_to - datetime.now()).days
 
         row: Dict[str, Any] = {
@@ -601,8 +661,17 @@ async def get_certificates(
             "valid_from": cert.valid_from.isoformat() if cert.valid_from else None,
             "valid_to": cert.valid_to.isoformat() if cert.valid_to else None,
             "auto_renew": cert.auto_renew,
+            "status": getattr(cert, "status", CERT_STATUS_ISSUED),
+            "issue_method": cert.issue_method,
+            "dns_job_id": cert.dns_job_id,
+            "dns_record_name": cert.dns_record_name,
+            "dns_record_value": cert.dns_record_value,
+            "dns_challenge_count": cert.dns_challenge_count,
+            "dns_auto_issue": cert.dns_auto_issue,
+            "issue_error": cert.issue_error,
             "days_until_expiry": days_until_expiry,
             "created_at": cert.created_at.isoformat() if cert.created_at else None,
+            "updated_at": cert.updated_at.isoformat() if cert.updated_at else None,
         }
         row.update(_certificate_pem_paths(cert))
         result.append(row)
@@ -908,7 +977,17 @@ async def get_certificate(
             else cert_info.get("valid_to")
         ),
         "auto_renew": cert.auto_renew,
+        "status": getattr(cert, "status", CERT_STATUS_ISSUED),
+        "issue_method": cert.issue_method,
+        "dns_job_id": cert.dns_job_id,
+        "dns_record_name": cert.dns_record_name,
+        "dns_record_value": cert.dns_record_value,
+        "dns_challenge_count": cert.dns_challenge_count,
+        "dns_auto_issue": cert.dns_auto_issue,
+        "issue_error": cert.issue_error,
+        "issue_output": cert.issue_output,
         "created_at": cert.created_at.isoformat() if cert.created_at else None,
+        "updated_at": cert.updated_at.isoformat() if cert.updated_at else None,
     }
     detail.update(_certificate_pem_paths(cert))
     return {"success": True, "certificate": detail}
@@ -1245,7 +1324,7 @@ async def dns_challenge_start(
     """启动 certbot 手动 DNS 会话，返回需添加的 TXT 记录与 job_id。"""
     domain = (body.domain or "").strip()
     existing = db.query(Certificate).filter(Certificate.domain == domain).first()
-    if existing:
+    if existing and getattr(existing, "status", CERT_STATUS_ISSUED) == CERT_STATUS_ISSUED:
         return {
             "success": False,
             "message": f"域名 {domain} 已存在证书，请先删除或使用「上传证书」更新",
@@ -1256,7 +1335,36 @@ async def dns_challenge_start(
             "error_code": "domain_exists",
             "suggestions": ["删除该域名证书后重试", "或使用重新上传证书"],
         }
-    return start_dns_manual_challenge(domain, body.email)
+    result = start_dns_manual_challenge(domain, body.email)
+    if result.get("success") and result.get("job_id"):
+        cert = existing
+        if cert is None:
+            cert = Certificate(
+                domain=domain,
+                cert_path="",
+                key_path="",
+                issuer="Let's Encrypt",
+                auto_renew=False,
+                created_by_id=current_user.id,
+            )
+            db.add(cert)
+        cert.status = CERT_STATUS_DNS_PENDING
+        cert.issue_method = "dns"
+        cert.dns_job_id = result.get("job_id")
+        cert.dns_record_name = result.get("record_name")
+        cert.dns_record_value = result.get("record_value")
+        cert.dns_challenge_count = int(result.get("challenge_count") or 1)
+        cert.dns_auto_issue = True
+        cert.auto_renew = False
+        cert.dns_email = str(body.email)
+        cert.issue_error = None
+        cert.issue_output = result.get("output", "")
+        db.commit()
+        db.refresh(cert)
+        result["certificate_id"] = cert.id
+        result["status"] = cert.status
+        result["auto_issue"] = True
+    return result
 
 
 @router.post("/dns-challenge/complete", summary="DNS 验证：DNS 生效后继续签发")
@@ -1267,9 +1375,29 @@ async def dns_challenge_complete(
     db: Session = Depends(get_db),
 ):
     """在检测到 TXT 生效后，向挂起的 certbot 发送回车，复制证书并入库。"""
+    pending_cert = (
+        db.query(Certificate)
+        .filter(Certificate.dns_job_id == body.job_id)
+        .order_by(Certificate.created_at.desc())
+        .first()
+    )
+    if pending_cert:
+        pending_cert.status = CERT_STATUS_DNS_ISSUING
+        pending_cert.issue_error = None
+        db.commit()
+
     result = complete_dns_manual_challenge(body.job_id)
 
     if not result["success"]:
+        if pending_cert:
+            pending_cert.status = (
+                CERT_STATUS_EXPIRED
+                if result.get("error_code") == "invalid_job"
+                else CERT_STATUS_FAILED
+            )
+            pending_cert.issue_error = result.get("message")
+            pending_cert.issue_output = result.get("output", "")
+            db.commit()
         return {
             "success": False,
             "message": result["message"],
@@ -1293,6 +1421,11 @@ async def dns_challenge_complete(
 
     copy_result = copy_certificate_files(domain, lineage_name=certbot_cert_name)
     if not copy_result["success"]:
+        if pending_cert:
+            pending_cert.status = CERT_STATUS_FAILED
+            pending_cert.issue_error = copy_result["message"]
+            pending_cert.issue_output = result.get("output", "")
+            db.commit()
         return {
             "success": False,
             "message": f"证书签发成功但复制文件失败: {copy_result['message']}",
@@ -1327,6 +1460,7 @@ async def dns_challenge_complete(
         privkey_pem=copy_result.get("privkey_pem"),
         ssl_subdir=copy_result.get("ssl_subdir"),
         certbot_cert_name=certbot_cert_name,
+        existing_cert_id=pending_cert.id if pending_cert else None,
     )
 
 
@@ -1638,17 +1772,20 @@ async def delete_certificate(
     if not cert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
-    # 删除证书文件
-    cert_path = Path(cert.cert_path)
-    key_path = Path(cert.key_path)
+    if getattr(cert, "status", CERT_STATUS_ISSUED) != CERT_STATUS_ISSUED and cert.dns_job_id:
+        cancel_dns_manual_challenge(cert.dns_job_id)
 
-    if cert_path.exists():
+    # 删除证书文件
+    cert_path = Path(cert.cert_path) if cert.cert_path else None
+    key_path = Path(cert.key_path) if cert.key_path else None
+
+    if cert_path and cert_path.exists():
         try:
             cert_path.unlink()
         except Exception:
             pass
 
-    if key_path.exists():
+    if key_path and key_path.exists():
         try:
             key_path.unlink()
         except Exception:

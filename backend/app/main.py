@@ -450,6 +450,7 @@ async def startup_event():
                             certificates = (
                                 db.query(Certificate)
                                 .filter(Certificate.auto_renew == True)
+                                .filter(Certificate.status == "issued")
                                 .all()
                             )
 
@@ -487,6 +488,154 @@ async def startup_event():
                 time.sleep(3600)
 
     threading.Thread(target=cert_renewal_scheduler, daemon=True).start()
+
+    # 启动 DNS 验证后台自动签发任务（服务运行期间保持 certbot manual 会话）
+    def cert_dns_auto_issue_scheduler():
+        """DNS TXT 生效后自动继续 certbot 签发，避免浏览器长时间等待。"""
+        import time
+        from datetime import datetime
+        from app.database import SessionLocal
+        from app.models import Certificate, User
+        from app.utils.audit import create_audit_log
+        from app.utils.certbot import (
+            complete_dns_manual_challenge,
+            copy_certificate_files,
+            get_certificate_info,
+            get_pending_dns_challenge_by_job_id,
+            verify_dns_txt_record,
+        )
+        from app.utils.nginx import apply_ssl_config
+
+        pending_statuses = ["dns_pending"]
+        print("✓ DNS 验证后台自动签发任务已启动")
+
+        while True:
+            try:
+                time.sleep(30)
+                db = SessionLocal()
+                try:
+                    pending_certs = (
+                        db.query(Certificate)
+                        .filter(Certificate.status.in_(pending_statuses))
+                        .filter(Certificate.dns_auto_issue == True)
+                        .all()
+                    )
+
+                    for cert in pending_certs:
+                        if not cert.dns_job_id or not cert.dns_record_name or not cert.dns_record_value:
+                            cert.status = "failed"
+                            cert.issue_error = "缺少 DNS 验证会话或 TXT 记录信息"
+                            db.commit()
+                            continue
+
+                        live_job = get_pending_dns_challenge_by_job_id(cert.dns_job_id)
+                        if not live_job.get("success"):
+                            cert.status = "expired"
+                            cert.issue_error = (
+                                "DNS 验证会话已过期或服务曾重启，请删除该记录后重新申请"
+                            )
+                            db.commit()
+                            continue
+
+                        dns_check = verify_dns_txt_record(
+                            cert.dns_record_name,
+                            cert.dns_record_value,
+                        )
+                        cert.issue_output = dns_check.get("message") or ""
+                        if not dns_check.get("matched"):
+                            db.commit()
+                            continue
+
+                        cert.status = "dns_issuing"
+                        cert.issue_error = None
+                        db.commit()
+
+                        result = complete_dns_manual_challenge(cert.dns_job_id)
+                        cert.issue_output = result.get("output", "")
+                        if not result.get("success"):
+                            cert.status = "expired" if result.get("error_code") == "invalid_job" else "failed"
+                            cert.issue_error = result.get("message") or "证书签发失败"
+                            db.commit()
+                            continue
+
+                        certbot_cert_name = result.get("certbot_cert_name")
+                        copy_result = copy_certificate_files(
+                            cert.domain, lineage_name=certbot_cert_name
+                        )
+                        if not copy_result.get("success"):
+                            cert.status = "failed"
+                            cert.issue_error = f"证书签发成功但复制文件失败: {copy_result.get('message')}"
+                            db.commit()
+                            continue
+
+                        cert.cert_path = copy_result["cert_path"]
+                        cert.key_path = copy_result["key_path"]
+                        cert.certbot_cert_name = certbot_cert_name
+                        cert.status = "issued"
+                        cert.issue_method = "dns"
+                        cert.auto_renew = True
+                        cert.issue_error = None
+
+                        cert_info = get_certificate_info(cert.cert_path)
+                        if cert_info.get("issuer"):
+                            cert.issuer = cert_info["issuer"]
+                        if cert_info.get("valid_from"):
+                            try:
+                                cert.valid_from = datetime.fromisoformat(
+                                    cert_info["valid_from"].replace("Z", "+00:00")
+                                )
+                            except Exception:
+                                pass
+                        if cert_info.get("valid_to"):
+                            try:
+                                cert.valid_to = datetime.fromisoformat(
+                                    cert_info["valid_to"].replace("Z", "+00:00")
+                                )
+                            except Exception:
+                                pass
+
+                        try:
+                            ssl_result = apply_ssl_config(
+                                cert.domain, cert.cert_path, cert.key_path
+                            )
+                            ssl_message = ssl_result.get("message", "")
+                        except Exception as exc:
+                            ssl_message = f"自动添加 SSL 配置失败: {exc}"
+                            cert.issue_error = ssl_message
+
+                        db.commit()
+
+                        user = (
+                            db.query(User)
+                            .filter(User.id == cert.created_by_id)
+                            .first()
+                            if cert.created_by_id
+                            else None
+                        )
+                        try:
+                            create_audit_log(
+                                db=db,
+                                user_id=cert.created_by_id,
+                                username=user.username if user else "system",
+                                action="cert_dns_auto_issue",
+                                target=cert.domain,
+                                details={
+                                    "success": True,
+                                    "ssl_config": ssl_message,
+                                    "cert_path": cert.cert_path,
+                                    "key_path": cert.key_path,
+                                },
+                                ip_address=None,
+                            )
+                        except Exception as exc:
+                            logging.warning("DNS 自动签发审计记录失败: %s", exc)
+                finally:
+                    db.close()
+            except Exception as exc:
+                logging.error("DNS 验证后台自动签发任务异常: %s", exc, exc_info=True)
+                time.sleep(60)
+
+    threading.Thread(target=cert_dns_auto_issue_scheduler, daemon=True).start()
 
 
 # 挂载静态文件目录（前端打包文件）

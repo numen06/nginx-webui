@@ -17,6 +17,31 @@ const isNginxApi = (url) => {
   )
 }
 
+const getTimeoutDetail = (url = '') => {
+  if (url.includes('/certificates/verify-dns')) {
+    return '请求超时，请稍后重试（DNS 检测可能较慢或网络不稳定）'
+  }
+  if (
+    url.includes('/certificates/request') ||
+    url.includes('/certificates/dns-challenge/complete') ||
+    url.includes('/certificates/renew')
+  ) {
+    return '证书操作仍未返回结果，请稍后刷新证书列表确认；若未生成证书，请查看 certbot 输出或重试'
+  }
+  return '请求超时，请稍后重试'
+}
+
+const getTimeoutMessage = (url = '') => {
+  if (
+    url.includes('/certificates/request') ||
+    url.includes('/certificates/dns-challenge/complete') ||
+    url.includes('/certificates/renew')
+  ) {
+    return '证书操作超时'
+  }
+  return '请求超时'
+}
+
 // 请求拦截器 - 添加 token 和 Content-Type
 api.interceptors.request.use(
   (config) => {
@@ -184,19 +209,20 @@ api.interceptors.response.use(
       
       return Promise.reject(errorObj)
     } else if (error.request) {
-      // 请求已发出但没有收到响应（含超时；DNS 检测等接口可能较慢）
+      // 请求已发出但没有收到响应（含超时）
       const isTimeout =
         error.code === 'ECONNABORTED' ||
         (typeof error.message === 'string' && error.message.toLowerCase().includes('timeout'))
+      const requestUrl = error.config?.url || ''
       console.error(
-        isTimeout ? '请求超时' : '网络错误: 无法连接到服务器',
+        isTimeout ? getTimeoutMessage(requestUrl) : '网络错误: 无法连接到服务器',
         error.request
       )
       const errorObj = {
         detail: isTimeout
-          ? '请求超时，请稍后重试（DNS 检测可能较慢或网络不稳定）'
+          ? getTimeoutDetail(requestUrl)
           : '无法连接到服务器，请检查后端服务是否正在运行',
-        message: isTimeout ? '请求超时' : '网络连接失败',
+        message: isTimeout ? getTimeoutMessage(requestUrl) : '网络连接失败',
         code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR'
       }
       return Promise.reject(errorObj)

@@ -70,7 +70,18 @@ class Certificate(Base):
     valid_to = Column(DateTime, nullable=True, index=True)
     auto_renew = Column(Boolean, default=False, nullable=False)
     certbot_cert_name = Column(String(255), nullable=True)  # Certbot lineage 名称（可能与 domain 不同）
+    status = Column(String(50), default="issued", nullable=False, index=True)  # issued/dns_pending/dns_issuing/failed
+    issue_method = Column(String(20), nullable=True)  # http/dns/upload
+    dns_job_id = Column(String(64), nullable=True)
+    dns_record_name = Column(String(255), nullable=True)
+    dns_record_value = Column(Text, nullable=True)
+    dns_challenge_count = Column(Integer, default=1, nullable=False)
+    dns_auto_issue = Column(Boolean, default=False, nullable=False)
+    dns_email = Column(String(255), nullable=True)
+    issue_error = Column(Text, nullable=True)
+    issue_output = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     # 关联关系

@@ -85,12 +85,19 @@
           <template #default="scope">
             <div class="domain-cell">
               <el-tag type="primary" size="small">{{ scope.row.domain }}</el-tag>
+              <el-tag
+                v-if="!isIssuedCert(scope.row)"
+                :type="certStatusType(scope.row.status)"
+                size="small"
+              >
+                {{ certStatusLabel(scope.row.status) }}
+              </el-tag>
             </div>
           </template>
         </el-table-column>
         <el-table-column label="证书路径 / 私钥路径" min-width="600">
           <template #default="scope">
-            <div class="paths-cell">
+            <div v-if="isIssuedCert(scope.row)" class="paths-cell">
               <div class="path-item">
                 <span class="path-label">证书：</span>
                 <span class="path-text" :title="scope.row.cert_path || '-'">
@@ -140,6 +147,51 @@
                 </el-tooltip>
               </div>
             </div>
+            <div v-else class="paths-cell">
+              <div class="path-item">
+                <span class="path-label">DNS：</span>
+                <span class="path-text" :title="scope.row.dns_record_name || '-'">
+                  {{ scope.row.dns_record_name || '-' }}
+                </span>
+                <el-tooltip content="复制 TXT 记录名" :show-after="200">
+                  <el-button
+                    size="small"
+                    text
+                    :icon="CopyDocument"
+                    :disabled="!scope.row.dns_record_name"
+                    @click="handleCopy(scope.row.dns_record_name)"
+                  />
+                </el-tooltip>
+              </div>
+              <div class="path-item">
+                <span class="path-label">TXT：</span>
+                <span class="path-text" :title="scope.row.dns_record_value || '-'">
+                  {{ scope.row.dns_record_value || '-' }}
+                </span>
+                <el-tooltip content="复制 TXT 记录值" :show-after="200">
+                  <el-button
+                    size="small"
+                    text
+                    :icon="CopyDocument"
+                    :disabled="!scope.row.dns_record_value"
+                    @click="handleCopy(scope.row.dns_record_value)"
+                  />
+                </el-tooltip>
+              </div>
+              <div v-if="scope.row.issue_error || scope.row.issue_output" class="path-item">
+                <span class="path-label">进度：</span>
+                <span class="path-text" :title="scope.row.issue_error || scope.row.issue_output">
+                  {{ scope.row.issue_error || scope.row.issue_output }}
+                </span>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="120" align="center">
+          <template #default="scope">
+            <el-tag :type="certStatusType(scope.row.status)" size="small">
+              {{ certStatusLabel(scope.row.status) }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="valid_to" label="过期时间" width="180" align="center">
@@ -160,6 +212,7 @@
               v-model="scope.row.auto_renew"
               @change="handleToggleAutoRenew(scope.row)"
               :loading="scope.row._toggling"
+              :disabled="!isIssuedCert(scope.row)"
               size="small"
             />
           </template>
@@ -174,6 +227,7 @@
                   type="info"
                   class="action-icon-btn"
                   :loading="scope.row._downloading"
+                  :disabled="!isIssuedCert(scope.row)"
                   @click="handleDownload(scope.row)"
                 >
                   <el-icon><Download /></el-icon>
@@ -185,6 +239,7 @@
                   size="small"
                   type="primary"
                   class="action-icon-btn"
+                  :disabled="!isIssuedCert(scope.row)"
                   @click="handleReupload(scope.row)"
                 >
                   <el-icon><UploadFilled /></el-icon>
@@ -196,6 +251,7 @@
                   size="small"
                   type="warning"
                   class="action-icon-btn"
+                  :disabled="!isIssuedCert(scope.row)"
                   @click="handleRenew(scope.row)"
                 >
                   <el-icon><RefreshRight /></el-icon>
@@ -208,6 +264,7 @@
                   type="success"
                   class="action-icon-btn"
                   :loading="scope.row._verifying"
+                  :disabled="!isIssuedCert(scope.row)"
                   @click="handleVerifyCert(scope.row)"
                 >
                   <el-icon><CircleCheck /></el-icon>
@@ -297,7 +354,7 @@
           <template #header>
             <span class="dns-guide-title">第 3 步：保存并检测是否生效</span>
           </template>
-          <p class="form-tip">保存后通常 1-10 分钟生效，最长可能更久。你可以开启自动检测，系统会每 5 秒检查一次。</p>
+          <p class="form-tip">保存后通常 1-10 分钟生效，最长可能更久。系统已保存为“待 DNS 生效”，会在后台自动检测并签发；你也可以留在这里手动检测。</p>
           <div class="dns-verify-row">
             <el-checkbox v-model="dnsAutoPoll">每 5 秒自动检测一次</el-checkbox>
             <el-tag v-if="dnsVerified" type="success" size="small">TXT 已匹配，可点击“完成申请”</el-tag>
@@ -403,6 +460,14 @@
           >
             <el-icon><Check /></el-icon>
             <span class="btn-label">下一步：获取 DNS 要求</span>
+          </el-button>
+          <el-button
+            v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
+            type="success"
+            plain
+            @click="saveDnsPendingAndClose"
+          >
+            保存并后台自动签发
           </el-button>
           <el-button
             v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
@@ -802,6 +867,35 @@ const keyUploadRef = ref(null)
 const archiveUploadRef = ref(null)
 const copyTextDialogVisible = ref(false)
 const copyTextContent = ref('')
+let certListRefreshTimer = null
+
+const isIssuedCert = (cert) => !cert?.status || cert.status === 'issued'
+
+const certStatusLabel = (status) => {
+  const labels = {
+    issued: '已签发',
+    dns_pending: '待 DNS 生效',
+    dns_issuing: '签发中',
+    failed: '签发失败',
+    expired: '已过期'
+  }
+  return labels[status || 'issued'] || status || '已签发'
+}
+
+const certStatusType = (status) => {
+  const types = {
+    issued: 'success',
+    dns_pending: 'warning',
+    dns_issuing: 'info',
+    failed: 'danger',
+    expired: 'info'
+  }
+  return types[status || 'issued'] || 'info'
+}
+
+const hasPendingCertificates = computed(() =>
+  certificateList.value.some((cert) => !isIssuedCert(cert))
+)
 
 /** 迁移与自动续签向导 */
 const migrateWizardVisible = ref(false)
@@ -1286,6 +1380,10 @@ watch(
 
 onBeforeUnmount(() => {
   clearDnsPoll()
+  if (certListRefreshTimer) {
+    clearInterval(certListRefreshTimer)
+    certListRefreshTimer = null
+  }
 })
 
 const handleDnsWizardNext = async () => {
@@ -1314,6 +1412,7 @@ const handleDnsWizardNext = async () => {
           ? '已复用当前验证会话，记录值未变，请继续配置 DNS'
           : '已获取 DNS 验证要求，请添加 TXT 记录'
       )
+      loadCertificates()
     } else {
       showCertFailureDialog({
         message: res.message || '获取 DNS 要求失败',
@@ -1369,6 +1468,13 @@ const handleDnsCompleteIssue = async () => {
   } finally {
     requesting.value = false
   }
+}
+
+const saveDnsPendingAndClose = () => {
+  ElMessage.success('已保存为待 DNS 生效，系统会在后台自动检测并签发')
+  clearDnsSession()
+  requestDialogVisible.value = false
+  loadCertificates()
 }
 
 const handleRequestSubmitHttp = async () => {
@@ -1864,7 +1970,10 @@ const handleToggleAutoRenew = async (cert) => {
 
 const handleDelete = async (cert) => {
   try {
-    await ElMessageBox.confirm('确定要删除证书吗？', '提示', { type: 'warning' })
+    const message = isIssuedCert(cert)
+      ? '确定要删除证书吗？'
+      : '确定要删除这条待签发记录吗？删除后会取消当前 DNS 验证会话。'
+    await ElMessageBox.confirm(message, '提示', { type: 'warning' })
     await certificatesApi.deleteCertificate(cert.id)
     ElMessage.success('删除成功')
     loadCertificates()
@@ -1918,6 +2027,11 @@ const handleCopy = async (text) => {
 
 onMounted(() => {
   loadCertificates()
+  certListRefreshTimer = setInterval(() => {
+    if (hasPendingCertificates.value) {
+      loadCertificates()
+    }
+  }, 15000)
 })
 </script>
 
@@ -2182,6 +2296,8 @@ onMounted(() => {
 .domain-cell {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .domain-cell :deep(.el-tag) {

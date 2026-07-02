@@ -20,7 +20,7 @@ from app.config import get_config
 # DNS 手动验证：挂起的 certbot 进程（必须与后续按回车为同一进程，否则 ACME challenge 失效）
 _dns_jobs: Dict[str, Dict[str, Any]] = {}
 _dns_jobs_lock = threading.Lock()
-_JOB_TTL_SEC = 1800  # 30 分钟
+_JOB_TTL_SEC = 21600  # 6 小时；DNS 传播慢时允许后台自动等待
 _certbot_exec_lock = threading.Lock()
 
 
@@ -1141,6 +1141,57 @@ def get_pending_dns_challenge_for_domain(domain: str) -> Dict[str, Any]:
         "record_name": None,
         "record_value": None,
     }
+
+
+def get_pending_dns_challenge_by_job_id(job_id: str) -> Dict[str, Any]:
+    """按 job_id 查询当前进程内仍存活的 DNS manual 会话。"""
+    _cleanup_stale_dns_jobs()
+    if not job_id:
+        return {"success": False, "message": "缺少任务 ID"}
+    with _dns_jobs_lock:
+        job = _dns_jobs.get(job_id)
+        if not job:
+            return {"success": False, "message": "DNS 验证会话不存在或已过期"}
+        proc = job.get("proc")
+        if not proc or proc.poll() is not None:
+            return {"success": False, "message": "DNS 验证会话已结束"}
+        return {
+            "success": True,
+            "job_id": job_id,
+            "domain": job.get("domain"),
+            "email": job.get("email"),
+            "record_name": job.get("record_name"),
+            "record_value": job.get("record_value"),
+            "challenge_count": job.get("challenge_count", 1),
+            "created_at": job.get("created_at"),
+        }
+
+
+def cancel_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
+    """取消挂起的 DNS manual certbot 会话，并释放全局 certbot 锁。"""
+    if not job_id:
+        return {"success": True, "message": "无挂起 DNS 会话"}
+    with _dns_jobs_lock:
+        job = _dns_jobs.pop(job_id, None)
+    if not job:
+        return {"success": True, "message": "DNS 会话已不存在"}
+
+    proc = job.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    if job.get("holds_exec_lock"):
+        try:
+            _certbot_exec_lock.release()
+        except RuntimeError:
+            pass
+    return {"success": True, "message": "DNS 验证会话已取消"}
 
 
 def _split_txt_rr_data(raw: Any) -> List[str]:
