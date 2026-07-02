@@ -1,7 +1,6 @@
 """动态服务注册 API。"""
 
 import ipaddress
-import secrets
 import socket
 import time
 from datetime import datetime, timedelta
@@ -11,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, User
+from app.auth import get_current_user, get_user_by_token, User
 from app.config import get_config
 from app.database import SessionLocal, get_db
 from app.models import DynamicService, DynamicServiceInstance
@@ -126,24 +125,26 @@ def _client_ip(request: Request) -> ipaddress._BaseAddress:
         ) from exc
 
 
-def _registry_auth(request: Request) -> str:
+def _registry_auth(request: Request, db: Session) -> dict:
     client_ip = _client_ip(request)
     configured_whitelist = _parse_configured_whitelist()
     if configured_whitelist is not None:
         if any(client_ip in network for network in configured_whitelist):
-            return "ip_whitelist"
+            return {"method": "ip_whitelist", "user": None}
     else:
         if any(client_ip in network for network in _auto_same_subnet_networks()):
-            return "auto_same_subnet"
+            return {"method": "auto_same_subnet", "user": None}
 
-    api_key = get_config().dynamic_registry.api_key
-    provided = request.headers.get("X-Registry-Key", "")
-    if api_key and provided and secrets.compare_digest(str(api_key), provided):
-        return "api_key"
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token:
+        user = get_user_by_token(token.strip(), db)
+        if user:
+            return {"method": "auth_token", "user": user}
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="来源 IP 不在动态注册白名单内，且未提供有效的 X-Registry-Key",
+        detail="来源 IP 不在动态注册白名单内，且未提供有效的登录 Token",
     )
 
 
@@ -197,15 +198,16 @@ def _audit_registry(
     request: Request,
     action: str,
     service_name: str,
-    auth_method: str,
+    auth_info: dict,
     details: Optional[dict] = None,
 ) -> None:
+    auth_user = auth_info.get("user")
     payload = details.copy() if details else {}
-    payload["auth_method"] = auth_method
+    payload["auth_method"] = auth_info.get("method")
     create_audit_log(
         db=db,
-        user_id=None,
-        username=f"registry:{service_name}",
+        user_id=auth_user.id if auth_user else None,
+        username=auth_user.username if auth_user else f"registry:{service_name}",
         action=action,
         target=service_name,
         details=payload,
@@ -228,7 +230,7 @@ async def get_registry_auth_status(current_user: User = Depends(get_current_user
     auto_networks = [] if configured is not None else _auto_same_subnet_networks()
     return {
         "success": True,
-        "api_key_enabled": bool(get_config().dynamic_registry.api_key),
+        "auth_token_enabled": True,
         "explicit_ip_whitelist_enabled": configured is not None,
         "ip_whitelist": [str(network) for network in configured] if configured is not None else [],
         "auto_same_subnet_enabled": configured is None,
@@ -439,7 +441,7 @@ async def register_dynamic_instance(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    auth_method = _registry_auth(request)
+    auth_info = _registry_auth(request, db)
     try:
         service_name = normalize_service_name(payload.service_name)
         route_prefix = normalize_route_prefix(payload.route_prefix)
@@ -500,7 +502,7 @@ async def register_dynamic_instance(
             request,
             "dynamic_instance_register",
             service_name,
-            auth_method,
+            auth_info,
             {"instance_id": instance_id, "route_prefix": route_prefix, "target_url": target_url},
         )
         return {"success": True, "message": "实例已注册并生效", "service": _serialize_service(service), "apply_result": apply_result}
@@ -518,7 +520,7 @@ async def heartbeat_dynamic_instance(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    auth_method = _registry_auth(request)
+    auth_info = _registry_auth(request, db)
     service_name = normalize_service_name(payload.service_name)
     instance_id = normalize_instance_id(payload.instance_id)
     service = db.query(DynamicService).filter(DynamicService.service_name == service_name).first()
@@ -541,7 +543,7 @@ async def heartbeat_dynamic_instance(
         request,
         "dynamic_instance_heartbeat",
         service_name,
-        auth_method,
+        auth_info,
         {"instance_id": instance_id},
     )
     return {"success": True, "message": "心跳已更新", "instance": _serialize_instance(instance)}
@@ -553,7 +555,7 @@ async def unregister_dynamic_instance(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    auth_method = _registry_auth(request)
+    auth_info = _registry_auth(request, db)
     service_name = normalize_service_name(payload.service_name)
     instance_id = normalize_instance_id(payload.instance_id)
     service = db.query(DynamicService).filter(DynamicService.service_name == service_name).first()
@@ -578,7 +580,7 @@ async def unregister_dynamic_instance(
             request,
             "dynamic_instance_unregister",
             service_name,
-            auth_method,
+            auth_info,
             {"instance_id": instance_id},
         )
         return {"success": True, "message": "实例已下线", "apply_result": apply_result}

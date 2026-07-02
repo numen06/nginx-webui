@@ -39,9 +39,8 @@ logrotate:
   rotate_time: "00:00"
 
 dynamic_registry:
-  # 可选：外部服务动态注册密钥。来源 IP 不在白名单内时必须提供 X-Registry-Key。
-  api_key:
   # 可选：显式注册白名单，支持逗号分隔的 IP/CIDR。留空时自动允许本机宿主机网段和容器网络同网段。
+  # 来源 IP 不在白名单内时，注册/心跳/下线接口需要提供登录后的 Authorization: Bearer token。
   ip_whitelist:
   # 实例默认心跳超时时间（秒）
   default_ttl_seconds: 180

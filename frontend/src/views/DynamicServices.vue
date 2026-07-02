@@ -24,8 +24,8 @@
       <el-alert class="auth-alert" type="info" show-icon :closable="false">
         <template #title>注册鉴权</template>
         <div class="auth-status">
-          <el-tag :type="authStatus.api_key_enabled ? 'success' : 'info'" size="small">
-            API Key {{ authStatus.api_key_enabled ? '已启用' : '未配置' }}
+          <el-tag type="success" size="small">
+            登录 Token 已启用
           </el-tag>
           <el-tag
             :type="authStatus.explicit_ip_whitelist_enabled || authStatus.auto_same_subnet_enabled ? 'success' : 'warning'"

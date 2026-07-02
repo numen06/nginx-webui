@@ -107,7 +107,6 @@ class LogrotateConfig(BaseModel):
 class DynamicRegistryConfig(BaseModel):
     """动态服务注册配置"""
 
-    api_key: Optional[str] = None
     ip_whitelist: Optional[str] = None
     default_ttl_seconds: int = 180
     cleanup_interval_seconds: int = 30
@@ -242,10 +241,6 @@ class ConfigManager:
             "LOGROTATE_ROTATE_TIME", logrotate_config.get("rotate_time", "00:00")
         )
 
-        dynamic_registry_config["api_key"] = os.getenv(
-            "DYNAMIC_REGISTRY_API_KEY",
-            dynamic_registry_config.get("api_key"),
-        )
         dynamic_registry_config["ip_whitelist"] = os.getenv(
             "DYNAMIC_REGISTRY_IP_WHITELIST",
             dynamic_registry_config.get("ip_whitelist"),
