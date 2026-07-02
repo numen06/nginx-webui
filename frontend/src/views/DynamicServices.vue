@@ -25,7 +25,7 @@
         <template #title>注册鉴权</template>
         <div class="auth-status">
           <el-tag type="success" size="small">
-            登录 Token 已启用
+            登录 Token / Basic 认证已启用
           </el-tag>
           <el-tag
             :type="authStatus.explicit_ip_whitelist_enabled || authStatus.auto_same_subnet_enabled ? 'success' : 'warning'"

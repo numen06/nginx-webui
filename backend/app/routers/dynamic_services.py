@@ -1,5 +1,7 @@
 """动态服务注册 API。"""
 
+import base64
+import binascii
 import ipaddress
 import socket
 import time
@@ -10,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, get_user_by_token, User
+from app.auth import authenticate_user, get_current_user, get_user_by_token, User
 from app.config import get_config
 from app.database import SessionLocal, get_db
 from app.models import DynamicService, DynamicServiceInstance
@@ -142,9 +144,20 @@ def _registry_auth(request: Request, db: Session) -> dict:
         if user:
             return {"method": "auth_token", "user": user}
 
+    if scheme.lower() == "basic" and token:
+        try:
+            decoded = base64.b64decode(token.strip()).decode("utf-8")
+            username, separator, password = decoded.partition(":")
+        except (binascii.Error, UnicodeDecodeError):
+            username, separator, password = "", "", ""
+        if separator:
+            user = authenticate_user(db, username, password)
+            if user:
+                return {"method": "basic_auth", "user": user}
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="来源 IP 不在动态注册白名单内，且未提供有效的登录 Token",
+        detail="来源 IP 不在动态注册白名单内，且未提供有效的登录 Token 或 Basic 认证",
     )
 
 
@@ -231,6 +244,7 @@ async def get_registry_auth_status(current_user: User = Depends(get_current_user
     return {
         "success": True,
         "auth_token_enabled": True,
+        "basic_auth_enabled": True,
         "explicit_ip_whitelist_enabled": configured is not None,
         "ip_whitelist": [str(network) for network in configured] if configured is not None else [],
         "auto_same_subnet_enabled": configured is None,
