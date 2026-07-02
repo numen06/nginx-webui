@@ -29,8 +29,13 @@ ARG DNF_TIMEOUT=30
 ARG DNF_RETRIES=10
 ARG DNF_MAX_PARALLEL_DOWNLOADS=10
 ARG DNF_INSTALL_WEAK_DEPS=False
+ARG ALINUX_REPO_BASE_URL=https://mirrors.aliyun.com
 
 RUN set -eux; \
+    find /etc/yum.repos.d -type f -name '*.repo' -exec sed -i \
+        -e "s#http://mirrors.cloud.aliyuncs.com#${ALINUX_REPO_BASE_URL}#g" \
+        -e "s#https://mirrors.cloud.aliyuncs.com#${ALINUX_REPO_BASE_URL}#g" \
+        {} +; \
     rm -f /var/lib/rpm/__db* || true; \
     rpm --rebuilddb || true; \
     dnf install -y \
