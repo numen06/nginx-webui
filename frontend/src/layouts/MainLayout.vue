@@ -27,6 +27,10 @@
           <el-icon><Edit /></el-icon>
           <span v-if="!isCollapsed">配置管理</span>
         </el-menu-item>
+        <el-menu-item index="/dynamic-services">
+          <el-icon><Connection /></el-icon>
+          <span v-if="!isCollapsed">动态服务</span>
+        </el-menu-item>
         <el-menu-item index="/logs">
           <el-icon><Document /></el-icon>
           <span v-if="!isCollapsed">日志查看</span>

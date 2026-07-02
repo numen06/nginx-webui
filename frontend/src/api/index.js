@@ -12,6 +12,7 @@ const isNginxApi = (url) => {
   return (
     url.includes('/nginx/') || 
     url.includes('/config') ||  // 包括 /config 和 /config/
+    url.includes('/dynamic-services') ||
     url.includes('/logs') ||    // 包括 /logs 和 /logs/
     url.includes('/files')      // 包括 /files 和 /files/
   )

@@ -10,7 +10,17 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from app.models import Base, User, ConfigBackup, OperationLog, Certificate, GitRepository, StatisticsCache
+from app.models import (
+    Base,
+    User,
+    ConfigBackup,
+    OperationLog,
+    Certificate,
+    GitRepository,
+    StatisticsCache,
+    DynamicService,
+    DynamicServiceInstance,
+)
 from sqlalchemy import inspect, text
 
 

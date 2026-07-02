@@ -28,6 +28,12 @@ const routes = [
         meta: { title: '配置管理' }
       },
       {
+        path: 'dynamic-services',
+        name: 'DynamicServices',
+        component: () => import('../views/DynamicServices.vue'),
+        meta: { title: '动态服务' }
+      },
+      {
         path: 'git-sync',
         name: 'GitSync',
         component: () => import('../views/GitSync.vue'),

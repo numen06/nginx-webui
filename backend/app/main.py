@@ -37,6 +37,7 @@ from app.routers import (
     nginx_manager,
     users,
     git,
+    dynamic_services,
 )
 from app.routers import statistics_v2 as statistics, system
 from app.utils.version import get_version
@@ -82,6 +83,7 @@ app.include_router(certificates.router)
 app.include_router(nginx_manager.router)
 app.include_router(users.router)
 app.include_router(git.router)
+app.include_router(dynamic_services.router)
 app.include_router(statistics.router)
 app.include_router(system.router)
 
@@ -208,6 +210,12 @@ async def startup_event():
     print(f"构建日志目录:       {cfg.nginx.build_logs_dir}")
     print(f"应用监听地址:       {cfg.app.host}:{cfg.app.port}")
     print("=" * 60 + "\n")
+
+    try:
+        dynamic_services.start_dynamic_registry_cleanup_scheduler()
+        print("✓ 动态服务注册过期实例清理任务已启动")
+    except Exception as exc:
+        logging.warning("启动动态服务注册清理任务失败: %s", exc)
 
     # 自动启动nginx（如果有已安装的版本）
     try:

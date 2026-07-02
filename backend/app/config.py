@@ -104,6 +104,15 @@ class LogrotateConfig(BaseModel):
     rotate_time: str = "00:00"  # 格式: HH:MM
 
 
+class DynamicRegistryConfig(BaseModel):
+    """动态服务注册配置"""
+
+    api_key: Optional[str] = None
+    ip_whitelist: Optional[str] = None
+    default_ttl_seconds: int = 180
+    cleanup_interval_seconds: int = 30
+
+
 class Config(BaseModel):
     """全局配置"""
 
@@ -111,6 +120,7 @@ class Config(BaseModel):
     app: AppConfig = Field(default_factory=AppConfig)
     backup: BackupConfig = Field(default_factory=BackupConfig)
     logrotate: LogrotateConfig = Field(default_factory=LogrotateConfig)
+    dynamic_registry: DynamicRegistryConfig = Field(default_factory=DynamicRegistryConfig)
 
 
 class ConfigManager:
@@ -145,6 +155,7 @@ class ConfigManager:
         nginx_config = config_data.get("nginx", {})
         app_config = config_data.get("app", {})
         backup_config = config_data.get("backup", {})
+        dynamic_registry_config = config_data.get("dynamic_registry", {})
         
         # 环境变量覆盖
         data_root = os.getenv("DATA_ROOT", "/app/data").rstrip("/")
@@ -230,12 +241,34 @@ class ConfigManager:
         logrotate_config["rotate_time"] = os.getenv(
             "LOGROTATE_ROTATE_TIME", logrotate_config.get("rotate_time", "00:00")
         )
+
+        dynamic_registry_config["api_key"] = os.getenv(
+            "DYNAMIC_REGISTRY_API_KEY",
+            dynamic_registry_config.get("api_key"),
+        )
+        dynamic_registry_config["ip_whitelist"] = os.getenv(
+            "DYNAMIC_REGISTRY_IP_WHITELIST",
+            dynamic_registry_config.get("ip_whitelist"),
+        )
+        dynamic_registry_config["default_ttl_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_DEFAULT_TTL_SECONDS",
+                dynamic_registry_config.get("default_ttl_seconds", 180),
+            )
+        )
+        dynamic_registry_config["cleanup_interval_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_CLEANUP_INTERVAL_SECONDS",
+                dynamic_registry_config.get("cleanup_interval_seconds", 30),
+            )
+        )
         
         self._config = Config(
             nginx=NginxConfig(**nginx_config),
             app=AppConfig(**app_config),
             backup=BackupConfig(**backup_config),
             logrotate=LogrotateConfig(**logrotate_config),
+            dynamic_registry=DynamicRegistryConfig(**dynamic_registry_config),
         )
         
         # 确保备份目录存在（安全处理，避免挂载点冲突）
