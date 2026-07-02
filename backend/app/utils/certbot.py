@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 import json
+import queue
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
@@ -1528,36 +1529,51 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
             "suggestions": [],
         }
 
+    timed_out = False
+    remaining_buf: List[str] = []
+    assert proc.stdout is not None
+    output_queue: "queue.Queue[Optional[str]]" = queue.Queue()
+
+    def _pump_stdout() -> None:
+        try:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                output_queue.put(line)
+            rest = proc.stdout.read() or ""
+            if rest:
+                output_queue.put(rest)
+        except Exception as exc:
+            output_queue.put(f"\n[读取 certbot 输出失败: {exc}]\n")
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=_pump_stdout, daemon=True)
+    reader.start()
+
+    deadline = time.time() + 300
+    found_second_challenge = False
     try:
-        # 读取剩余输出，检查是否有第二个 challenge
-        deadline = time.time() + 300
-        remaining_buf: List[str] = []
-        assert proc.stdout is not None
-
-        # 阶段 1：发第一个 Enter 后，等待看是否有第二个 challenge
-        second_challenge_wait = time.time() + 60
-        found_second_challenge = False
-
         while time.time() < deadline:
-            if proc.poll() is not None:
-                rest = proc.stdout.read() or ""
-                remaining_buf.append(rest)
+            if proc.poll() is not None and output_queue.empty():
                 break
-            line = proc.stdout.readline()
-            if not line:
-                time.sleep(0.05)
+            try:
+                item = output_queue.get(timeout=0.2)
+            except queue.Empty:
                 continue
-            remaining_buf.append(line)
+            if item is None:
+                if proc.poll() is not None:
+                    break
+                continue
+            remaining_buf.append(item)
             partial = "".join(remaining_buf)
 
             # 检测是否出现第二个 challenge（"with the following value" 再次出现）
             if not found_second_challenge and "with the following value" in partial.lower():
-                # 统计出现了几次 "with the following value"
                 count = partial.lower().count("with the following value")
                 if count >= 2:
                     found_second_challenge = True
-                    # 等待 certbot 提示 "Press Enter" 后再发第二个 Enter
-                    # 给 certbot 一点时间输出完
                     time.sleep(2)
                     try:
                         if proc.stdin and not proc.stdin.closed:
@@ -1566,17 +1582,21 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
                     except Exception:
                         pass
 
-            # 如果已过等待期且进程仍在运行，可能卡住了
-            if not found_second_challenge and time.time() > second_challenge_wait:
-                # 非通配符场景，进程应该很快就结束；通配符场景应该出现第二个 challenge
-                if domain.startswith("*."):
-                    # 通配符但没看到第二个 challenge，继续等
-                    pass
+        if proc.poll() is None:
+            timed_out = True
+    except Exception as e:
+        timed_out = True
+        remaining_buf.append(f"\n[等待 certbot 输出时出错: {e}]\n")
 
+    if timed_out:
         rest_out = "".join(remaining_buf)
-    except subprocess.TimeoutExpired:
+        full_out = (job.get("stdout_tail") or "") + (rest_out or "")
         try:
             proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
         except Exception:
             pass
         with _dns_jobs_lock:
@@ -1589,7 +1609,7 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
         return {
             "success": False,
             "message": "certbot 执行超时",
-            "output": job.get("stdout_tail", ""),
+            "output": full_out,
             "cert_path": None,
             "key_path": None,
             "domain": job.get("domain"),
@@ -1597,6 +1617,7 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
             "suggestions": ["检查网络与 Let's Encrypt 连通性", "确认 DNS TXT 已全球生效"],
         }
 
+    rest_out = "".join(remaining_buf)
     full_out = (job.get("stdout_tail") or "") + (rest_out or "")
     success = proc.returncode == 0
 
@@ -1745,6 +1766,38 @@ def verify_certificate_files(cert_path: str, key_path: Optional[str] = None) -> 
         }
 
 
+def test_acme_directory_connectivity(timeout_sec: float = 8.0) -> Dict[str, Any]:
+    """快速检测服务器到 Let's Encrypt ACME v2 directory 的 HTTPS 连通性。"""
+    url = "https://acme-v02.api.letsencrypt.org/directory"
+    started = time.time()
+    try:
+        req = Request(
+            url,
+            headers={"User-Agent": "nginx-webui/1.0"},
+        )
+        with urlopen(req, timeout=timeout_sec) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            elapsed_ms = int((time.time() - started) * 1000)
+            return {
+                "success": 200 <= int(status) < 500,
+                "ok": 200 <= int(status) < 500,
+                "url": url,
+                "status": int(status),
+                "elapsed_ms": elapsed_ms,
+                "message": f"ACME API 可访问（HTTP {status}，{elapsed_ms}ms）",
+            }
+    except Exception as e:
+        elapsed_ms = int((time.time() - started) * 1000)
+        return {
+            "success": False,
+            "ok": False,
+            "url": url,
+            "status": None,
+            "elapsed_ms": elapsed_ms,
+            "message": f"ACME API 连接失败或超时（{elapsed_ms}ms）：{e}",
+        }
+
+
 def test_auto_renew_environment() -> Dict[str, Any]:
     """
     检测当前环境是否具备自动续签能力：certbot/openssl、已管理证书数量、
@@ -1838,6 +1891,14 @@ def test_auto_renew_environment() -> Dict[str, Any]:
             if le_exists
             else "不存在（Windows 或未使用默认路径时常见；certbot 仍可能正常工作）"
         ),
+    )
+
+    acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
+    add_check(
+        "acme_directory",
+        bool(acme_check.get("ok")),
+        "Let's Encrypt ACME API",
+        acme_check.get("message") or "无法连接 ACME API",
     )
 
     lineages = list_certificates()

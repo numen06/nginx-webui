@@ -502,6 +502,7 @@ async def startup_event():
             copy_certificate_files,
             get_certificate_info,
             get_pending_dns_challenge_by_job_id,
+            test_acme_directory_connectivity,
             verify_dns_txt_record,
         )
         from app.utils.nginx import apply_ssl_config
@@ -520,12 +521,29 @@ async def startup_event():
                         .filter(Certificate.dns_auto_issue == True)
                         .all()
                     )
+                    if pending_certs:
+                        logging.info(
+                            "DNS 自动签发: 发现 %s 条待处理记录",
+                            len(pending_certs),
+                        )
 
                     for cert in pending_certs:
+                        logging.info(
+                            "DNS 自动签发: 开始检查 domain=%s cert_id=%s job_id=%s record=%s",
+                            cert.domain,
+                            cert.id,
+                            cert.dns_job_id,
+                            cert.dns_record_name,
+                        )
                         if not cert.dns_job_id or not cert.dns_record_name or not cert.dns_record_value:
                             cert.status = "failed"
                             cert.issue_error = "缺少 DNS 验证会话或 TXT 记录信息"
                             db.commit()
+                            logging.warning(
+                                "DNS 自动签发: 缺少会话或 TXT 信息 domain=%s cert_id=%s",
+                                cert.domain,
+                                cert.id,
+                            )
                             continue
 
                         live_job = get_pending_dns_challenge_by_job_id(cert.dns_job_id)
@@ -535,17 +553,62 @@ async def startup_event():
                                 "DNS 验证会话已过期或服务曾重启，请删除该记录后重新申请"
                             )
                             db.commit()
+                            logging.warning(
+                                "DNS 自动签发: 会话不可用 domain=%s cert_id=%s job_id=%s reason=%s",
+                                cert.domain,
+                                cert.id,
+                                cert.dns_job_id,
+                                live_job.get("message"),
+                            )
                             continue
 
                         dns_check = verify_dns_txt_record(
                             cert.dns_record_name,
                             cert.dns_record_value,
                         )
-                        cert.issue_output = dns_check.get("message") or ""
+                        cert.issue_output = (
+                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                            f"{dns_check.get('message') or ''}"
+                        )
                         if not dns_check.get("matched"):
                             db.commit()
+                            logging.info(
+                                "DNS 自动签发: TXT 尚未匹配 domain=%s cert_id=%s checked_with=%s message=%s",
+                                cert.domain,
+                                cert.id,
+                                dns_check.get("checked_with"),
+                                dns_check.get("message"),
+                            )
                             continue
 
+                        logging.info(
+                            "DNS 自动签发: TXT 已匹配，开始 certbot 签发 domain=%s cert_id=%s",
+                            cert.domain,
+                            cert.id,
+                        )
+                        acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
+                        cert.issue_output = (
+                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                            f"{acme_check.get('message')}"
+                        )
+                        if not acme_check.get("ok"):
+                            cert.status = "failed"
+                            cert.issue_error = acme_check.get("message")
+                            db.commit()
+                            logging.error(
+                                "DNS 自动签发: ACME API 不可达 domain=%s cert_id=%s url=%s message=%s",
+                                cert.domain,
+                                cert.id,
+                                acme_check.get("url"),
+                                acme_check.get("message"),
+                            )
+                            continue
+                        logging.info(
+                            "DNS 自动签发: ACME API 可达 domain=%s cert_id=%s elapsed_ms=%s",
+                            cert.domain,
+                            cert.id,
+                            acme_check.get("elapsed_ms"),
+                        )
                         cert.status = "dns_issuing"
                         cert.issue_error = None
                         db.commit()
@@ -556,6 +619,29 @@ async def startup_event():
                             cert.status = "expired" if result.get("error_code") == "invalid_job" else "failed"
                             cert.issue_error = result.get("message") or "证书签发失败"
                             db.commit()
+                            logging.error(
+                                "DNS 自动签发: certbot 签发失败 domain=%s cert_id=%s error_code=%s message=%s",
+                                cert.domain,
+                                cert.id,
+                                result.get("error_code"),
+                                result.get("message"),
+                            )
+                            try:
+                                create_audit_log(
+                                    db=db,
+                                    user_id=cert.created_by_id,
+                                    username="system",
+                                    action="cert_dns_auto_issue",
+                                    target=cert.domain,
+                                    details={
+                                        "success": False,
+                                        "error_code": result.get("error_code"),
+                                        "message": result.get("message"),
+                                    },
+                                    ip_address=None,
+                                )
+                            except Exception as exc:
+                                logging.warning("DNS 自动签发失败审计记录失败: %s", exc)
                             continue
 
                         certbot_cert_name = result.get("certbot_cert_name")
@@ -566,6 +652,12 @@ async def startup_event():
                             cert.status = "failed"
                             cert.issue_error = f"证书签发成功但复制文件失败: {copy_result.get('message')}"
                             db.commit()
+                            logging.error(
+                                "DNS 自动签发: 复制证书失败 domain=%s cert_id=%s message=%s",
+                                cert.domain,
+                                cert.id,
+                                copy_result.get("message"),
+                            )
                             continue
 
                         cert.cert_path = copy_result["cert_path"]
@@ -604,6 +696,12 @@ async def startup_event():
                             cert.issue_error = ssl_message
 
                         db.commit()
+                        logging.info(
+                            "DNS 自动签发: 完成 domain=%s cert_id=%s cert_path=%s",
+                            cert.domain,
+                            cert.id,
+                            cert.cert_path,
+                        )
 
                         user = (
                             db.query(User)

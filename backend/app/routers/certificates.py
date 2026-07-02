@@ -669,6 +669,7 @@ async def get_certificates(
             "dns_challenge_count": cert.dns_challenge_count,
             "dns_auto_issue": cert.dns_auto_issue,
             "issue_error": cert.issue_error,
+            "issue_output": cert.issue_output,
             "days_until_expiry": days_until_expiry,
             "created_at": cert.created_at.isoformat() if cert.created_at else None,
             "updated_at": cert.updated_at.isoformat() if cert.updated_at else None,
