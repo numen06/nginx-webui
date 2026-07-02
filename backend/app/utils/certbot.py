@@ -125,7 +125,13 @@ def _run_certbot(
                 "message": "",
                 "timed_out": False,
             }
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            stdout = e.stdout or ""
+            stderr = e.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
             try:
                 proc.kill()
             except Exception:
@@ -133,9 +139,9 @@ def _run_certbot(
             return {
                 "success": False,
                 "returncode": -1,
-                "stdout": "",
-                "stderr": "",
-                "output": "",
+                "stdout": stdout or "",
+                "stderr": stderr or "",
+                "output": (stdout or "") + (stderr or ""),
                 "error_code": "timeout",
                 "message": f"certbot 命令超时（{timeout}秒）",
                 "timed_out": True,
@@ -200,6 +206,21 @@ def classify_certbot_failure(
                 "如果你刚发起过 DNS 验证，请先在当前流程完成“检测 DNS -> 完成申请”",
                 "等待 10-30 秒后重试，避免同时发起多个申请/续期任务",
                 "若长期不恢复，请检查是否有残留 certbot 进程或锁文件",
+            ],
+        )
+
+    if (
+        "parsefail" in o
+        or "renewal configuration file" in o
+        or ("expected" in o and "to be a symlink" in o)
+    ):
+        return (
+            "renewal_config_broken",
+            "Certbot renewal 配置不完整或损坏，无法续签",
+            [
+                "仅导入 fullchain.pem / privkey.pem 不能被 certbot renew 接管",
+                "删除或隔离对应 renewal/*.conf 后，重新在本机申请一次证书",
+                "若需迁移 Certbot 自动续签，必须完整迁移 archive/live symlink/renewal 配置",
             ],
         )
 
@@ -825,6 +846,15 @@ def request_certificate(
             "suggestions": ["请选择 http 或 dns"],
         }
 
+    quarantined = quarantine_broken_renewal_configs()
+    acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
+    if not acme_check.get("ok"):
+        result = _acme_unreachable_operation_result(acme_check, operation="证书申请")
+        notice = _quarantine_notice(quarantined)
+        if notice:
+            result["suggestions"].insert(0, notice)
+        return result
+
     # 构建 certbot 命令（仅 HTTP）
     cmd = [
         str(certbot_path),
@@ -1048,6 +1078,22 @@ def start_dns_manual_challenge(domain: str, email: str) -> Dict[str, Any]:
             "record_value": None,
             "output": "",
         }
+
+    quarantined = quarantine_broken_renewal_configs()
+    acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
+    if not acme_check.get("ok"):
+        result = _acme_unreachable_operation_result(acme_check, operation="DNS 证书申请")
+        result.update(
+            {
+                "job_id": None,
+                "record_name": None,
+                "record_value": None,
+            }
+        )
+        notice = _quarantine_notice(quarantined)
+        if notice:
+            result["suggestions"].insert(0, notice)
+        return result
 
     cmd = [
         str(certbot_path),
@@ -1612,6 +1658,18 @@ def complete_dns_manual_challenge(job_id: str) -> Dict[str, Any]:
     proc: subprocess.Popen = job["proc"]
     domain = job["domain"]
 
+    acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
+    if not acme_check.get("ok"):
+        result = _acme_unreachable_operation_result(acme_check, operation="证书签发")
+        result.update(
+            {
+                "domain": job.get("domain"),
+                "error_code": "acme_unreachable",
+                "suggestions": result.get("suggestions", []),
+            }
+        )
+        return result
+
     try:
         if proc.stdin:
             # 先发第一个 Enter
@@ -1898,6 +1956,40 @@ def test_acme_directory_connectivity(timeout_sec: float = 8.0) -> Dict[str, Any]
         }
 
 
+def _acme_unreachable_operation_result(
+    acme_check: Dict[str, Any],
+    *,
+    operation: str,
+) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "message": f"无法连接 Let’s Encrypt ACME API，{operation}可能会超时",
+        "output": acme_check.get("message") or "",
+        "cert_path": None,
+        "key_path": None,
+        "error_code": "acme_unreachable",
+        "suggestions": [
+            "检查服务器出站 443、DNS、IPv6 优先级或代理配置",
+            "在服务器执行 curl -4 -v --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory",
+            "国内服务器建议配置稳定的 HTTPS_PROXY 后重启服务",
+        ],
+    }
+
+
+def _quarantine_notice(quarantined: List[Dict[str, Any]]) -> str:
+    if not quarantined:
+        return ""
+    names = [
+        Path(str(item.get("source") or "")).name
+        for item in quarantined
+        if item.get("source")
+    ]
+    names = [n for n in names if n]
+    if not names:
+        return "已隔离损坏的 renewal 配置"
+    return "已隔离损坏的 renewal 配置: " + ", ".join(names[:5])
+
+
 def test_auto_renew_environment() -> Dict[str, Any]:
     """
     检测当前环境是否具备自动续签能力：certbot/openssl、已管理证书数量、
@@ -2175,6 +2267,28 @@ def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
             "error_code": "certbot_missing",
             "suggestions": ["安装 certbot 并配置路径"],
         }
+
+    quarantined = quarantine_broken_renewal_configs()
+    if domain and any(Path(str(item.get("source") or "")).stem == domain for item in quarantined):
+        return {
+            "success": False,
+            "message": f"{domain} 的 Certbot renewal 配置不完整，已隔离，无法自动续签",
+            "output": _quarantine_notice(quarantined),
+            "error_code": "renewal_config_broken",
+            "suggestions": [
+                "仅导入证书文件不能被 certbot renew 接管",
+                "请删除该证书记录后在本机重新申请一次 Let's Encrypt 证书",
+                "或完整迁移 Certbot 的 archive/live symlink/renewal 配置",
+            ],
+        }
+
+    acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
+    if not acme_check.get("ok"):
+        result = _acme_unreachable_operation_result(acme_check, operation="证书续期")
+        notice = _quarantine_notice(quarantined)
+        if notice:
+            result["suggestions"].insert(0, notice)
+        return result
 
     cmd = [
         str(certbot_path),
