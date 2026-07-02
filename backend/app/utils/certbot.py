@@ -1900,6 +1900,21 @@ def test_auto_renew_environment() -> Dict[str, Any]:
         "Let's Encrypt ACME API",
         acme_check.get("message") or "无法连接 ACME API",
     )
+    if not acme_check.get("ok"):
+        return {
+            "success": False,
+            "environment_ready": False,
+            "summary": "无法连接 Let’s Encrypt ACME API，证书申请/续签可能会超时",
+            "checks": checks,
+            "lineage_count": 0,
+            "dry_run_output": "",
+            "error_code": "acme_unreachable",
+            "suggestions": [
+                "在服务器上执行 curl -4 -v --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory",
+                "检查服务器出站 443、DNS、IPv6 优先级或代理配置",
+                "国内服务器建议配置稳定的 HTTPS_PROXY 后重启服务",
+            ],
+        }
 
     lineages = list_certificates()
     lineage_count = len(lineages)
