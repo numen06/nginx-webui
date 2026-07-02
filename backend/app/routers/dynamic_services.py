@@ -19,6 +19,7 @@ from app.models import DynamicService, DynamicServiceInstance
 from app.utils.audit import create_audit_log, get_client_ip
 from app.utils.dynamic_registry import (
     apply_dynamic_registry,
+    dynamic_service_hosts,
     get_dynamic_config_preview,
     normalize_instance_id,
     normalize_route_prefix,
@@ -38,7 +39,7 @@ router = APIRouter(prefix="/api/dynamic-services", tags=["dynamic-services"])
 
 class RegistryInstanceRequest(BaseModel):
     service_name: str = Field(..., min_length=1, max_length=100)
-    route_prefix: str = Field(..., min_length=1, max_length=255)
+    route_prefix: Optional[str] = Field(default=None, min_length=1, max_length=255)
     instance_id: str = Field(..., min_length=1, max_length=150)
     target_url: str = Field(..., min_length=1, max_length=500)
     ttl_seconds: Optional[int] = Field(default=None, ge=30, le=86400)
@@ -189,6 +190,7 @@ def _serialize_service(service: DynamicService, include_instances: bool = True) 
         "id": service.id,
         "service_name": service.service_name,
         "route_prefix": service.route_prefix,
+        "virtual_hosts": dynamic_service_hosts(service.service_name),
         "enabled": service.enabled,
         "description": service.description,
         "active_instance_count": active_count,
@@ -249,6 +251,7 @@ async def get_registry_auth_status(current_user: User = Depends(get_current_user
         "ip_whitelist": [str(network) for network in configured] if configured is not None else [],
         "auto_same_subnet_enabled": configured is None,
         "auto_same_subnet_networks": [str(network) for network in auto_networks],
+        "domain_suffix": get_config().dynamic_registry.domain_suffix,
         "default_ttl_seconds": get_config().dynamic_registry.default_ttl_seconds,
         "cleanup_interval_seconds": get_config().dynamic_registry.cleanup_interval_seconds,
     }
@@ -458,7 +461,7 @@ async def register_dynamic_instance(
     auth_info = _registry_auth(request, db)
     try:
         service_name = normalize_service_name(payload.service_name)
-        route_prefix = normalize_route_prefix(payload.route_prefix)
+        route_prefix = normalize_route_prefix(payload.route_prefix or service_name)
         instance_id = normalize_instance_id(payload.instance_id)
         target_url = normalize_target_url(payload.target_url)
         ttl_seconds = payload.ttl_seconds or get_config().dynamic_registry.default_ttl_seconds

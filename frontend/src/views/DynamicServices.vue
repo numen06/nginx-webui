@@ -84,6 +84,18 @@
           </template>
         </el-table-column>
         <el-table-column prop="service_name" label="服务名" min-width="170" />
+        <el-table-column label="假域名" min-width="180">
+          <template #default="{ row }">
+            <el-link
+              v-if="row.virtual_hosts?.length"
+              type="primary"
+              @click="copyHost(row.virtual_hosts[0])"
+            >
+              {{ row.virtual_hosts[0] }}
+            </el-link>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="route_prefix" label="路径前缀" min-width="140">
           <template #default="{ row }">
             <el-link type="primary" @click="copyRoute(row.route_prefix)">{{ row.route_prefix }}</el-link>
@@ -354,6 +366,16 @@ const copyRoute = async (routePrefix) => {
     ElMessage.success('路径已复制')
   } catch (error) {
     ElMessage.info(routePrefix)
+  }
+}
+
+const copyHost = async (host) => {
+  const url = `http://${host}/`
+  try {
+    await navigator.clipboard.writeText(url)
+    ElMessage.success('假域名访问地址已复制')
+  } catch (error) {
+    ElMessage.info(url)
   }
 }
 

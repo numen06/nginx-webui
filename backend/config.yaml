@@ -43,6 +43,9 @@ dynamic_registry:
   # 来源 IP 不在白名单内时，注册/心跳/下线接口需要提供登录后的 Authorization: Bearer token
   # 或 Authorization: Basic base64(username:password)。
   ip_whitelist:
+  # 可选：动态服务假域名后缀。留空时服务名本身就是 Host，例如 order-service。
+  # 设置为 apps.local 时，同时支持 order-service 和 order-service.apps.local。
+  domain_suffix:
   # 实例默认心跳超时时间（秒）
   default_ttl_seconds: 600
   # 过期实例清理间隔（秒）
