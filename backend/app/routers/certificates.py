@@ -41,6 +41,8 @@ from app.utils.certbot import (
     complete_dns_manual_challenge,
     get_pending_dns_challenge_for_domain,
     cancel_dns_manual_challenge,
+    cancel_all_dns_manual_challenges,
+    list_pending_dns_challenges,
     verify_dns_txt_record,
     verify_certificate_files,
     test_auto_renew_environment,
@@ -1314,6 +1316,49 @@ async def dns_challenge_pending(
 ):
     """若服务端仍有该域名挂起的 certbot 会话，返回同一 job_id 与 TXT。"""
     return get_pending_dns_challenge_for_domain(domain)
+
+
+@router.get("/dns-challenge/active", summary="列出当前挂起的 DNS 验证会话")
+async def dns_challenge_active(
+    current_user: User = Depends(get_current_user),
+):
+    """展示当前进程内占用 certbot 锁的 DNS manual 会话。"""
+    jobs = list_pending_dns_challenges()
+    return {"success": True, "jobs": jobs, "count": len(jobs)}
+
+
+@router.post("/dns-challenge/cancel-all", summary="清理挂起的 DNS 验证会话")
+async def dns_challenge_cancel_all(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """取消全部挂起 DNS manual 会话，并把对应待签发记录标记为失败。"""
+    result = cancel_all_dns_manual_challenges()
+    cancelled = result.get("cancelled") or []
+    job_ids = [j.get("job_id") for j in cancelled if j.get("job_id")]
+    if job_ids:
+        pending_certs = (
+            db.query(Certificate)
+            .filter(Certificate.dns_job_id.in_(job_ids))
+            .filter(Certificate.status.in_(list(CERT_PENDING_STATUSES)))
+            .all()
+        )
+        for cert in pending_certs:
+            cert.status = CERT_STATUS_FAILED
+            cert.issue_error = "DNS 验证会话已手动清理，请重新申请"
+        db.commit()
+
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="cert_dns_cancel_all",
+        target="dns_challenge",
+        details={"cancelled_count": len(cancelled), "job_ids": job_ids},
+        ip_address=get_client_ip(request),
+    )
+    return result
 
 
 @router.post("/dns-challenge/start", summary="DNS 验证：获取 TXT 并挂起 certbot")

@@ -149,6 +149,11 @@ export const certificatesApi = {
     })
   },
 
+  /** 清理挂起的 DNS 验证会话（释放 certbot 锁） */
+  cancelAllDnsChallenges() {
+    return api.post('/certificates/dns-challenge/cancel-all')
+  },
+
   // 续期证书
   renewCertificate(certId) {
     return api.post(`/certificates/renew/${certId}`, {}, {

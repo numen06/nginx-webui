@@ -36,6 +36,20 @@
                 <span class="btn-label">测试自动续签环境</span>
               </el-button>
             </el-tooltip>
+            <el-tooltip
+              content="取消当前挂起的 DNS 验证会话，释放 Certbot 占用"
+              placement="bottom"
+            >
+              <el-button
+                type="warning"
+                plain
+                :loading="clearingCertbotSessions"
+                @click="handleClearCertbotSessions"
+              >
+                <el-icon><CloseBold /></el-icon>
+                <span class="btn-label">清理卡住任务</span>
+              </el-button>
+            </el-tooltip>
           </div>
         </div>
       </template>
@@ -859,6 +873,7 @@ const certificateList = ref([])
 /** 默认折叠，避免占满首屏；需要时客户自行展开 */
 const migrationGuideOpen = ref([])
 const testingAutoRenewEnv = ref(false)
+const clearingCertbotSessions = ref(false)
 const uploadDialogVisible = ref(false)
 const uploading = ref(false)
 const uploadFormRef = ref(null)
@@ -1741,6 +1756,10 @@ const handleTestAutoRenewEnv = async () => {
     const code = res.error_code
       ? `<p style="font-size:12px;color:#909399;margin-top:8px">错误代码: ${escapeHtml(res.error_code)}</p>`
       : ''
+    const activeJobs = Array.isArray(res.active_dns_jobs) ? res.active_dns_jobs : []
+    const jobsHtml = activeJobs.length
+      ? `<p style="margin-top:12px;font-weight:600">当前挂起的 DNS 验证会话</p><ul style="margin:4px 0;padding-left:18px;text-align:left">${activeJobs.map((j) => `<li>${escapeHtml(j.domain || '-')}，已等待 ${escapeHtml(j.age_seconds ?? '-')} 秒，job_id: ${escapeHtml(j.job_id || '-')}</li>`).join('')}</ul>`
+      : ''
     const out = res.dry_run_output
       ? `<details style="margin-top:12px;text-align:left"><summary style="cursor:pointer">certbot dry-run 输出</summary><pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:240px;overflow:auto;margin-top:8px">${escapeHtml(res.dry_run_output)}</pre></details>`
       : ''
@@ -1750,7 +1769,7 @@ const handleTestAutoRenewEnv = async () => {
       `<div style="text-align:left;max-width:520px">
         <p style="font-weight:600;margin-bottom:8px">${escapeHtml(res.summary || (res.environment_ready ? '检测完成' : '检测未通过'))}</p>
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">${checkRows}</table>
-        ${code}${sug}${out}${hint}
+        ${code}${jobsHtml}${sug}${out}${hint}
       </div>`,
       '自动续签环境检测',
       {
@@ -1763,6 +1782,29 @@ const handleTestAutoRenewEnv = async () => {
     ElMessage.error(e?.detail || e?.message || '检测失败')
   } finally {
     testingAutoRenewEnv.value = false
+  }
+}
+
+const handleClearCertbotSessions = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确定要清理所有挂起的 DNS 验证会话吗？正在等待 TXT 生效的申请会被标记为失败，需要重新申请。',
+      '清理卡住任务',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+
+  clearingCertbotSessions.value = true
+  try {
+    const res = await certificatesApi.cancelAllDnsChallenges()
+    ElMessage.success(res.message || '已清理挂起任务')
+    loadCertificates()
+  } catch (e) {
+    ElMessage.error(e?.detail || e?.message || '清理失败')
+  } finally {
+    clearingCertbotSessions.value = false
   }
 }
 

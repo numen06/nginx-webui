@@ -157,6 +157,8 @@ def _cleanup_stale_dns_jobs() -> None:
             jid
             for jid, j in _dns_jobs.items()
             if now - j.get("created_at", 0) > _JOB_TTL_SEC
+            or not j.get("proc")
+            or j["proc"].poll() is not None
         ]
         for jid in stale:
             j = _dns_jobs.pop(jid, None)
@@ -174,6 +176,49 @@ def _cleanup_stale_dns_jobs() -> None:
                     _certbot_exec_lock.release()
                 except RuntimeError:
                     pass
+
+
+def _dns_job_summary(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    proc = job.get("proc")
+    created_at = float(job.get("created_at") or 0)
+    age_seconds = int(time.time() - created_at) if created_at else None
+    return {
+        "job_id": job_id,
+        "domain": job.get("domain"),
+        "email": job.get("email"),
+        "record_name": job.get("record_name"),
+        "record_value": job.get("record_value"),
+        "challenge_count": job.get("challenge_count", 1),
+        "created_at": created_at,
+        "age_seconds": age_seconds,
+        "running": bool(proc and proc.poll() is None),
+        "holds_exec_lock": bool(job.get("holds_exec_lock")),
+    }
+
+
+def list_pending_dns_challenges() -> List[Dict[str, Any]]:
+    """列出当前进程内仍挂起的 DNS manual certbot 会话。"""
+    _cleanup_stale_dns_jobs()
+    with _dns_jobs_lock:
+        return [
+            _dns_job_summary(jid, job)
+            for jid, job in _dns_jobs.items()
+            if job.get("proc") and job["proc"].poll() is None
+        ]
+
+
+def cancel_all_dns_manual_challenges() -> Dict[str, Any]:
+    """取消全部挂起的 DNS manual certbot 会话。"""
+    jobs = list_pending_dns_challenges()
+    cancelled: List[Dict[str, Any]] = []
+    for job in jobs:
+        res = cancel_dns_manual_challenge(job["job_id"])
+        cancelled.append({**job, "cancel_result": res})
+    return {
+        "success": True,
+        "message": f"已清理 {len(cancelled)} 个挂起的 DNS 验证会话",
+        "cancelled": cancelled,
+    }
 
 
 def classify_certbot_failure(
@@ -2160,11 +2205,23 @@ def test_auto_renew_environment() -> Dict[str, Any]:
                 "suggestions": ["检查网络与 Let’s Encrypt 连通性", "证书较多时可稍后重试"],
             }
         if dry.get("error_code") == "certbot_busy":
+            active_dns_jobs = list_pending_dns_challenges()
+            if active_dns_jobs:
+                add_check(
+                    "certbot_active_dns_jobs",
+                    False,
+                    "当前挂起的 DNS 验证会话",
+                    "; ".join(
+                        f"{j.get('domain') or '-'} 已等待 {j.get('age_seconds')} 秒"
+                        for j in active_dns_jobs
+                    ),
+                )
             add_check(
                 "dry_run",
                 False,
                 "续签模拟（dry-run）",
-                "有其他 certbot 任务正在执行",
+                "有其他 certbot 任务正在执行"
+                + ("（多半是未完成的 DNS 验证会话）" if active_dns_jobs else ""),
             )
             return {
                 "success": False,
@@ -2174,7 +2231,11 @@ def test_auto_renew_environment() -> Dict[str, Any]:
                 "lineage_count": lineage_count,
                 "dry_run_output": "",
                 "error_code": "certbot_busy",
-                "suggestions": ["等待当前 certbot 操作完成后重试"],
+                "active_dns_jobs": active_dns_jobs,
+                "suggestions": [
+                    "如果正在申请 DNS 证书，请先完成申请或删除对应待签发记录",
+                    "如果确认没有任务，请点击“清理卡住任务”释放挂起的 DNS 验证会话",
+                ],
             }
 
         out = dry.get("output", "")
