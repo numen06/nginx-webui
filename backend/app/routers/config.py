@@ -3,7 +3,10 @@ Nginx 配置管理路由
 """
 
 import subprocess
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+import zipfile
+from pathlib import Path
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -20,8 +23,18 @@ from app.utils.nginx import (
     _resolve_nginx_executable,
     format_config,
     validate_config,
+    validate_working_config_file,
     has_pending_config_changes,
     apply_working_config,
+    ensure_working_config_dir,
+    list_working_config_files,
+    read_working_config_file,
+    write_working_config_file,
+    create_working_config_directory,
+    rename_working_config_path,
+    delete_working_config_path,
+    split_legacy_config,
+    get_merged_config_preview,
 )
 from app.utils.nginx_status_cache import (
     get_cached_nginx_status,
@@ -63,6 +76,28 @@ class ConfigValidateRequest(BaseModel):
     """配置校验请求"""
 
     content: str
+    path: str = "nginx.conf"
+
+
+class ConfigFileUpdateRequest(BaseModel):
+    """配置文件更新请求"""
+
+    path: str
+    content: str
+
+
+class ConfigMkdirRequest(BaseModel):
+    """创建配置目录请求"""
+
+    path: Optional[str] = None
+    name: str
+
+
+class ConfigRenameRequest(BaseModel):
+    """重命名配置文件/目录请求"""
+
+    path: str
+    new_name: str
 
 
 @router.get("", summary="读取当前 Nginx 配置")
@@ -73,6 +108,7 @@ async def get_config(
     try:
         content = get_config_content()
         config_path = get_config_path()
+        working_dir = ensure_working_config_dir()
 
         # 获取当前 Nginx 版本信息
         active = get_active_version()
@@ -110,6 +146,8 @@ async def get_config(
             "success": True,
             "content": content,
             "config_path": str(config_path),
+            "config_dir": str(config_path.parent),
+            "working_config_dir": str(working_dir),
             "nginx_version": nginx_version,
             "nginx_version_detail": nginx_version_detail,
             "active_version": active["version"] if active else None,
@@ -180,8 +218,202 @@ async def validate_nginx_config(
     request_data: ConfigValidateRequest, current_user: User = Depends(get_current_user)
 ):
     """校验 Nginx 配置内容（不保存，使用临时文件测试）"""
-    result = validate_config(request_data.content)
+    if request_data.path and request_data.path != "nginx.conf":
+        result = validate_working_config_file(request_data.content, request_data.path)
+    else:
+        result = validate_working_config_file(request_data.content, "nginx.conf")
     return result
+
+
+@router.get("/tree", summary="列出工作副本配置目录")
+async def get_config_tree(current_user: User = Depends(get_current_user)):
+    """递归列出当前配置工作副本中的文件和目录"""
+    try:
+        working_dir = ensure_working_config_dir()
+        return {
+            "success": True,
+            "root": str(working_dir),
+            "files": list_working_config_files(),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取配置目录失败: {str(e)}",
+        )
+
+
+@router.get("/file", summary="读取工作副本配置文件")
+async def get_config_file(
+    path: str = Query(..., description="配置文件相对路径"),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = read_working_config_file(path)
+        return {"success": True, **result}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except IsADirectoryError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"读取配置文件失败: {str(e)}",
+        )
+
+
+@router.put("/file", summary="写入工作副本配置文件")
+async def update_config_file(
+    request_data: ConfigFileUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = write_working_config_file(request_data.path, request_data.content)
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_file_update",
+            target=request_data.path,
+            details={"size": len(request_data.content), "mode": "working_copy"},
+            ip_address=get_client_ip(request),
+        )
+        return {"success": True, "message": "配置文件已保存到临时副本", **result}
+    except (ValueError, IsADirectoryError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"保存配置文件失败: {str(e)}",
+        )
+
+
+@router.post("/mkdir", summary="创建工作副本配置目录")
+async def mkdir_config_dir(
+    request_data: ConfigMkdirRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        entry = create_working_config_directory(request_data.path, request_data.name)
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_dir_create",
+            target=entry["path"],
+            details={},
+            ip_address=get_client_ip(request),
+        )
+        return {"success": True, "message": "配置目录已创建", "entry": entry}
+    except (ValueError, FileExistsError, FileNotFoundError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建配置目录失败: {str(e)}",
+        )
+
+
+@router.post("/rename", summary="重命名工作副本配置文件或目录")
+async def rename_config_path(
+    request_data: ConfigRenameRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        entry = rename_working_config_path(request_data.path, request_data.new_name)
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_path_rename",
+            target=request_data.path,
+            details={"new_name": request_data.new_name, "new_path": entry["path"]},
+            ip_address=get_client_ip(request),
+        )
+        return {"success": True, "message": "重命名成功", "entry": entry}
+    except (ValueError, FileExistsError, FileNotFoundError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重命名失败: {str(e)}",
+        )
+
+
+@router.delete("/file", summary="删除工作副本配置文件或目录")
+async def delete_config_file(
+    request: Request,
+    path: str = Query(..., description="配置文件或目录相对路径"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        delete_working_config_path(path)
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_path_delete",
+            target=path,
+            details={},
+            ip_address=get_client_ip(request),
+        )
+        return {"success": True, "message": "删除成功"}
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除失败: {str(e)}",
+        )
+
+
+@router.post("/split-legacy", summary="拆分单文件配置到 conf.d")
+async def split_legacy_nginx_config(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        backup = create_backup(db, created_by_id=current_user.id)
+        result = split_legacy_config()
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="config_split_legacy",
+            target="conf",
+            details={"backup_id": backup.id, **result},
+            ip_address=get_client_ip(request),
+        )
+        result["backup_id"] = backup.id
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"拆分配置失败: {str(e)}",
+        )
+
+
+@router.get("/merged-preview", summary="获取多文件配置合并预览")
+async def get_config_merged_preview(current_user: User = Depends(get_current_user)):
+    try:
+        return {
+            "success": True,
+            "content": get_merged_config_preview(),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"生成合并预览失败: {str(e)}",
+        )
 
 
 @router.post("/reload", summary="重新加载 Nginx 配置")
@@ -422,15 +654,24 @@ async def get_backup_content(
                 status_code=status.HTTP_404_NOT_FOUND, detail="备份文件不存在"
             )
 
-        # 读取备份文件内容
-        with open(backup_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        files = []
+        if zipfile.is_zipfile(backup_path):
+            with zipfile.ZipFile(backup_path, "r") as archive:
+                files = sorted(archive.namelist())
+                try:
+                    content = archive.read("nginx.conf").decode("utf-8", errors="ignore")
+                except KeyError:
+                    content = ""
+        else:
+            with open(backup_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
         return {
             "success": True,
             "content": content,
             "backup_id": backup_id,
             "filename": backup.filename,
+            "files": files,
         }
     except HTTPException:
         raise

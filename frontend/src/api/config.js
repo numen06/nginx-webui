@@ -11,6 +11,36 @@ export const configApi = {
     return api.post('/config', { content })
   },
 
+  // 配置目录树
+  getTree() {
+    return api.get('/config/tree')
+  },
+
+  // 获取配置文件
+  getFile(path) {
+    return api.get('/config/file', { params: { path } })
+  },
+
+  // 保存配置文件
+  updateFile(path, content) {
+    return api.put('/config/file', { path, content })
+  },
+
+  // 创建配置目录
+  createDirectory(path, name) {
+    return api.post('/config/mkdir', { path, name })
+  },
+
+  // 重命名配置文件或目录
+  renamePath(path, newName) {
+    return api.post('/config/rename', { path, new_name: newName })
+  },
+
+  // 删除配置文件或目录
+  deletePath(path) {
+    return api.delete('/config/file', { params: { path } })
+  },
+
   // 测试配置
   testConfig() {
     return api.post('/config/test')
@@ -59,6 +89,18 @@ export const configApi = {
   // 校验配置
   validateConfig(content) {
     return api.post('/config/validate', { content })
+  },
+
+  validateFile(path, content) {
+    return api.post('/config/validate', { path, content })
+  },
+
+  splitLegacyConfig() {
+    return api.post('/config/split-legacy')
+  },
+
+  getMergedPreview() {
+    return api.get('/config/merged-preview')
   }
 }
 

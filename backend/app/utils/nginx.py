@@ -2,10 +2,15 @@
 Nginx 操作工具
 """
 
+import fnmatch
+import os
+import re
 import shutil
+import tempfile
+import zipfile
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 try:
     import psutil
@@ -131,50 +136,418 @@ def get_config_path() -> Path:
 
 
 _WORKING_CONFIG_SUFFIX = ".webui.pending"
+_WORKING_DIR_NAME = ".webui"
+_PENDING_CONF_DIR_NAME = "pending-conf"
+_CONFIG_EXCLUDE_PATTERNS = (
+    "*.webui.pending",
+    "*.tmp",
+    ".DS_Store",
+)
+
+
+def get_config_dir() -> Path:
+    """获取当前活动 Nginx 的配置目录。"""
+    config_dir = get_config_path().parent
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+def _get_install_path_for_config(config_path: Optional[Path] = None) -> Path:
+    """根据配置文件路径推断 Nginx 安装根目录。"""
+    active = get_active_version()
+    if active is not None:
+        return active["install_path"]
+
+    path = config_path or get_config_path()
+    if path.parent.name == "conf":
+        return path.parent.parent
+    return path.parent
+
+
+def get_working_config_dir() -> Path:
+    """获取配置目录级工作副本路径。"""
+    install_path = _get_install_path_for_config()
+    working_dir = install_path / _WORKING_DIR_NAME / _PENDING_CONF_DIR_NAME
+    working_dir.mkdir(parents=True, exist_ok=True)
+    return working_dir
+
+
+def _should_skip_config_item(path: Path) -> bool:
+    return any(fnmatch.fnmatch(path.name, pattern) for pattern in _CONFIG_EXCLUDE_PATTERNS)
+
+
+def _copy_config_dir(source: Path, target: Path) -> None:
+    """镜像复制配置目录，跳过 WebUI 自己的临时文件。"""
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+
+    for item in source.iterdir():
+        if _should_skip_config_item(item):
+            continue
+        dest = target / item.name
+        if item.is_dir():
+            shutil.copytree(
+                item,
+                dest,
+                ignore=shutil.ignore_patterns(*_CONFIG_EXCLUDE_PATTERNS),
+            )
+        else:
+            shutil.copy2(item, dest)
+
+
+def ensure_working_config_dir(sync_from_actual: bool = False) -> Path:
+    """确保目录级工作副本存在。"""
+    actual_dir = get_config_dir()
+    working_dir = get_working_config_dir()
+    working_main = working_dir / "nginx.conf"
+
+    if sync_from_actual or not working_main.exists():
+        _copy_config_dir(actual_dir, working_dir)
+
+    return working_dir
+
+
+def sync_working_config_dir_from_actual() -> Path:
+    return ensure_working_config_dir(sync_from_actual=True)
+
+
+def _relative_config_path(path: str) -> Path:
+    value = (path or "").strip().replace("\\", "/").strip("/")
+    if not value:
+        raise ValueError("路径不能为空")
+    candidate = Path(value)
+    if candidate.is_absolute() or any(part in ("", ".", "..") for part in candidate.parts):
+        raise ValueError("无效的配置路径")
+    return candidate
+
+
+def resolve_working_config_path(path: str, must_exist: bool = False) -> Path:
+    """解析工作副本内的相对配置路径。"""
+    working_dir = ensure_working_config_dir()
+    relative = _relative_config_path(path)
+    target = (working_dir / relative).resolve()
+
+    try:
+        target.relative_to(working_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("路径超出配置目录") from exc
+
+    if must_exist and not target.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+    return target
+
+
+def _file_info(path: Path, root: Path) -> Dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "path": str(path.relative_to(root)).replace("\\", "/"),
+        "is_dir": path.is_dir(),
+        "size": stat.st_size if path.is_file() else 0,
+        "modified_time": stat.st_mtime,
+    }
+
+
+def list_working_config_files() -> List[Dict[str, Any]]:
+    """递归列出工作副本配置文件树。"""
+    root = ensure_working_config_dir()
+    entries: List[Dict[str, Any]] = []
+    for item in root.rglob("*"):
+        if _should_skip_config_item(item):
+            continue
+        entries.append(_file_info(item, root))
+    entries.sort(key=lambda item: (item["path"].count("/"), not item["is_dir"], item["path"]))
+    return entries
+
+
+def read_working_config_file(path: str) -> Dict[str, Any]:
+    target = resolve_working_config_path(path, must_exist=True)
+    if target.is_dir():
+        raise IsADirectoryError("指定路径是目录")
+    return {
+        "path": str(target.relative_to(ensure_working_config_dir())).replace("\\", "/"),
+        "content": target.read_text(encoding="utf-8", errors="ignore"),
+    }
+
+
+def write_working_config_file(path: str, content: str, create: bool = True) -> Dict[str, Any]:
+    target = resolve_working_config_path(path)
+    if target.exists() and target.is_dir():
+        raise IsADirectoryError("指定路径是目录")
+    if not create and not target.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return read_working_config_file(path)
+
+
+def create_working_config_directory(path: Optional[str], name: str) -> Dict[str, Any]:
+    parent = ensure_working_config_dir()
+    if path:
+        parent = resolve_working_config_path(path)
+    if not parent.exists() or not parent.is_dir():
+        raise FileNotFoundError("父目录不存在")
+    if "/" in name or "\\" in name or name in ("", ".", ".."):
+        raise ValueError("无效的目录名称")
+    target = parent / name
+    target_resolved = target.resolve()
+    target_resolved.relative_to(ensure_working_config_dir().resolve())
+    if target.exists():
+        raise FileExistsError("目录已存在")
+    target.mkdir(parents=True)
+    return _file_info(target, ensure_working_config_dir())
+
+
+def rename_working_config_path(path: str, new_name: str) -> Dict[str, Any]:
+    target = resolve_working_config_path(path, must_exist=True)
+    if "/" in new_name or "\\" in new_name or new_name in ("", ".", ".."):
+        raise ValueError("无效的新名称")
+    if target.name == "nginx.conf":
+        raise ValueError("不能重命名主配置文件 nginx.conf")
+    new_target = target.parent / new_name
+    new_target.resolve().relative_to(ensure_working_config_dir().resolve())
+    if new_target.exists():
+        raise FileExistsError("目标名称已存在")
+    target.rename(new_target)
+    return _file_info(new_target, ensure_working_config_dir())
+
+
+def delete_working_config_path(path: str) -> bool:
+    target = resolve_working_config_path(path, must_exist=True)
+    if target.name == "nginx.conf" and target.parent == ensure_working_config_dir():
+        raise ValueError("不能删除主配置文件 nginx.conf")
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return True
+
+
+def _iter_files(root: Path) -> List[Path]:
+    if not root.exists():
+        return []
+    return sorted(
+        [p for p in root.rglob("*") if p.is_file() and not _should_skip_config_item(p)],
+        key=lambda p: str(p.relative_to(root)).replace("\\", "/"),
+    )
+
+
+def _files_equal(left: Path, right: Path) -> bool:
+    left_files = _iter_files(left)
+    right_files = _iter_files(right)
+    left_rel = [str(p.relative_to(left)).replace("\\", "/") for p in left_files]
+    right_rel = [str(p.relative_to(right)).replace("\\", "/") for p in right_files]
+    if left_rel != right_rel:
+        return False
+
+    for left_path in left_files:
+        rel = left_path.relative_to(left)
+        right_path = right / rel
+        if left_path.read_bytes() != right_path.read_bytes():
+            return False
+    return True
+
+
+def _resolve_include_paths_for_test(content: str, conf_dir: Path) -> str:
+    """将测试配置中的相对 include 指向指定配置目录。"""
+    include_pattern = re.compile(r"^(\s*)include\s+([^;]+);\s*(.*)$")
+    resolved_lines = []
+
+    for line in content.split("\n"):
+        match = include_pattern.match(line)
+        if not match:
+            resolved_lines.append(line)
+            continue
+
+        include_path = match.group(2).strip().strip('"').strip("'")
+        if os.path.isabs(include_path):
+            resolved_lines.append(line)
+            continue
+
+        abs_path = conf_dir / include_path
+        abs_path_str = str(abs_path)
+        if '"' in match.group(2) or "'" in match.group(2):
+            abs_path_str = f'"{abs_path_str}"'
+        resolved_line = f"{match.group(1)}include {abs_path_str};"
+        if match.group(3):
+            resolved_line += f" {match.group(3)}"
+        resolved_lines.append(resolved_line)
+
+    return "\n".join(resolved_lines)
+
+
+def _prepare_test_main_config(conf_dir: Path) -> Path:
+    """创建一个 include 指向 conf_dir 的临时主配置文件用于 nginx -t。"""
+    main_config = conf_dir / "nginx.conf"
+    content = main_config.read_text(encoding="utf-8")
+    resolved_content = _resolve_include_paths_for_test(content, conf_dir)
+    temp = tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".conf",
+        delete=False,
+        encoding="utf-8",
+    )
+    with temp:
+        temp.write(resolved_content)
+    return Path(temp.name)
+
+
+def _run_nginx_config_test(conf_dir: Path) -> Dict[str, Any]:
+    temp_main_config: Optional[Path] = None
+    try:
+        nginx_executable = get_nginx_executable_or_raise()
+    except FileNotFoundError as e:
+        return {
+            "success": False,
+            "message": str(e),
+            "output": "",
+            "errors": [str(e)],
+            "warnings": [],
+        }
+
+    try:
+        temp_main_config = _prepare_test_main_config(conf_dir)
+        install_path = _get_install_path_for_config(get_config_path())
+        cmd = [str(nginx_executable), "-t", "-c", str(temp_main_config), "-p", str(install_path)]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return _parse_nginx_test_result(result.returncode, result.stdout + result.stderr, "配置测试")
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "message": "配置测试超时（超过 10 秒）",
+            "output": "",
+            "errors": ["配置测试超时：测试过程超过 10 秒，可能配置文件过大或系统负载过高"],
+            "warnings": [],
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"配置测试出错: {str(e)}",
+            "output": "",
+            "errors": [f"配置测试过程出错: {str(e)}"],
+            "warnings": [],
+        }
+    finally:
+        if temp_main_config and temp_main_config.exists():
+            try:
+                temp_main_config.unlink()
+            except Exception:
+                pass
+
+
+def _parse_nginx_test_result(returncode: int, output: str, action_label: str) -> Dict[str, Any]:
+    success = returncode == 0
+    errors = []
+    warnings = []
+
+    error_pattern = re.compile(
+        r'nginx:\s*\[(emerg|alert|crit|error)\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
+        re.IGNORECASE,
+    )
+    warn_pattern = re.compile(
+        r'nginx:\s*\[warn\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
+        re.IGNORECASE,
+    )
+    test_failed_pattern = re.compile(
+        r'nginx:\s*configuration\s+file\s+(.+?)\s+test\s+failed',
+        re.IGNORECASE,
+    )
+
+    for line in output.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        error_match = error_pattern.search(line)
+        if error_match:
+            error_level = error_match.group(1).upper()
+            error_msg = error_match.group(2).strip()
+            file_path = error_match.group(3) if error_match.group(3) else None
+            line_num = error_match.group(4) if error_match.group(4) else None
+            error_detail = f"[{error_level}] {error_msg}"
+            if file_path and line_num:
+                error_detail += f"\n  位置: {file_path} 第 {line_num} 行"
+            elif file_path:
+                error_detail += f"\n  文件: {file_path}"
+            errors.append(error_detail)
+            continue
+
+        warn_match = warn_pattern.search(line)
+        if warn_match:
+            warn_msg = warn_match.group(1).strip()
+            file_path = warn_match.group(2) if warn_match.group(2) else None
+            line_num = warn_match.group(3) if warn_match.group(3) else None
+            warn_detail = f"警告: {warn_msg}"
+            if file_path and line_num:
+                warn_detail += f"\n  位置: {file_path} 第 {line_num} 行"
+            elif file_path:
+                warn_detail += f"\n  文件: {file_path}"
+            warnings.append(warn_detail)
+            continue
+
+        failed_match = test_failed_pattern.search(line)
+        if failed_match:
+            errors.append(f"配置文件测试失败: {failed_match.group(1)}")
+            continue
+
+        if "error" in line.lower() or "failed" in line.lower():
+            if line not in errors:
+                errors.append(line)
+        elif "warn" in line.lower() or "warning" in line.lower():
+            if line not in warnings:
+                warnings.append(line)
+
+    if success:
+        message = f"{action_label}成功"
+        if warnings:
+            message += f"，但有 {len(warnings)} 个警告"
+    elif errors:
+        error_count = len(errors)
+        message = f"{action_label}失败，发现 {error_count} 个错误"
+        if error_count == 1:
+            message += f": {errors[0].split(chr(10))[0][:100]}"
+    else:
+        message = f"{action_label}失败"
+
+    return {
+        "success": success,
+        "message": message,
+        "output": output,
+        "errors": errors,
+        "warnings": warnings,
+    }
 
 
 def _working_config_path_for(config_path: Path) -> Path:
-    return config_path.parent / f"{config_path.name}{_WORKING_CONFIG_SUFFIX}"
+    return get_working_config_dir() / config_path.name
 
 
 def get_working_config_path() -> Path:
-    actual = get_config_path()
-    working = _working_config_path_for(actual)
-    working.parent.mkdir(parents=True, exist_ok=True)
-    return working
+    return ensure_working_config_dir() / "nginx.conf"
 
 
 def ensure_working_config(sync_from_actual: bool = False) -> Path:
-    actual = get_config_path()
-    working = get_working_config_path()
-    if sync_from_actual or not working.exists():
-        shutil.copy2(actual, working)
-    return working
+    return ensure_working_config_dir(sync_from_actual=sync_from_actual) / "nginx.conf"
 
 
 def sync_working_config_from_actual() -> Path:
-    return ensure_working_config(sync_from_actual=True)
+    sync_working_config_dir_from_actual()
+    return get_working_config_path()
 
 
 def has_pending_config_changes() -> bool:
-    actual = get_config_path()
-    working = ensure_working_config()
-
-    if not actual.exists():
-        return True
-
     try:
-        return working.read_text(encoding="utf-8") != actual.read_text(encoding="utf-8")
+        return not _files_equal(get_config_dir(), ensure_working_config_dir())
     except Exception:
         return True
 
 
 def apply_working_config() -> Path:
-    working = ensure_working_config()
-    actual = get_config_path()
-    actual.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(working, actual)
-    return actual
+    working_dir = ensure_working_config_dir()
+    actual_dir = get_config_dir()
+    _copy_config_dir(working_dir, actual_dir)
+    return actual_dir / "nginx.conf"
 
 
 def _create_default_config_for_version(install_path: Path) -> None:
@@ -392,8 +765,7 @@ def get_config_content(use_working_copy: bool = True) -> str:
 
 def save_config_content(content: str) -> bool:
     """保存 Nginx 配置文件（写入工作副本）"""
-    working_path = ensure_working_config()
-    working_path.write_text(content, encoding="utf-8")
+    write_working_config_file("nginx.conf", content)
     return True
 
 
@@ -410,157 +782,13 @@ def test_config(use_working_copy: bool = True) -> Dict[str, Any]:
             "warnings": List[str]
         }
     """
-    try:
-        nginx_executable = get_nginx_executable_or_raise()
-    except FileNotFoundError as e:
-        return {
-            "success": False,
-            "message": str(e),
-            "output": "",
-            "errors": [str(e)],
-            "warnings": [],
-        }
+    if use_working_copy:
+        return _run_nginx_config_test(ensure_working_config_dir())
 
-    try:
-        if use_working_copy:
-            config_path = ensure_working_config()
-        else:
-            config_path = get_config_path()
-            if not config_path.exists():
-                _create_default_config()
-
-        active = get_active_version()
-
-        # 构建测试命令
-        cmd = [str(nginx_executable), "-t", "-c", str(config_path)]
-
-        # 如果存在活动版本，需要指定 prefix 参数
-        if active is not None:
-            cmd.extend(["-p", str(active["install_path"])])
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-
-        output = result.stdout + result.stderr
-        success = result.returncode == 0
-
-        # 解析错误信息，提取详细信息
-        errors = []
-        warnings = []
-        import re
-
-        # Nginx 错误格式通常为：
-        # nginx: [emerg] unexpected end of file, expecting ";" or "}" in /path/to/file.conf:10
-        # nginx: [warn] conflicting server name "example.com" on 0.0.0.0:80, ignored in /path/to/file.conf:5
-        # nginx: configuration file /path/to/file.conf test failed
-        
-        error_pattern = re.compile(
-            r'nginx:\s*\[(emerg|alert|crit|error)\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
-            re.IGNORECASE
-        )
-        warn_pattern = re.compile(
-            r'nginx:\s*\[warn\]\s*(.+?)(?:\s+in\s+(.+?):(\d+))?',
-            re.IGNORECASE
-        )
-        test_failed_pattern = re.compile(
-            r'nginx:\s*configuration\s+file\s+(.+?)\s+test\s+failed',
-            re.IGNORECASE
-        )
-
-        lines = output.split("\n")
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # 检查是否是错误行
-            error_match = error_pattern.search(line)
-            if error_match:
-                error_level = error_match.group(1).upper()
-                error_msg = error_match.group(2).strip()
-                file_path = error_match.group(3) if error_match.group(3) else None
-                line_num = error_match.group(4) if error_match.group(4) else None
-                
-                # 构建详细的错误信息
-                error_detail = f"[{error_level}] {error_msg}"
-                if file_path and line_num:
-                    error_detail += f"\n  位置: {file_path} 第 {line_num} 行"
-                elif file_path:
-                    error_detail += f"\n  文件: {file_path}"
-                
-                errors.append(error_detail)
-                continue
-            
-            # 检查是否是警告行
-            warn_match = warn_pattern.search(line)
-            if warn_match:
-                warn_msg = warn_match.group(1).strip()
-                file_path = warn_match.group(2) if warn_match.group(2) else None
-                line_num = warn_match.group(3) if warn_match.group(3) else None
-                
-                # 构建详细的警告信息
-                warn_detail = f"警告: {warn_msg}"
-                if file_path and line_num:
-                    warn_detail += f"\n  位置: {file_path} 第 {line_num} 行"
-                elif file_path:
-                    warn_detail += f"\n  文件: {file_path}"
-                
-                warnings.append(warn_detail)
-                continue
-            
-            # 检查是否是测试失败总结
-            failed_match = test_failed_pattern.search(line)
-            if failed_match:
-                file_path = failed_match.group(1)
-                errors.append(f"配置文件测试失败: {file_path}")
-                continue
-            
-            # 如果没有匹配到特定格式，但包含错误关键词，也加入错误列表
-            if "error" in line.lower() or "failed" in line.lower():
-                if line not in errors:  # 避免重复
-                    errors.append(line)
-            elif "warn" in line.lower() or "warning" in line.lower():
-                if line not in warnings:  # 避免重复
-                    warnings.append(line)
-
-        # 构建详细的消息
-        if success:
-            message = "配置测试成功"
-            if warnings:
-                message += f"，但有 {len(warnings)} 个警告"
-        else:
-            if errors:
-                error_count = len(errors)
-                message = f"配置测试失败，发现 {error_count} 个错误"
-                if error_count == 1:
-                    # 如果是单个错误，在消息中包含简要信息
-                    first_error = errors[0].split("\n")[0]
-                    message += f": {first_error[:100]}"
-            else:
-                message = "配置测试失败"
-
-        return {
-            "success": success,
-            "message": message,
-            "output": output,
-            "errors": errors,
-            "warnings": warnings,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "message": "配置测试超时（超过 10 秒）",
-            "output": "",
-            "errors": ["配置测试超时：测试过程超过 10 秒，可能配置文件过大或系统负载过高"],
-            "warnings": [],
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"配置测试出错: {str(e)}",
-            "output": "",
-            "errors": [f"配置测试过程出错: {str(e)}"],
-            "warnings": [],
-        }
+    config_path = get_config_path()
+    if not config_path.exists():
+        _create_default_config()
+    return _run_nginx_config_test(config_path.parent)
 
 
 def reload_nginx() -> Dict[str, Any]:
@@ -1111,6 +1339,231 @@ def validate_config(content: str) -> Dict[str, Any]:
                 os.unlink(temp_file)
             except Exception:
                 pass
+
+
+def validate_working_config_file(content: str, path: str = "nginx.conf") -> Dict[str, Any]:
+    """校验替换某个工作副本文件后的完整配置目录。"""
+    try:
+        relative = _relative_config_path(path)
+        source_dir = ensure_working_config_dir()
+        with tempfile.TemporaryDirectory(prefix="nginx-webui-conf-") as tmp:
+            temp_dir = Path(tmp) / "conf"
+            _copy_config_dir(source_dir, temp_dir)
+            target = temp_dir / relative
+            target.resolve().relative_to(temp_dir.resolve())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            return _run_nginx_config_test(temp_dir)
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"配置校验出错: {str(e)}",
+            "output": "",
+            "errors": [str(e)],
+            "warnings": [],
+        }
+
+
+def _find_named_block(lines: List[str], name: str, start_index: int = 0) -> Optional[Tuple[int, int]]:
+    pattern = re.compile(rf"^\s*{re.escape(name)}\s*\{{")
+    for index in range(start_index, len(lines)):
+        if not pattern.search(lines[index]):
+            continue
+        depth = lines[index].count("{") - lines[index].count("}")
+        end = index
+        while end + 1 < len(lines) and depth > 0:
+            end += 1
+            depth += lines[end].count("{") - lines[end].count("}")
+        if depth == 0:
+            return index, end
+    return None
+
+
+def _find_http_child_blocks(http_lines: List[str]) -> List[Dict[str, Any]]:
+    block_names = ("server", "upstream", "map", "geo", "split_clients")
+    block_pattern = re.compile(r"^\s*(server|upstream|map|geo|split_clients)\b.*\{")
+    blocks = []
+    index = 0
+    while index < len(http_lines):
+        line = http_lines[index]
+        match = block_pattern.search(line)
+        if not match:
+            index += 1
+            continue
+
+        # Only split blocks directly under http{}, not nested location blocks.
+        before_depth = 0
+        for prior in http_lines[:index]:
+            before_depth += prior.count("{") - prior.count("}")
+        if before_depth != 0 or match.group(1) not in block_names:
+            index += 1
+            continue
+
+        depth = line.count("{") - line.count("}")
+        end = index
+        while end + 1 < len(http_lines) and depth > 0:
+            end += 1
+            depth += http_lines[end].count("{") - http_lines[end].count("}")
+        if depth == 0:
+            blocks.append(
+                {
+                    "kind": match.group(1),
+                    "start": index,
+                    "end": end,
+                    "content": "\n".join(http_lines[index : end + 1]).strip() + "\n",
+                }
+            )
+            index = end + 1
+        else:
+            index += 1
+    return blocks
+
+
+def _extract_server_names(block_content: str) -> List[str]:
+    names = []
+    for line in block_content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        match = re.search(r"\bserver_name\s+([^;]+);", stripped)
+        if not match:
+            continue
+        for name in match.group(1).split():
+            cleaned = name.strip().strip(";")
+            if cleaned:
+                names.append(cleaned)
+    return names
+
+
+def _safe_conf_name(value: str) -> str:
+    value = value.strip().lower()
+    if not value or value == "_":
+        value = "default"
+    value = value.replace("*.", "wildcard-")
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    value = value.strip(".-") or "default"
+    if not value.endswith(".conf"):
+        value += ".conf"
+    return value
+
+
+def _unique_file_path(directory: Path, filename: str) -> Path:
+    base = filename[:-5] if filename.endswith(".conf") else filename
+    candidate = directory / filename
+    index = 2
+    while candidate.exists():
+        candidate = directory / f"{base}-{index}.conf"
+        index += 1
+    return candidate
+
+
+def split_legacy_config() -> Dict[str, Any]:
+    """将工作副本中的单文件 nginx.conf 拆成推荐的 nginx.conf + conf.d/*.conf。"""
+    working_dir = ensure_working_config_dir()
+    main_path = working_dir / "nginx.conf"
+    content = main_path.read_text(encoding="utf-8")
+    legacy_path = working_dir / "nginx.conf.legacy"
+    legacy_path.write_text(content, encoding="utf-8")
+
+    lines = content.splitlines()
+    http_block = _find_named_block(lines, "http")
+    if not http_block:
+        return {
+            "success": False,
+            "message": "未找到 http 块，无法自动拆分",
+            "created_files": [],
+            "test_result": None,
+        }
+
+    http_start, http_end = http_block
+    http_body = lines[http_start + 1 : http_end]
+    child_blocks = _find_http_child_blocks(http_body)
+    if not child_blocks:
+        return {
+            "success": False,
+            "message": "未发现可拆分的 server/upstream/map 等 http 级配置块",
+            "created_files": [],
+            "test_result": None,
+        }
+
+    conf_d_dir = working_dir / "conf.d"
+    conf_d_dir.mkdir(parents=True, exist_ok=True)
+    created_files = []
+    remove_lines = set()
+    shared_blocks = []
+    server_blocks = []
+
+    for block in child_blocks:
+        remove_lines.update(range(block["start"], block["end"] + 1))
+        if block["kind"] == "server":
+            server_blocks.append(block)
+        else:
+            shared_blocks.append(block)
+
+    if shared_blocks:
+        shared_path = _unique_file_path(conf_d_dir, "00-shared.conf")
+        shared_path.write_text(
+            "\n".join(block["content"].rstrip() for block in shared_blocks) + "\n",
+            encoding="utf-8",
+        )
+        created_files.append(str(shared_path.relative_to(working_dir)).replace("\\", "/"))
+
+    for block in server_blocks:
+        names = [name for name in _extract_server_names(block["content"]) if name != "_"]
+        filename = _safe_conf_name(names[0] if names else "default")
+        server_path = _unique_file_path(conf_d_dir, filename)
+        server_path.write_text(block["content"], encoding="utf-8")
+        created_files.append(str(server_path.relative_to(working_dir)).replace("\\", "/"))
+
+    new_http_body = [
+        line for idx, line in enumerate(http_body) if idx not in remove_lines
+    ]
+    has_conf_d_include = any(
+        re.search(r"^\s*include\s+conf\.d/\*\.conf\s*;", line)
+        for line in new_http_body
+    )
+    if not has_conf_d_include:
+        while new_http_body and not new_http_body[-1].strip():
+            new_http_body.pop()
+        new_http_body.extend(["", "    include conf.d/*.conf;"])
+
+    new_lines = (
+        lines[: http_start + 1]
+        + new_http_body
+        + lines[http_end:]
+    )
+    main_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+
+    test_result = test_config(use_working_copy=True)
+    return {
+        "success": True,
+        "message": f"已拆分 {len(server_blocks)} 个 server 配置和 {len(shared_blocks)} 个共享配置块",
+        "created_files": created_files,
+        "legacy_file": "nginx.conf.legacy",
+        "test_result": test_result,
+    }
+
+
+def get_merged_config_preview() -> str:
+    """生成一个按常见 include 顺序拼接的只读配置预览。"""
+    working_dir = ensure_working_config_dir()
+    main_path = working_dir / "nginx.conf"
+    chunks = [
+        "# ===== nginx.conf =====",
+        main_path.read_text(encoding="utf-8", errors="ignore"),
+    ]
+    conf_d_dir = working_dir / "conf.d"
+    if conf_d_dir.exists():
+        for file_path in sorted(conf_d_dir.rglob("*.conf"), key=lambda p: str(p.relative_to(conf_d_dir))):
+            rel = str(file_path.relative_to(working_dir)).replace("\\", "/")
+            chunks.extend(
+                [
+                    "",
+                    f"# ===== {rel} =====",
+                    file_path.read_text(encoding="utf-8", errors="ignore"),
+                ]
+            )
+    return "\n".join(chunks).rstrip() + "\n"
 
 
 def get_nginx_status() -> Dict[str, Any]:
@@ -1677,6 +2130,31 @@ server {{
 """
 
 
+def _find_server_block_file_by_domain(domain: str) -> Optional[Dict[str, Any]]:
+    working_dir = ensure_working_config_dir()
+    candidates = []
+    conf_d_dir = working_dir / "conf.d"
+    if conf_d_dir.exists():
+        candidates.extend(sorted(conf_d_dir.rglob("*.conf")))
+    main_config = working_dir / "nginx.conf"
+    if main_config.exists():
+        candidates.append(main_config)
+
+    for candidate in candidates:
+        try:
+            content = candidate.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        block = find_server_block_by_domain(content, domain)
+        if block:
+            return {
+                "path": candidate,
+                "content": content,
+                "block": block,
+            }
+    return None
+
+
 def apply_ssl_config(domain: str, cert_path: str, key_path: str) -> Dict[str, Any]:
     """
     主函数：自动为域名添加 SSL 配置到 nginx 配置文件
@@ -1697,14 +2175,12 @@ def apply_ssl_config(domain: str, cert_path: str, key_path: str) -> Dict[str, An
         }
     """
     try:
-        # 读取工作副本配置
-        config_content = get_config_content(use_working_copy=True)
+        match = _find_server_block_file_by_domain(domain)
 
-        # 查找匹配的 server block
-        existing_block = find_server_block_by_domain(config_content, domain)
-
-        if existing_block:
+        if match:
             # 修改现有 server block
+            config_content = match["content"]
+            existing_block = match["block"]
             lines = config_content.split('\n')
 
             # 替换现有的 server block 内容
@@ -1718,7 +2194,8 @@ def apply_ssl_config(domain: str, cert_path: str, key_path: str) -> Dict[str, An
             new_lines.extend(lines[existing_block['end'] + 1:])
 
             new_content = '\n'.join(new_lines)
-            save_config_content(new_content)
+            rel_path = str(match["path"].relative_to(ensure_working_config_dir())).replace("\\", "/")
+            write_working_config_file(rel_path, new_content)
 
             return {
                 "success": True,
@@ -1726,10 +2203,12 @@ def apply_ssl_config(domain: str, cert_path: str, key_path: str) -> Dict[str, An
                 "action": "modified"
             }
         else:
-            # 创建新的 server block，追加到配置末尾
+            # 创建新的 server block 到 conf.d
             new_blocks = _create_ssl_server_blocks(domain, cert_path, key_path)
-            new_content = config_content.rstrip('\n') + '\n' + new_blocks + '\n'
-            save_config_content(new_content)
+            conf_d_dir = ensure_working_config_dir() / "conf.d"
+            conf_d_dir.mkdir(parents=True, exist_ok=True)
+            target = _unique_file_path(conf_d_dir, _safe_conf_name(domain))
+            target.write_text(new_blocks.strip() + "\n", encoding="utf-8")
 
             return {
                 "success": True,
