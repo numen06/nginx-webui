@@ -108,7 +108,7 @@ class DynamicRegistryConfig(BaseModel):
     """动态服务注册配置"""
 
     ip_whitelist: Optional[str] = None
-    default_ttl_seconds: int = 180
+    default_ttl_seconds: int = 600
     cleanup_interval_seconds: int = 30
 
 
@@ -248,7 +248,7 @@ class ConfigManager:
         dynamic_registry_config["default_ttl_seconds"] = int(
             os.getenv(
                 "DYNAMIC_REGISTRY_DEFAULT_TTL_SECONDS",
-                dynamic_registry_config.get("default_ttl_seconds", 180),
+                dynamic_registry_config.get("default_ttl_seconds", 600),
             )
         )
         dynamic_registry_config["cleanup_interval_seconds"] = int(

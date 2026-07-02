@@ -44,7 +44,7 @@ dynamic_registry:
   # 或 Authorization: Basic base64(username:password)。
   ip_whitelist:
   # 实例默认心跳超时时间（秒）
-  default_ttl_seconds: 180
+  default_ttl_seconds: 600
   # 过期实例清理间隔（秒）
   cleanup_interval_seconds: 30
 
