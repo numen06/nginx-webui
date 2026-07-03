@@ -9,6 +9,10 @@ export const dynamicServicesApi = {
     return api.get('/dynamic-services/auth-status')
   },
 
+  updateSettings(data) {
+    return api.put('/dynamic-services/settings', data)
+  },
+
   getGeneratedConfig() {
     return api.get('/dynamic-services/generated-config')
   },

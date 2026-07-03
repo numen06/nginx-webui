@@ -13,6 +13,10 @@
               <el-icon><View /></el-icon>
               <span class="btn-label">配置预览</span>
             </el-button>
+            <el-button @click="openSettingsDialog">
+              <el-icon><Setting /></el-icon>
+              <span class="btn-label">注册设置</span>
+            </el-button>
             <el-button type="primary" @click="openCreateDialog">
               <el-icon><Plus /></el-icon>
               <span class="btn-label">新增服务</span>
@@ -163,13 +167,53 @@
         <el-button type="primary" @click="previewVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="settingsVisible" title="动态注册设置" width="620px" destroy-on-close>
+      <el-form :model="settingsForm" label-width="150px">
+        <el-form-item label="IP 白名单">
+          <el-input
+            v-model="settingsForm.ip_whitelist"
+            type="textarea"
+            :rows="3"
+            placeholder="192.168.1.0/24, 10.0.0.5"
+          />
+          <div class="form-tip">留空时自动允许本机和同网段；填写后仅允许这些 IP/CIDR，其他来源需 Token 或 Basic 认证。</div>
+        </el-form-item>
+        <el-form-item label="假域名后缀">
+          <el-input v-model="settingsForm.domain_suffix" placeholder="apps.local" clearable />
+        </el-form-item>
+        <el-form-item label="默认 TTL">
+          <el-input-number v-model="settingsForm.default_ttl_seconds" :min="30" :max="86400" :step="30" />
+          <span class="unit-label">秒</span>
+        </el-form-item>
+        <el-form-item label="清理间隔">
+          <el-input-number v-model="settingsForm.cleanup_interval_seconds" :min="10" :max="86400" :step="10" />
+          <span class="unit-label">秒</span>
+        </el-form-item>
+        <el-form-item label="离线保留时间">
+          <el-input-number v-model="settingsForm.offline_retention_seconds" :min="60" :max="2592000" :step="3600" />
+          <span class="unit-label">秒</span>
+        </el-form-item>
+        <el-form-item label="主动健康探测">
+          <el-switch v-model="settingsForm.health_check_enabled" />
+        </el-form-item>
+        <el-form-item label="探测超时">
+          <el-input-number v-model="settingsForm.health_check_timeout_seconds" :min="1" :max="60" :step="1" />
+          <span class="unit-label">秒</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="settingsVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingSettings" @click="submitSettings">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, RefreshRight, View } from '@element-plus/icons-vue'
+import { Plus, RefreshRight, Setting, View } from '@element-plus/icons-vue'
 import { dynamicServicesApi } from '../api/dynamicServices'
 import { formatDateTime } from '../utils/date'
 
@@ -178,15 +222,26 @@ const saving = ref(false)
 const services = ref([])
 const authStatus = ref({})
 const formVisible = ref(false)
+const settingsVisible = ref(false)
 const previewVisible = ref(false)
 const previewContent = ref('')
 const editingService = ref(null)
 const formRef = ref()
+const savingSettings = ref(false)
 const form = ref({
   service_name: '',
   route_prefix: '',
   description: '',
   enabled: true
+})
+const settingsForm = ref({
+  ip_whitelist: '',
+  domain_suffix: '',
+  default_ttl_seconds: 600,
+  cleanup_interval_seconds: 30,
+  offline_retention_seconds: 86400,
+  health_check_enabled: true,
+  health_check_timeout_seconds: 3
 })
 
 const whitelistLabel = computed(() => {
@@ -263,6 +318,19 @@ const openCreateDialog = () => {
   formVisible.value = true
 }
 
+const openSettingsDialog = () => {
+  settingsForm.value = {
+    ip_whitelist: (authStatus.value.ip_whitelist || []).join(', '),
+    domain_suffix: authStatus.value.domain_suffix || '',
+    default_ttl_seconds: authStatus.value.default_ttl_seconds || 600,
+    cleanup_interval_seconds: authStatus.value.cleanup_interval_seconds || 30,
+    offline_retention_seconds: authStatus.value.offline_retention_seconds || 86400,
+    health_check_enabled: authStatus.value.health_check_enabled !== false,
+    health_check_timeout_seconds: authStatus.value.health_check_timeout_seconds || 3
+  }
+  settingsVisible.value = true
+}
+
 const openEditDialog = (service) => {
   editingService.value = service
   form.value = {
@@ -304,6 +372,28 @@ const submitForm = async () => {
       saving.value = false
     }
   })
+}
+
+const submitSettings = async () => {
+  savingSettings.value = true
+  try {
+    await dynamicServicesApi.updateSettings({
+      ip_whitelist: settingsForm.value.ip_whitelist.trim() || null,
+      domain_suffix: settingsForm.value.domain_suffix.trim() || null,
+      default_ttl_seconds: settingsForm.value.default_ttl_seconds,
+      cleanup_interval_seconds: settingsForm.value.cleanup_interval_seconds,
+      offline_retention_seconds: settingsForm.value.offline_retention_seconds,
+      health_check_enabled: settingsForm.value.health_check_enabled,
+      health_check_timeout_seconds: settingsForm.value.health_check_timeout_seconds
+    })
+    ElMessage.success('动态注册设置已保存')
+    settingsVisible.value = false
+    await loadAll()
+  } catch (error) {
+    ElMessage.error(normalizeError(error))
+  } finally {
+    savingSettings.value = false
+  }
 }
 
 const toggleService = async (service, enabled) => {
@@ -425,6 +515,20 @@ onMounted(loadAll)
 .instance-total {
   margin-left: 6px;
   color: var(--text-secondary);
+}
+
+.form-tip {
+  width: 100%;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.unit-label {
+  margin-left: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .preview-content {
