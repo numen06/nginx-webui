@@ -5,15 +5,15 @@
         <div class="card-header">
           <span>Nginx 配置</span>
           <div class="header-actions">
-            <el-button type="info" @click="handleFormat" :disabled="!currentFilePath">
+            <el-button @click="handleFormat" :disabled="!currentFilePath">
               <el-icon><MagicStick /></el-icon>
               <span class="btn-label">格式化</span>
             </el-button>
-            <el-button type="cyan" @click="handleValidate" :disabled="!currentFilePath">
+            <el-button @click="handleValidate" :disabled="!currentFilePath">
               <el-icon><Finished /></el-icon>
               <span class="btn-label">校验配置</span>
             </el-button>
-            <el-button type="purple" @click="handleTest">
+            <el-button @click="handleTest">
               <el-icon><Cpu /></el-icon>
               <span class="btn-label">测试配置</span>
             </el-button>
@@ -21,7 +21,7 @@
               <el-icon><DocumentChecked /></el-icon>
               <span class="btn-label">保存</span>
             </el-button>
-            <el-button type="orange" @click="handleApply" :loading="applying">
+            <el-button type="warning" @click="handleApply" :loading="applying">
               <el-icon><Upload /></el-icon>
               <span class="btn-label">强制覆盖</span>
             </el-button>
@@ -773,6 +773,13 @@ const handleRollback = async () => {
   margin-bottom: 16px;
 }
 
+.config-toolbar {
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
 .backup-select {
   min-width: 320px;
 }
@@ -807,19 +814,48 @@ const handleRollback = async () => {
 
 .config-sidebar {
   padding: 8px;
+  background: var(--bg-secondary);
 }
 
 .site-item {
+  position: relative;
+  display: grid;
+  gap: 4px;
   padding: 10px 12px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   border: 1px solid transparent;
+  background: transparent;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
-.site-item:hover,
+.site-item + .site-item {
+  margin-top: 6px;
+}
+
+.site-item::before {
+  content: '';
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
+}
+
+.site-item:hover {
+  border-color: var(--border-light);
+  background: var(--bg-hover);
+}
+
 .site-item.active {
-  border-color: var(--nginx-green);
-  background: var(--nginx-green-light);
+  border-color: rgba(8, 196, 97, 0.45);
+  background: rgba(8, 196, 97, 0.1);
+}
+
+.site-item.active::before {
+  background: var(--nginx-green);
 }
 
 .site-name,
@@ -830,13 +866,26 @@ const handleRollback = async () => {
 .site-name {
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .site-path {
-  margin-top: 4px;
   font-family: 'Courier New', monospace;
   font-size: 12px;
   color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-item.active .site-name {
+  color: var(--nginx-green-light);
+}
+
+.site-item.active .site-path {
+  color: var(--text-primary);
 }
 
 .config-tree {
