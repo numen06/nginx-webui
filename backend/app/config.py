@@ -111,6 +111,8 @@ class DynamicRegistryConfig(BaseModel):
     domain_suffix: Optional[str] = None
     default_ttl_seconds: int = 600
     cleanup_interval_seconds: int = 30
+    health_check_enabled: bool = True
+    health_check_timeout_seconds: int = 3
 
 
 class Config(BaseModel):
@@ -260,6 +262,16 @@ class ConfigManager:
             os.getenv(
                 "DYNAMIC_REGISTRY_CLEANUP_INTERVAL_SECONDS",
                 dynamic_registry_config.get("cleanup_interval_seconds", 30),
+            )
+        )
+        dynamic_registry_config["health_check_enabled"] = os.getenv(
+            "DYNAMIC_REGISTRY_HEALTH_CHECK_ENABLED",
+            str(dynamic_registry_config.get("health_check_enabled", "true")),
+        ).lower() in ("true", "1", "yes")
+        dynamic_registry_config["health_check_timeout_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_HEALTH_CHECK_TIMEOUT_SECONDS",
+                dynamic_registry_config.get("health_check_timeout_seconds", 3),
             )
         )
         

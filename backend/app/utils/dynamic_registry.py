@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
+import hashlib
 
 from sqlalchemy.orm import Session
 
@@ -61,6 +62,11 @@ def normalize_instance_id(value: str) -> str:
     if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,149}$", instance_id):
         raise ValueError("实例 ID 只能包含字母、数字、点、下划线、中划线和冒号")
     return instance_id
+
+
+def instance_id_from_target_url(target_url: str) -> str:
+    digest = hashlib.sha1(target_url.encode("utf-8")).hexdigest()[:12]
+    return f"target-{digest}"
 
 
 def normalize_route_prefix(value: str) -> str:

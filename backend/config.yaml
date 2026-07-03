@@ -50,4 +50,7 @@ dynamic_registry:
   default_ttl_seconds: 600
   # 过期实例清理间隔（秒）
   cleanup_interval_seconds: 30
-
+  # 是否由本程序主动探测目标服务，探测可达时自动刷新心跳时间
+  health_check_enabled: true
+  # 主动探测目标服务的连接超时时间（秒）
+  health_check_timeout_seconds: 3

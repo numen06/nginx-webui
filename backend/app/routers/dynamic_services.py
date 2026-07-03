@@ -5,6 +5,8 @@ import binascii
 import ipaddress
 import socket
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from typing import Optional, List
 
@@ -21,6 +23,7 @@ from app.utils.dynamic_registry import (
     apply_dynamic_registry,
     dynamic_service_hosts,
     get_dynamic_config_preview,
+    instance_id_from_target_url,
     normalize_instance_id,
     normalize_route_prefix,
     normalize_service_name,
@@ -40,7 +43,7 @@ router = APIRouter(prefix="/api/dynamic-services", tags=["dynamic-services"])
 class RegistryInstanceRequest(BaseModel):
     service_name: str = Field(..., min_length=1, max_length=100)
     route_prefix: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    instance_id: str = Field(..., min_length=1, max_length=150)
+    instance_id: Optional[str] = Field(default=None, min_length=1, max_length=150)
     target_url: str = Field(..., min_length=1, max_length=500)
     ttl_seconds: Optional[int] = Field(default=None, ge=30, le=86400)
     description: Optional[str] = None
@@ -48,7 +51,8 @@ class RegistryInstanceRequest(BaseModel):
 
 class RegistryInstanceRef(BaseModel):
     service_name: str = Field(..., min_length=1, max_length=100)
-    instance_id: str = Field(..., min_length=1, max_length=150)
+    instance_id: Optional[str] = Field(default=None, min_length=1, max_length=150)
+    target_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
 
 
 class ServiceCreateRequest(BaseModel):
@@ -162,6 +166,26 @@ def _registry_auth(request: Request, db: Session) -> dict:
     )
 
 
+def _resolve_instance_id(instance_id: Optional[str], target_url: Optional[str]) -> str:
+    if instance_id:
+        return normalize_instance_id(instance_id)
+    if target_url:
+        return instance_id_from_target_url(normalize_target_url(target_url))
+    raise ValueError("缺少实例 ID；未提供 instance_id 时必须提供 target_url")
+
+
+def _is_target_reachable(target_url: str, timeout_seconds: int) -> bool:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(target_url, method="HEAD")
+    try:
+        with opener.open(request, timeout=timeout_seconds):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
 def _serialize_instance(instance: DynamicServiceInstance) -> dict:
     now = datetime.now()
     expires_at = instance.last_heartbeat_at + timedelta(seconds=instance.ttl_seconds)
@@ -254,6 +278,8 @@ async def get_registry_auth_status(current_user: User = Depends(get_current_user
         "domain_suffix": get_config().dynamic_registry.domain_suffix,
         "default_ttl_seconds": get_config().dynamic_registry.default_ttl_seconds,
         "cleanup_interval_seconds": get_config().dynamic_registry.cleanup_interval_seconds,
+        "health_check_enabled": get_config().dynamic_registry.health_check_enabled,
+        "health_check_timeout_seconds": get_config().dynamic_registry.health_check_timeout_seconds,
     }
 
 
@@ -462,8 +488,8 @@ async def register_dynamic_instance(
     try:
         service_name = normalize_service_name(payload.service_name)
         route_prefix = normalize_route_prefix(payload.route_prefix or service_name)
-        instance_id = normalize_instance_id(payload.instance_id)
         target_url = normalize_target_url(payload.target_url)
+        instance_id = _resolve_instance_id(payload.instance_id, target_url)
         ttl_seconds = payload.ttl_seconds or get_config().dynamic_registry.default_ttl_seconds
 
         service = db.query(DynamicService).filter(DynamicService.service_name == service_name).first()
@@ -539,7 +565,10 @@ async def heartbeat_dynamic_instance(
 ):
     auth_info = _registry_auth(request, db)
     service_name = normalize_service_name(payload.service_name)
-    instance_id = normalize_instance_id(payload.instance_id)
+    try:
+        instance_id = _resolve_instance_id(payload.instance_id, payload.target_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     service = db.query(DynamicService).filter(DynamicService.service_name == service_name).first()
     if not service:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="服务不存在")
@@ -574,7 +603,10 @@ async def unregister_dynamic_instance(
 ):
     auth_info = _registry_auth(request, db)
     service_name = normalize_service_name(payload.service_name)
-    instance_id = normalize_instance_id(payload.instance_id)
+    try:
+        instance_id = _resolve_instance_id(payload.instance_id, payload.target_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     service = db.query(DynamicService).filter(DynamicService.service_name == service_name).first()
     if not service:
         return {"success": True, "message": "服务不存在，视为已下线"}
@@ -611,12 +643,23 @@ def expire_dynamic_instances_once() -> dict:
     try:
         now = datetime.now()
         expired = []
+        refreshed = []
+        registry_config = get_config().dynamic_registry
         instances = (
             db.query(DynamicServiceInstance)
             .filter(DynamicServiceInstance.status == "active")
             .all()
         )
         for instance in instances:
+            if registry_config.health_check_enabled and _is_target_reachable(
+                instance.target_url,
+                max(1, registry_config.health_check_timeout_seconds),
+            ):
+                instance.last_heartbeat_at = now
+                instance.updated_at = now
+                refreshed.append(instance)
+                continue
+
             expires_at = instance.last_heartbeat_at + timedelta(seconds=instance.ttl_seconds)
             if expires_at <= now:
                 instance.status = "expired"
@@ -624,7 +667,15 @@ def expire_dynamic_instances_once() -> dict:
                 expired.append(instance)
 
         if not expired:
-            return {"success": True, "expired": 0, "reloaded": False}
+            if refreshed:
+                db.commit()
+            return {
+                "success": True,
+                "expired": 0,
+                "health_checked": len(instances) if registry_config.health_check_enabled else 0,
+                "refreshed": len(refreshed),
+                "reloaded": False,
+            }
 
         db.flush()
         result = apply_dynamic_registry(db)
@@ -633,7 +684,14 @@ def expire_dynamic_instances_once() -> dict:
             return {"success": False, "expired": len(expired), "apply_result": result}
 
         db.commit()
-        return {"success": True, "expired": len(expired), "reloaded": True, "apply_result": result}
+        return {
+            "success": True,
+            "expired": len(expired),
+            "health_checked": len(instances) if registry_config.health_check_enabled else 0,
+            "refreshed": len(refreshed),
+            "reloaded": True,
+            "apply_result": result,
+        }
     finally:
         db.close()
 
