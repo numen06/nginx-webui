@@ -1760,6 +1760,17 @@ const handleTestAutoRenewEnv = async () => {
     const jobsHtml = activeJobs.length
       ? `<p style="margin-top:12px;font-weight:600">当前挂起的 DNS 验证会话</p><ul style="margin:4px 0;padding-left:18px;text-align:left">${activeJobs.map((j) => `<li>${escapeHtml(j.domain || '-')}，已等待 ${escapeHtml(j.age_seconds ?? '-')} 秒，job_id: ${escapeHtml(j.job_id || '-')}</li>`).join('')}</ul>`
       : ''
+    const diagnostics = res.busy_diagnostics || {}
+    const lockFile = diagnostics.lock_file || {}
+    const processes = Array.isArray(diagnostics.processes) ? diagnostics.processes : []
+    const diagLines = [
+      diagnostics.app_lock_locked ? '应用内 Certbot 锁仍被占用：通常需要重启后端/容器释放旧线程锁' : null,
+      lockFile.exists ? `Certbot 文件锁：${lockFile.path || '-'}，pid=${lockFile.pid ?? '-'}，存活=${lockFile.pid_alive ?? '-'}，age=${lockFile.age_seconds ?? '-'}s` : null,
+      processes.length ? `系统 Certbot 进程：${processes.map((p) => `pid=${p.pid} ${p.etime} ${p.args}`).join('；')}` : null
+    ].filter(Boolean)
+    const diagHtml = diagLines.length
+      ? `<p style="margin-top:12px;font-weight:600">Certbot 占用诊断</p><ul style="margin:4px 0;padding-left:18px;text-align:left">${diagLines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+      : ''
     const out = res.dry_run_output
       ? `<details style="margin-top:12px;text-align:left"><summary style="cursor:pointer">certbot dry-run 输出</summary><pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:240px;overflow:auto;margin-top:8px">${escapeHtml(res.dry_run_output)}</pre></details>`
       : ''
@@ -1769,7 +1780,7 @@ const handleTestAutoRenewEnv = async () => {
       `<div style="text-align:left;max-width:520px">
         <p style="font-weight:600;margin-bottom:8px">${escapeHtml(res.summary || (res.environment_ready ? '检测完成' : '检测未通过'))}</p>
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">${checkRows}</table>
-        ${code}${jobsHtml}${sug}${out}${hint}
+        ${code}${jobsHtml}${diagHtml}${sug}${out}${hint}
       </div>`,
       '自动续签环境检测',
       {
@@ -1799,7 +1810,12 @@ const handleClearCertbotSessions = async () => {
   clearingCertbotSessions.value = true
   try {
     const res = await certificatesApi.cancelAllDnsChallenges()
-    ElMessage.success(res.message || '已清理挂起任务')
+    const after = res.stale_cleanup?.after || {}
+    if (after.app_lock_locked) {
+      ElMessage.warning('已尝试清理，但应用内 Certbot 锁仍被占用，请重启后端/容器')
+    } else {
+      ElMessage.success(res.message || '已清理挂起任务')
+    }
     loadCertificates()
   } catch (e) {
     ElMessage.error(e?.detail || e?.message || '清理失败')

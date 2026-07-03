@@ -74,6 +74,91 @@ def _cleanup_certbot_lock(config_dir: Path, max_age_seconds: int = 300) -> None:
         pass
 
 
+def get_certbot_busy_diagnostics() -> Dict[str, Any]:
+    """诊断 certbot busy：应用内锁、挂起 DNS 会话、certbot .lock 文件和系统进程。"""
+    config_dir = get_certbot_config_dir()
+    lock_file = config_dir / ".lock"
+    lock_info: Dict[str, Any] = {
+        "path": str(lock_file),
+        "exists": lock_file.exists(),
+        "pid": None,
+        "age_seconds": None,
+        "pid_alive": None,
+    }
+    if lock_file.exists():
+        try:
+            stat = lock_file.stat()
+            lock_info["age_seconds"] = int(time.time() - stat.st_mtime)
+        except OSError:
+            pass
+        pid = _get_certbot_lock_holder_pid(config_dir)
+        lock_info["pid"] = pid
+        if pid is not None:
+            try:
+                os.kill(pid, 0)
+                lock_info["pid_alive"] = True
+            except ProcessLookupError:
+                lock_info["pid_alive"] = False
+            except Exception:
+                lock_info["pid_alive"] = None
+
+    processes: List[Dict[str, Any]] = []
+    try:
+        r = subprocess.run(
+            ["ps", "-eo", "pid,ppid,etime,args"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if r.returncode == 0:
+            for line in (r.stdout or "").splitlines()[1:]:
+                if "certbot" not in line.lower():
+                    continue
+                parts = line.strip().split(None, 3)
+                if len(parts) < 4:
+                    continue
+                processes.append(
+                    {
+                        "pid": parts[0],
+                        "ppid": parts[1],
+                        "etime": parts[2],
+                        "args": parts[3][:500],
+                    }
+                )
+    except Exception:
+        pass
+
+    lock_acquired = _certbot_exec_lock.acquire(blocking=False)
+    if lock_acquired:
+        try:
+            app_lock_locked = False
+        finally:
+            _certbot_exec_lock.release()
+    else:
+        app_lock_locked = True
+
+    return {
+        "app_lock_locked": app_lock_locked,
+        "active_dns_jobs": list_pending_dns_challenges(),
+        "lock_file": lock_info,
+        "processes": processes,
+    }
+
+
+def cleanup_stale_certbot_state() -> Dict[str, Any]:
+    """清理应用内已退出 DNS 会话、过期 certbot 锁文件；不 kill 存活系统进程。"""
+    before = get_certbot_busy_diagnostics()
+    _cleanup_stale_dns_jobs()
+    _cleanup_certbot_lock(get_certbot_config_dir(), max_age_seconds=0)
+    after = get_certbot_busy_diagnostics()
+    return {
+        "success": True,
+        "message": "已尝试清理 Certbot stale 状态",
+        "before": before,
+        "after": after,
+    }
+
+
 def _run_certbot(
     cmd: List[str],
     *,
@@ -93,6 +178,7 @@ def _run_certbot(
 
     acquired = _certbot_exec_lock.acquire(timeout=lock_timeout)
     if not acquired:
+        diagnostics = get_certbot_busy_diagnostics()
         return {
             "success": False,
             "returncode": -1,
@@ -102,6 +188,7 @@ def _run_certbot(
             "error_code": "certbot_busy",
             "message": "Certbot 正在被其他任务占用，请稍后重试",
             "timed_out": False,
+            "diagnostics": diagnostics,
         }
 
     try:
@@ -2206,6 +2293,7 @@ def test_auto_renew_environment() -> Dict[str, Any]:
             }
         if dry.get("error_code") == "certbot_busy":
             active_dns_jobs = list_pending_dns_challenges()
+            diagnostics = dry.get("diagnostics") or get_certbot_busy_diagnostics()
             if active_dns_jobs:
                 add_check(
                     "certbot_active_dns_jobs",
@@ -2214,6 +2302,35 @@ def test_auto_renew_environment() -> Dict[str, Any]:
                     "; ".join(
                         f"{j.get('domain') or '-'} 已等待 {j.get('age_seconds')} 秒"
                         for j in active_dns_jobs
+                    ),
+                )
+            if diagnostics.get("app_lock_locked"):
+                add_check(
+                    "certbot_app_lock",
+                    False,
+                    "应用内 Certbot 锁",
+                    "当前后端进程内仍有 certbot 操作占用锁；若没有任务，请重启后端或清理卡住任务",
+                )
+            lock_file_info = diagnostics.get("lock_file") or {}
+            if lock_file_info.get("exists"):
+                add_check(
+                    "certbot_lock_file",
+                    lock_file_info.get("pid_alive") is False,
+                    "Certbot 文件锁",
+                    (
+                        f"{lock_file_info.get('path')} pid={lock_file_info.get('pid')} "
+                        f"age={lock_file_info.get('age_seconds')}s alive={lock_file_info.get('pid_alive')}"
+                    ),
+                )
+            processes = diagnostics.get("processes") or []
+            if processes:
+                add_check(
+                    "certbot_processes",
+                    False,
+                    "系统 Certbot 进程",
+                    "; ".join(
+                        f"pid={p.get('pid')} etime={p.get('etime')} {p.get('args')}"
+                        for p in processes[:5]
                     ),
                 )
             add_check(
@@ -2232,9 +2349,11 @@ def test_auto_renew_environment() -> Dict[str, Any]:
                 "dry_run_output": "",
                 "error_code": "certbot_busy",
                 "active_dns_jobs": active_dns_jobs,
+                "busy_diagnostics": diagnostics,
                 "suggestions": [
-                    "如果正在申请 DNS 证书，请先完成申请或删除对应待签发记录",
-                    "如果确认没有任务，请点击“清理卡住任务”释放挂起的 DNS 验证会话",
+                    "如果显示有系统 Certbot 进程，请等待它结束；确认异常时在服务器上处理该进程",
+                    "如果显示应用内 Certbot 锁仍被占用，请重启后端/容器释放旧线程锁",
+                    "如果只有 stale 文件锁，请点击“清理卡住任务”或重启后端后重试",
                 ],
             }
 

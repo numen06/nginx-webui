@@ -42,6 +42,7 @@ from app.utils.certbot import (
     get_pending_dns_challenge_for_domain,
     cancel_dns_manual_challenge,
     cancel_all_dns_manual_challenges,
+    cleanup_stale_certbot_state,
     list_pending_dns_challenges,
     verify_dns_txt_record,
     verify_certificate_files,
@@ -1335,6 +1336,7 @@ async def dns_challenge_cancel_all(
 ):
     """取消全部挂起 DNS manual 会话，并把对应待签发记录标记为失败。"""
     result = cancel_all_dns_manual_challenges()
+    stale_cleanup = cleanup_stale_certbot_state()
     cancelled = result.get("cancelled") or []
     job_ids = [j.get("job_id") for j in cancelled if j.get("job_id")]
     if job_ids:
@@ -1358,6 +1360,7 @@ async def dns_challenge_cancel_all(
         details={"cancelled_count": len(cancelled), "job_ids": job_ids},
         ip_address=get_client_ip(request),
     )
+    result["stale_cleanup"] = stale_cleanup
     return result
 
 
