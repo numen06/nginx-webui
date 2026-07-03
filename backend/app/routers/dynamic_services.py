@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth import authenticate_user, get_current_user, get_user_by_token, User
-from app.config import get_config
+from app.config import get_config, save_dynamic_registry_config
 from app.database import SessionLocal, get_db
 from app.models import DynamicService, DynamicServiceInstance
 from app.utils.audit import create_audit_log, get_client_ip
@@ -24,6 +24,7 @@ from app.utils.dynamic_registry import (
     dynamic_service_hosts,
     get_dynamic_config_preview,
     instance_id_from_target_url,
+    normalize_domain_suffix,
     normalize_instance_id,
     normalize_route_prefix,
     normalize_service_name,
@@ -72,6 +73,16 @@ class EnableRequest(BaseModel):
     enabled: bool
 
 
+class DynamicRegistrySettingsRequest(BaseModel):
+    ip_whitelist: Optional[str] = None
+    domain_suffix: Optional[str] = None
+    default_ttl_seconds: int = Field(default=600, ge=30, le=86400)
+    cleanup_interval_seconds: int = Field(default=30, ge=10, le=86400)
+    offline_retention_seconds: int = Field(default=86400, ge=60, le=2592000)
+    health_check_enabled: bool = True
+    health_check_timeout_seconds: int = Field(default=3, ge=1, le=60)
+
+
 def _parse_configured_whitelist() -> Optional[List[ipaddress._BaseNetwork]]:
     whitelist = get_config().dynamic_registry.ip_whitelist
     if whitelist is None or not str(whitelist).strip():
@@ -90,6 +101,22 @@ def _parse_configured_whitelist() -> Optional[List[ipaddress._BaseNetwork]]:
                 detail=f"动态注册 IP 白名单配置无效: {value}",
             ) from exc
     return networks
+
+
+def _validate_ip_whitelist(value: Optional[str]) -> Optional[str]:
+    if value is None or not value.strip():
+        return None
+
+    normalized = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            normalized.append(str(ipaddress.ip_network(item, strict=False)))
+        except ValueError as exc:
+            raise ValueError(f"动态注册 IP 白名单配置无效: {item}") from exc
+    return ",".join(normalized) if normalized else None
 
 
 def _auto_same_subnet_networks() -> List[ipaddress._BaseNetwork]:
@@ -278,9 +305,50 @@ async def get_registry_auth_status(current_user: User = Depends(get_current_user
         "domain_suffix": get_config().dynamic_registry.domain_suffix,
         "default_ttl_seconds": get_config().dynamic_registry.default_ttl_seconds,
         "cleanup_interval_seconds": get_config().dynamic_registry.cleanup_interval_seconds,
+        "offline_retention_seconds": get_config().dynamic_registry.offline_retention_seconds,
         "health_check_enabled": get_config().dynamic_registry.health_check_enabled,
         "health_check_timeout_seconds": get_config().dynamic_registry.health_check_timeout_seconds,
     }
+
+
+@router.put("/settings", summary="更新动态注册配置")
+async def update_registry_settings(
+    payload: DynamicRegistrySettingsRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        ip_whitelist = _validate_ip_whitelist(payload.ip_whitelist)
+        domain_suffix = normalize_domain_suffix(payload.domain_suffix) or None
+
+        updates = {
+            "ip_whitelist": ip_whitelist,
+            "domain_suffix": domain_suffix,
+            "default_ttl_seconds": payload.default_ttl_seconds,
+            "cleanup_interval_seconds": payload.cleanup_interval_seconds,
+            "offline_retention_seconds": payload.offline_retention_seconds,
+            "health_check_enabled": payload.health_check_enabled,
+            "health_check_timeout_seconds": payload.health_check_timeout_seconds,
+        }
+        save_dynamic_registry_config(updates)
+        apply_result = _apply_or_raise(db)
+        create_audit_log(
+            db=db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="dynamic_registry_settings_update",
+            target="dynamic_registry",
+            details=updates,
+            ip_address=get_client_ip(request),
+        )
+        return {"success": True, "message": "动态注册配置已保存", **updates, "apply_result": apply_result}
+    except HTTPException:
+        db.rollback()
+        raise
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/generated-config", summary="动态服务生成配置预览")
@@ -643,6 +711,9 @@ def expire_dynamic_instances_once() -> dict:
     try:
         now = datetime.now()
         expired = []
+        deleted = []
+        deleted_services = []
+        touched_service_ids = set()
         refreshed = []
         registry_config = get_config().dynamic_registry
         instances = (
@@ -665,13 +736,37 @@ def expire_dynamic_instances_once() -> dict:
                 instance.status = "expired"
                 instance.updated_at = now
                 expired.append(instance)
+                touched_service_ids.add(instance.service_id)
 
-        if not expired:
+        retention_seconds = max(60, registry_config.offline_retention_seconds)
+        cutoff = now - timedelta(seconds=retention_seconds)
+        stale_instances = (
+            db.query(DynamicServiceInstance)
+            .filter(DynamicServiceInstance.status.in_(["offline", "expired"]))
+            .filter(DynamicServiceInstance.updated_at <= cutoff)
+            .all()
+        )
+        for instance in stale_instances:
+            touched_service_ids.add(instance.service_id)
+            deleted.append(instance)
+            db.delete(instance)
+
+        if touched_service_ids:
+            db.flush()
+            for service_id in touched_service_ids:
+                service = db.query(DynamicService).filter(DynamicService.id == service_id).first()
+                if service and not service.instances:
+                    deleted_services.append(service)
+                    db.delete(service)
+
+        if not expired and not deleted and not deleted_services:
             if refreshed:
                 db.commit()
             return {
                 "success": True,
                 "expired": 0,
+                "deleted": 0,
+                "deleted_services": 0,
                 "health_checked": len(instances) if registry_config.health_check_enabled else 0,
                 "refreshed": len(refreshed),
                 "reloaded": False,
@@ -681,12 +776,20 @@ def expire_dynamic_instances_once() -> dict:
         result = apply_dynamic_registry(db)
         if not result.get("success"):
             db.rollback()
-            return {"success": False, "expired": len(expired), "apply_result": result}
+            return {
+                "success": False,
+                "expired": len(expired),
+                "deleted": len(deleted),
+                "deleted_services": len(deleted_services),
+                "apply_result": result,
+            }
 
         db.commit()
         return {
             "success": True,
             "expired": len(expired),
+            "deleted": len(deleted),
+            "deleted_services": len(deleted_services),
             "health_checked": len(instances) if registry_config.health_check_enabled else 0,
             "refreshed": len(refreshed),
             "reloaded": True,
