@@ -1,5 +1,10 @@
 import api from './index'
 
+export interface ApiResult {
+  success: boolean
+  message?: string
+}
+
 export interface NginxStatusResponse {
   running: boolean
   version?: string | null
@@ -9,91 +14,153 @@ export interface NginxStatusResponse {
   error?: string
 }
 
+export interface ConfigInfoResponse extends ApiResult {
+  content?: string
+  config_path?: string | null
+  config_dir?: string | null
+  working_config_dir?: string | null
+  nginx_version?: string | null
+  nginx_version_detail?: string | null
+  active_version?: string | null
+  install_path?: string | null
+  binary?: string | null
+  pending_changes?: boolean
+}
+
+export interface ConfigEntry {
+  path: string
+  name?: string
+  is_dir: boolean
+  size?: number
+  modified_at?: string | null
+}
+
+export interface ConfigTreeResponse extends ApiResult {
+  root: string
+  files: ConfigEntry[]
+}
+
+export interface ConfigFileResponse extends ApiResult {
+  path: string
+  content: string
+  size?: number
+}
+
+export interface ConfigMutationResponse extends ApiResult {
+  path?: string
+  entry?: ConfigEntry
+}
+
+export interface ConfigTestResponse extends ApiResult {
+  warnings?: string[]
+  errors?: string[]
+  output?: string
+  formatted?: string
+}
+
+export interface ReloadConfigResponse extends ConfigTestResponse {
+  backup_id?: number
+  last_version_backup_id?: number
+  test_result?: ConfigTestResponse
+}
+
+export interface BackupInfo {
+  id: number
+  filename: string
+  file_path: string
+  created_at?: string | null
+  created_by_id?: number | null
+  is_last_version?: boolean
+}
+
+export interface BackupsResponse extends ApiResult {
+  backups: BackupInfo[]
+}
+
+export interface BackupMutationResponse extends ApiResult {
+  backup?: BackupInfo
+  backup_id?: number
+}
+
+export interface SplitLegacyResponse extends ApiResult {
+  backup_id?: number
+  test_result?: ConfigTestResponse
+}
+
+export interface MergedPreviewResponse extends ApiResult {
+  content: string
+}
+
 export const configApi = {
-  // 获取配置
   getConfig() {
-    return api.get('/config')
+    return api.get<ConfigInfoResponse>('/config')
   },
 
-  // 配置目录树
   getTree() {
-    return api.get('/config/tree')
+    return api.get<ConfigTreeResponse>('/config/tree')
   },
 
-  // 获取配置文件
-  getFile(path) {
-    return api.get('/config/file', { params: { path } })
+  getFile(path: string) {
+    return api.get<ConfigFileResponse>('/config/file', { params: { path } })
   },
 
-  // 保存配置文件
-  updateFile(path, content) {
-    return api.put('/config/file', { path, content })
+  updateFile(path: string, content: string) {
+    return api.put<ConfigMutationResponse>('/config/file', { path, content })
   },
 
-  // 创建配置目录
-  createDirectory(path, name) {
-    return api.post('/config/mkdir', { path, name })
+  createDirectory(path: string, name: string) {
+    return api.post<ConfigMutationResponse>('/config/mkdir', { path, name })
   },
 
-  // 重命名配置文件或目录
-  renamePath(path, newName) {
-    return api.post('/config/rename', { path, new_name: newName })
+  renamePath(path: string, newName: string) {
+    return api.post<ConfigMutationResponse>('/config/rename', { path, new_name: newName })
   },
 
-  // 删除配置文件或目录
-  deletePath(path) {
-    return api.delete('/config/file', { params: { path } })
+  deletePath(path: string) {
+    return api.delete<ApiResult>('/config/file', { params: { path } })
   },
 
-  // 测试配置
   testConfig() {
-    return api.post('/config/test')
+    return api.post<ConfigTestResponse>('/config/test')
   },
 
-  // 重载配置
   reloadConfig() {
-    return api.post('/config/reload')
+    return api.post<ReloadConfigResponse>('/config/reload')
   },
 
-  // 强制覆盖配置（不重载nginx）
   applyConfig() {
-    return api.post('/config/apply')
+    return api.post<ReloadConfigResponse>('/config/apply')
   },
 
-  // 获取状态
   getStatus() {
     return api.get<NginxStatusResponse>('/config/status')
   },
 
-  // 获取备份列表
   getBackups() {
-    return api.get('/config/backups')
+    return api.get<BackupsResponse>('/config/backups')
   },
 
-  // 创建备份
   createBackup() {
-    return api.post('/config/backup')
+    return api.post<BackupMutationResponse>('/config/backup')
   },
 
-  // 恢复备份
-  restoreBackup(backupId) {
-    return api.post(`/config/restore/${backupId}`)
+  restoreBackup(backupId: number) {
+    return api.post<BackupMutationResponse>(`/config/restore/${backupId}`)
   },
 
-  // 格式化配置
-  formatConfig(content) {
-    return api.post('/config/format', { content })
+  formatConfig(content: string) {
+    return api.post<ConfigTestResponse>('/config/format', { content })
   },
 
-  validateFile(path, content) {
-    return api.post('/config/validate', { path, content })
+  validateFile(path: string, content: string) {
+    return api.post<ConfigTestResponse>('/config/validate', { path, content })
   },
 
   splitLegacyConfig() {
-    return api.post('/config/split-legacy')
+    return api.post<SplitLegacyResponse>('/config/split-legacy')
   },
 
   getMergedPreview() {
-    return api.get('/config/merged-preview')
-  }
+    return api.get<MergedPreviewResponse>('/config/merged-preview')
+  },
 }

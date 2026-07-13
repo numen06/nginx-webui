@@ -1,235 +1,91 @@
-<template>
-  <div class="config-page page-shell">
-    <ui-card>
-      <template #header>
-        <div class="card-header">
-          <span>Nginx 配置</span>
-          <div class="header-actions">
-            <ui-button @click="handleFormat" :disabled="!currentFilePath">
-              <ui-icon><MagicStick /></ui-icon>
-              <span class="btn-label">格式化</span>
-            </ui-button>
-            <ui-button @click="handleValidate" :disabled="!currentFilePath">
-              <ui-icon><Finished /></ui-icon>
-              <span class="btn-label">校验配置</span>
-            </ui-button>
-            <ui-button @click="handleTest">
-              <ui-icon><Cpu /></ui-icon>
-              <span class="btn-label">测试配置</span>
-            </ui-button>
-            <ui-button type="success" @click="handleSave" :loading="saving" :disabled="!currentFilePath">
-              <ui-icon><DocumentChecked /></ui-icon>
-              <span class="btn-label">保存</span>
-            </ui-button>
-            <ui-button type="warning" @click="handleApply" :loading="applying">
-              <ui-icon><Upload /></ui-icon>
-              <span class="btn-label">强制覆盖</span>
-            </ui-button>
-            <ui-button type="warning" @click="handleReload">
-              <ui-icon><Refresh /></ui-icon>
-              <span class="btn-label">重新装载</span>
-            </ui-button>
-          </div>
-        </div>
-      </template>
-
-      <div class="config-info">
-        <ui-descriptions :column="2" border size="small">
-          <ui-descriptions-item v-if="configInfo.install_path" label="当前 Nginx 目录">
-            <ui-text type="info" size="small">{{ configInfo.install_path }}</ui-text>
-          </ui-descriptions-item>
-          <ui-descriptions-item label="当前 Nginx 版本">
-            <ui-tag v-if="configInfo.nginx_version" type="info" size="small">
-              {{ configInfo.nginx_version }}
-            </ui-tag>
-            <span v-else class="text-muted">未知</span>
-          </ui-descriptions-item>
-          <ui-descriptions-item label="配置目录" :span="2">
-            <ui-text v-if="configInfo.config_dir" class="config-path" size="small">
-              {{ configInfo.config_dir }}
-            </ui-text>
-            <span v-else class="text-muted">未知</span>
-          </ui-descriptions-item>
-          <ui-descriptions-item v-if="configInfo.binary" label="可执行文件路径" :span="2">
-            <ui-text type="info" size="small">{{ configInfo.binary }}</ui-text>
-          </ui-descriptions-item>
-          <ui-descriptions-item label="临时配置状态">
-            <ui-tag :type="configInfo.pending_changes ? 'warning' : 'success'" size="small">
-              {{ configInfo.pending_changes ? '存在未应用的修改' : '已与运行版本同步' }}
-            </ui-tag>
-          </ui-descriptions-item>
-          <ui-descriptions-item label="配置备份版本" :span="2">
-            <div class="backup-row">
-              <ui-select
-                v-model="selectedBackupId"
-                placeholder="选择一个备份版本（最多显示最近 10 个）"
-                class="backup-select"
-                :disabled="backupLoading || backupOptions.length === 0"
-              >
-                <ui-option
-                  v-for="item in backupOptions"
-                  :key="item.id"
-                  :label="item.label"
-                  :value="item.id"
-                />
-              </ui-select>
-              <ui-button class="backup-btn" @click="handleLoadBackups" :loading="backupLoading" link>
-                <ui-icon><RefreshRight /></ui-icon>
-                <span class="btn-label">刷新</span>
-              </ui-button>
-              <ui-button type="primary" class="backup-btn" @click="handleCreateBackup" :loading="backupLoading">
-                <ui-icon><DocumentAdd /></ui-icon>
-                <span class="btn-label">备份当前线上配置</span>
-              </ui-button>
-              <ui-button type="warning" class="backup-btn" :disabled="!selectedBackupId" @click="handleRollback">
-                <ui-icon><RefreshLeft /></ui-icon>
-                <span class="btn-label">回滚到所选版本</span>
-              </ui-button>
-            </div>
-          </ui-descriptions-item>
-        </ui-descriptions>
-      </div>
-
-      <div class="config-toolbar">
-        <ui-button type="primary" @click="handleNewSite">
-          <ui-icon><DocumentAdd /></ui-icon>
-          <span class="btn-label">新建站点</span>
-        </ui-button>
-        <ui-button @click="handleNewFile">
-          <ui-icon><DocumentAdd /></ui-icon>
-          <span class="btn-label">新建文件</span>
-        </ui-button>
-        <ui-button @click="handleNewDir">
-          <ui-icon><FolderAdd /></ui-icon>
-          <span class="btn-label">新建目录</span>
-        </ui-button>
-        <ui-button @click="handleRename" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'">
-          <ui-icon><Edit /></ui-icon>
-          <span class="btn-label">重命名</span>
-        </ui-button>
-        <ui-button type="danger" @click="handleDelete" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'">
-          <ui-icon><Delete /></ui-icon>
-          <span class="btn-label">删除</span>
-        </ui-button>
-        <ui-button type="warning" @click="handleSplitLegacy">
-          <ui-icon><Scissor /></ui-icon>
-          <span class="btn-label">拆分老配置</span>
-        </ui-button>
-        <ui-button @click="handleMergedPreview">
-          <ui-icon><View /></ui-icon>
-          <span class="btn-label">合并预览</span>
-        </ui-button>
-      </div>
-
-      <div class="config-workspace">
-        <aside class="config-sidebar">
-          <ui-tabs v-model="sidebarTab" stretch>
-            <ui-tab-pane label="站点配置" name="sites">
-              <ui-scrollbar height="620px">
-                <div
-                  v-for="site in siteItems"
-                  :key="site.path"
-                  class="site-item"
-                  :class="{ active: site.path === currentFilePath }"
-                  @click="openFile(site.path)"
-                >
-                  <span class="site-name">{{ site.label }}</span>
-                  <span class="site-path">{{ site.path }}</span>
-                </div>
-                <ui-empty v-if="siteItems.length === 0" description="暂无站点配置" :image-size="72" />
-              </ui-scrollbar>
-            </ui-tab-pane>
-            <ui-tab-pane label="文件树" name="files">
-              <ui-scrollbar height="620px">
-                <ui-tree
-                  class="config-tree"
-                  :data="fileTree"
-                  node-key="path"
-                  :props="treeProps"
-                  default-expand-all
-                  highlight-current
-                  @node-click="handleTreeNodeClick"
-                />
-              </ui-scrollbar>
-            </ui-tab-pane>
-          </ui-tabs>
-        </aside>
-
-        <main class="editor-panel">
-          <div class="editor-header">
-            <div>
-              <span class="current-file">{{ currentFilePath || '未选择文件' }}</span>
-              <ui-tag v-if="isModified" type="warning" size="small">未保存</ui-tag>
-            </div>
-            <ui-text v-if="currentFilePath" type="info" size="small">工作副本</ui-text>
-          </div>
-          <MonacoEditor
-            v-if="currentFilePath"
-            v-model="configContent"
-            language="nginx"
-            height="620px"
-            @change="handleContentChange"
-          />
-          <ui-empty v-else description="请选择一个配置文件" />
-        </main>
-      </div>
-
-      <ui-alert class="working-copy-alert" type="info" show-icon :closable="false">
-        <template #title>配置目录临时副本模式</template>
-        <p class="working-copy-text">
-          保存后仅更新工作副本，测试通过后点击“重新装载”才会覆盖线上 conf/ 配置目录并自动备份。
-        </p>
-      </ui-alert>
-    </ui-card>
-
-    <ui-dialog v-model="previewVisible" title="合并预览" width="80%">
-      <pre class="preview-content">{{ previewContent }}</pre>
-      <template #footer>
-        <ui-button type="primary" @click="previewVisible = false">关闭</ui-button>
-      </template>
-    </ui-dialog>
-  </div>
-</template>
-
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { configApi } from '../api/config'
-import MonacoEditor from '../components/MonacoEditor.vue'
-import { ElMessage, ElMessageBox } from '@/lib/feedback'
-import { formatDateTime } from '../utils/date'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
-  MagicStick,
-  Finished,
-  Cpu,
-  DocumentChecked,
-  Refresh,
-  RefreshRight,
-  DocumentAdd,
-  RefreshLeft,
+  Archive,
+  CheckCircle2,
+  Eye,
+  FileCode2,
+  Folder,
+  FolderPlus,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Scissors,
+  Search,
+  Server,
+  Sparkles,
+  TestTube2,
+  Trash2,
   Upload,
-  Edit,
-  Delete,
-  FolderAdd,
-  View,
-  Scissor
-} from '@/components/icons'
+  X,
+} from 'lucide-vue-next'
+import { apiErrorMessage } from '@/api'
+import {
+  configApi,
+  type ConfigEntry,
+  type ConfigInfoResponse,
+  type ConfigTestResponse,
+} from '@/api/config'
+import MonacoEditor from '@/components/MonacoEditor.vue'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
+import { formatDateTime } from '@/utils/date'
 
-const configContent = ref('')
-const originalContent = ref('')
-const currentFilePath = ref('')
-const isModified = ref(false)
-const saving = ref(false)
-const applying = ref(false)
-const backupLoading = ref(false)
-const selectedBackupId = ref(null)
-const backupOptions = ref([])
-const sidebarTab = ref('sites')
-const flatEntries = ref([])
-const siteItems = ref([])
-const previewVisible = ref(false)
-const previewContent = ref('')
+interface ConfigInfo {
+  nginx_version: string | null
+  nginx_version_detail: string | null
+  config_path: string | null
+  config_dir: string | null
+  active_version: string | null
+  install_path: string | null
+  binary: string | null
+  pending_changes: boolean
+}
 
-const configInfo = ref({
+interface SiteItem {
+  path: string
+  label: string
+}
+
+interface BackupOption {
+  id: number
+  label: string
+}
+
+type SidebarTab = 'sites' | 'files'
+
+const EMPTY_CONFIG_INFO: ConfigInfo = {
   nginx_version: null,
   nginx_version_detail: null,
   config_path: null,
@@ -237,70 +93,121 @@ const configInfo = ref({
   active_version: null,
   install_path: null,
   binary: null,
-  pending_changes: false
-})
-
-const treeProps = {
-  children: 'children',
-  label: 'label'
+  pending_changes: false,
 }
 
-const fileTree = computed(() => buildTree(flatEntries.value))
+const configContent = ref('')
+const originalContent = ref('')
+const currentFilePath = ref('')
+const isModified = ref(false)
+const loading = ref(true)
+const saving = ref(false)
+const applying = ref(false)
+const backupLoading = ref(false)
+const pageError = ref('')
+const selectedBackupId = ref('')
+const backupOptions = ref<BackupOption[]>([])
+const sidebarTab = ref<SidebarTab>('sites')
+const flatEntries = ref<ConfigEntry[]>([])
+const siteItems = ref<SiteItem[]>([])
+const siteKeyword = ref('')
+const previewVisible = ref(false)
+const previewContent = ref('')
+const configInfo = ref<ConfigInfo>({ ...EMPTY_CONFIG_INFO })
 
-onMounted(async () => {
-  await loadConfig()
-  await handleLoadBackups()
-  window.addEventListener('keydown', handleSaveShortcut)
+const filteredSites = computed(() => {
+  const query = siteKeyword.value.trim().toLowerCase()
+  if (!query) return siteItems.value
+  return siteItems.value.filter(site =>
+    site.label.toLowerCase().includes(query) || site.path.toLowerCase().includes(query),
+  )
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleSaveShortcut)
+const filteredEntries = computed(() => {
+  const query = siteKeyword.value.trim().toLowerCase()
+  return [...flatEntries.value]
+    .filter(entry => !query
+      || entry.path.toLowerCase().includes(query)
+      || entry.name?.toLowerCase().includes(query))
+    .sort((a, b) => a.path.localeCompare(b.path))
 })
 
-const buildTree = (entries) => {
-  const root = []
-  const nodes = new Map()
-  const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path))
+const selectedSiteVisible = computed(() => filteredSites.value.some(site => site.path === currentFilePath.value))
 
-  for (const entry of sorted) {
-    const parts = entry.path.split('/')
-    const label = parts[parts.length - 1]
-    const node = {
-      ...entry,
-      label,
-      children: []
+function entryDepth(entry: ConfigEntry): number {
+  return Math.max(0, entry.path.split('/').length - 1)
+}
+
+function parseSiteLabel(path: string, content: string): string {
+  const match = content.match(/^\s*server_name\s+([^;]+);/m)
+  if (!match) return path.split('/').pop() || path
+  return match[1]?.split(/\s+/).filter(Boolean).join(', ') || path
+}
+
+function normalizeConfigInfo(response: ConfigInfoResponse): ConfigInfo {
+  return {
+    nginx_version: response.nginx_version || null,
+    nginx_version_detail: response.nginx_version_detail || null,
+    config_path: response.config_path || null,
+    config_dir: response.config_dir || null,
+    active_version: response.active_version || null,
+    install_path: response.install_path || null,
+    binary: response.binary || null,
+    pending_changes: Boolean(response.pending_changes),
+  }
+}
+
+async function loadTreeAndSites() {
+  const treeResponse = await configApi.getTree()
+  flatEntries.value = treeResponse.files || []
+
+  const confFiles = flatEntries.value
+    .filter(item => !item.is_dir && item.path.startsWith('conf.d/') && item.path.endsWith('.conf'))
+    .sort((a, b) => a.path.localeCompare(b.path))
+  const fileResults = await Promise.allSettled(confFiles.map(item => configApi.getFile(item.path)))
+
+  siteItems.value = confFiles.map((item, index) => {
+    const result = fileResults[index]
+    if (result?.status === 'fulfilled') {
+      return { path: item.path, label: parseSiteLabel(item.path, result.value.content || '') }
     }
-    nodes.set(entry.path, node)
-    const parentPath = parts.slice(0, -1).join('/')
-    if (parentPath && nodes.has(parentPath)) {
-      nodes.get(parentPath).children.push(node)
-    } else {
-      root.push(node)
+    return { path: item.path, label: item.name || item.path.split('/').pop() || item.path }
+  })
+}
+
+function findDefaultFile(): string {
+  if (siteItems.value.length > 0) return siteItems.value[0]?.path || ''
+  if (flatEntries.value.some(item => item.path === 'nginx.conf')) return 'nginx.conf'
+  return flatEntries.value.find(item => !item.is_dir)?.path || ''
+}
+
+async function openFile(path: string, options: { reload?: boolean; discardChanges?: boolean } = {}) {
+  if (!path || (path === currentFilePath.value && !options.reload)) return
+  if (isModified.value && !options.discardChanges) {
+    try {
+      await ElMessageBox.confirm('当前文件有未保存修改，切换文件将放弃这些修改。是否继续？', '未保存的修改')
+    } catch {
+      return
     }
   }
-  return root
+
+  try {
+    const response = await configApi.getFile(path)
+    currentFilePath.value = response.path || path
+    configContent.value = response.content || ''
+    originalContent.value = configContent.value
+    isModified.value = false
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, '读取配置文件失败'))
+  }
 }
 
-const parseSiteLabel = (path, content) => {
-  const match = content.match(/^\s*server_name\s+([^;]+);/m)
-  if (!match) return path.split('/').pop()
-  return match[1].split(/\s+/).filter(Boolean).join(', ')
-}
-
-const loadConfig = async () => {
+async function loadConfig() {
+  loading.value = true
+  pageError.value = ''
   try {
     const response = await configApi.getConfig()
-    configInfo.value = {
-      nginx_version: response.nginx_version || null,
-      nginx_version_detail: response.nginx_version_detail || null,
-      config_path: response.config_path || null,
-      config_dir: response.config_dir || null,
-      active_version: response.active_version || null,
-      install_path: response.install_path || null,
-      binary: response.binary || null,
-      pending_changes: Boolean(response.pending_changes)
-    }
-
+    configInfo.value = normalizeConfigInfo(response)
     await loadTreeAndSites()
     const preferred = currentFilePath.value || findDefaultFile()
     if (preferred) {
@@ -312,73 +219,19 @@ const loadConfig = async () => {
       isModified.value = false
     }
   } catch (error) {
-    console.error('加载配置失败:', error)
-    ElMessage.error(error?.detail || error?.message || '加载配置失败')
+    pageError.value = apiErrorMessage(error, '加载配置失败')
+    ElMessage.error(pageError.value)
+  } finally {
+    loading.value = false
   }
 }
 
-const loadTreeAndSites = async () => {
-  const treeResponse = await configApi.getTree()
-  flatEntries.value = treeResponse.files || []
-
-  const confFiles = flatEntries.value
-    .filter((item) => !item.is_dir && item.path.startsWith('conf.d/') && item.path.endsWith('.conf'))
-    .sort((a, b) => a.path.localeCompare(b.path))
-
-  const sites = []
-  for (const item of confFiles) {
-    try {
-      const file = await configApi.getFile(item.path)
-      sites.push({
-        path: item.path,
-        label: parseSiteLabel(item.path, file.content || '')
-      })
-    } catch {
-      sites.push({ path: item.path, label: item.name })
-    }
-  }
-  siteItems.value = sites
-}
-
-const findDefaultFile = () => {
-  if (siteItems.value.length > 0) return siteItems.value[0].path
-  if (flatEntries.value.some((item) => item.path === 'nginx.conf')) return 'nginx.conf'
-  const firstFile = flatEntries.value.find((item) => !item.is_dir)
-  return firstFile?.path || ''
-}
-
-const openFile = async (path, options: { reload?: boolean; discardChanges?: boolean } = {}) => {
-  if (!path) return
-  if (path === currentFilePath.value && !options.reload) return
-  if (isModified.value && !options.discardChanges) {
-    try {
-      await ElMessageBox.confirm('当前文件有未保存修改，切换文件将放弃这些修改。是否继续？', '未保存的修改', {
-        type: 'warning'
-      })
-    } catch {
-      return
-    }
-  }
-
-  const response = await configApi.getFile(path)
-  currentFilePath.value = response.path || path
-  configContent.value = response.content || ''
-  originalContent.value = configContent.value
-  isModified.value = false
-}
-
-const handleTreeNodeClick = (node) => {
-  if (!node.is_dir) {
-    openFile(node.path)
-  }
-}
-
-const handleContentChange = () => {
+function handleContentChange() {
   isModified.value = configContent.value !== originalContent.value
 }
 
-const handleSave = async () => {
-  if (!currentFilePath.value || saving.value) return
+async function handleSave(): Promise<boolean> {
+  if (!currentFilePath.value || saving.value) return false
   saving.value = true
   try {
     await configApi.updateFile(currentFilePath.value, configContent.value)
@@ -386,243 +239,224 @@ const handleSave = async () => {
     isModified.value = false
     configInfo.value.pending_changes = true
     await loadTreeAndSites()
-    ElMessage.success('配置已保存到临时副本')
+    ElMessage.success('配置已保存到工作副本')
+    return true
   } catch (error) {
-    ElMessage.error(error?.detail || error?.message || '保存配置失败')
+    ElMessage.error(apiErrorMessage(error, '保存配置失败'))
+    return false
   } finally {
     saving.value = false
   }
 }
 
-const saveIfModified = async () => {
-  if (isModified.value) {
-    await handleSave()
-  }
+async function saveIfModified(): Promise<boolean> {
+  return isModified.value ? handleSave() : true
 }
 
-const handleSaveShortcut = (event) => {
+function handleSaveShortcut(event: KeyboardEvent) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
-    handleSave()
+    void handleSave()
   }
 }
 
-const handleFormat = async () => {
+async function handleFormat() {
   if (!currentFilePath.value) return
   const original = configContent.value
   try {
     const response = await configApi.formatConfig(configContent.value)
     if (response.success && response.formatted?.trim()) {
       configContent.value = response.formatted
-      isModified.value = true
+      isModified.value = configContent.value !== originalContent.value
       ElMessage.success('配置已格式化')
     } else {
       configContent.value = original
       ElMessage.warning(response.message || '格式化失败，已保留原配置')
     }
-  } catch {
+  } catch (error) {
     configContent.value = original
-    ElMessage.error('格式化配置失败，已保留原配置')
+    ElMessage.error(apiErrorMessage(error, '格式化配置失败，已保留原配置'))
   }
 }
 
-const showTestResult = (response, titlePrefix) => {
+function showTestResult(response: ConfigTestResponse, titlePrefix: string) {
   if (response.success) {
     const warningText = response.warnings?.length ? `，但有 ${response.warnings.length} 个警告` : ''
     ElMessage.success(`${titlePrefix}成功${warningText}`)
     if (response.warnings?.length) {
-      ElMessageBox.alert(response.warnings.join('\n\n'), `${titlePrefix}警告`, { type: 'warning' })
+      void ElMessageBox.alert(response.warnings.join('\n\n'), `${titlePrefix}警告`)
     }
     return
   }
 
   let message = response.message || `${titlePrefix}失败`
-  if (response.errors?.length) {
-    message += '\n\n详细错误信息：\n\n' + response.errors.join('\n\n')
-  }
-  if (response.output?.trim()) {
-    message += '\n\n完整输出：\n' + response.output
-  }
-  ElMessageBox.alert(message, `${titlePrefix}失败`, {
-    type: 'error',
-    confirmButtonText: '确定',
-    customClass: 'error-dialog'
-  })
+  if (response.errors?.length) message += `\n\n详细错误信息：\n\n${response.errors.join('\n\n')}`
+  if (response.output?.trim()) message += `\n\n完整输出：\n${response.output}`
+  void ElMessageBox.alert(message, `${titlePrefix}失败`)
 }
 
-const handleValidate = async () => {
+async function handleValidate() {
   if (!currentFilePath.value) return
   try {
-    const response = await configApi.validateFile(currentFilePath.value, configContent.value)
-    showTestResult(response, '配置校验')
+    showTestResult(await configApi.validateFile(currentFilePath.value, configContent.value), '配置校验')
   } catch (error) {
-    ElMessage.error('校验配置失败: ' + (error?.message || error?.detail || '未知错误'))
+    ElMessage.error(apiErrorMessage(error, '校验配置失败'))
   }
 }
 
-const handleTest = async () => {
+async function handleTest() {
   try {
-    await saveIfModified()
-    const response = await configApi.testConfig()
-    showTestResult(response, '配置测试')
+    if (!await saveIfModified()) return
+    showTestResult(await configApi.testConfig(), '配置测试')
   } catch (error) {
-    ElMessage.error('测试配置失败: ' + (error?.message || error?.detail || '未知错误'))
+    ElMessage.error(apiErrorMessage(error, '测试配置失败'))
   }
 }
 
-const handleApply = async () => {
-  if (applying.value) return
+async function handleApply() {
+  if (applying.value || !await saveIfModified()) return
   try {
-    await saveIfModified()
     await ElMessageBox.confirm(
-      '强制覆盖会将工作副本覆盖到实际 conf/ 配置目录，但不会重载 Nginx。建议覆盖后手动重启 Nginx 使配置生效。是否继续？',
+      '强制覆盖会将工作副本覆盖到实际配置目录，但不会重载 Nginx。是否继续？',
       '强制覆盖确认',
-      { confirmButtonText: '覆盖配置', cancelButtonText: '取消', type: 'warning' }
+      { confirmButtonText: '覆盖配置', cancelButtonText: '取消' },
     )
-
     applying.value = true
     const response = await configApi.applyConfig()
-    if (response.success) {
-      await ElMessageBox.alert('配置目录已成功覆盖。\n\n建议重启 Nginx 使新配置生效。', '覆盖成功', {
-        confirmButtonText: '知道了',
-        type: 'success'
-      })
-      configInfo.value.pending_changes = false
-      await loadConfig()
-      await handleLoadBackups()
-    } else {
-      ElMessage.error('强制覆盖失败: ' + response.message)
+    if (!response.success) {
+      showTestResult(response.test_result || response, '强制覆盖')
+      return
     }
+    configInfo.value.pending_changes = false
+    ElMessage.success(response.message || '配置目录已覆盖，建议重启 Nginx')
+    await Promise.all([loadConfig(), handleLoadBackups()])
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '强制覆盖配置失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '强制覆盖配置失败'))
   } finally {
     applying.value = false
   }
 }
 
-const handleReload = async () => {
+async function handleReload() {
   try {
-    await saveIfModified()
-    await ElMessageBox.confirm('确定要重新装载配置吗？', '提示', { type: 'warning' })
+    if (!await saveIfModified()) return
+    await ElMessageBox.confirm('测试通过后将覆盖线上配置并重新装载 Nginx，是否继续？', '重新装载配置')
     const response = await configApi.reloadConfig()
-    if (response.success) {
-      const backupInfo = response.backup_id ? `，已创建备份 #${response.backup_id}` : ''
-      ElMessage.success(`配置重载成功${backupInfo}`)
-      configInfo.value.pending_changes = false
-      isModified.value = false
-      await loadConfig()
-      await handleLoadBackups()
-    } else {
+    if (!response.success) {
       showTestResult(response.test_result || response, '配置重载')
+      return
     }
+    const backupInfo = response.backup_id ? `，已创建备份 #${response.backup_id}` : ''
+    ElMessage.success(`配置重载成功${backupInfo}`)
+    await Promise.all([loadConfig(), handleLoadBackups()])
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('重新装载配置失败: ' + (error?.message || error?.detail || error))
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '重新装载配置失败'))
   }
 }
 
-const sanitizeFileName = (value) => {
+function sanitizeFileName(value: string): string {
   const cleaned = value.trim().toLowerCase().replace(/^\*\./, 'wildcard-').replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
   return cleaned || 'default'
 }
 
-const handleNewSite = async () => {
+async function handleNewSite() {
   try {
     const { value } = await ElMessageBox.prompt('请输入站点域名', '新建站点', {
-      inputPattern: /.+/,
-      inputErrorMessage: '域名不能为空',
+      inputPlaceholder: 'example.com',
       confirmButtonText: '创建',
-      cancelButtonText: '取消'
+      cancelButtonText: '取消',
     })
-    const domain = value.trim()
+    const domain = String(value).trim()
+    if (!domain) {
+      ElMessage.warning('域名不能为空')
+      return
+    }
     const path = `conf.d/${sanitizeFileName(domain)}.conf`
     const content = `server {\n    listen 80;\n    server_name ${domain};\n\n    root html;\n    index index.html index.htm;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\n`
     await configApi.updateFile(path, content)
     configInfo.value.pending_changes = true
+    siteKeyword.value = ''
     await loadTreeAndSites()
     await openFile(path, { discardChanges: true })
     sidebarTab.value = 'sites'
     ElMessage.success('站点配置已创建')
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '创建站点失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '创建站点失败'))
   }
 }
 
-const handleNewFile = async () => {
+async function handleNewFile() {
   try {
     const { value } = await ElMessageBox.prompt('请输入配置文件路径', '新建文件', {
       inputValue: 'conf.d/new-site.conf',
-      inputPattern: /.+/,
-      inputErrorMessage: '路径不能为空',
       confirmButtonText: '创建',
-      cancelButtonText: '取消'
+      cancelButtonText: '取消',
     })
-    await configApi.updateFile(value.trim(), '')
+    const path = String(value).trim()
+    if (!path) return
+    await configApi.updateFile(path, '')
     configInfo.value.pending_changes = true
     await loadTreeAndSites()
-    await openFile(value.trim(), { discardChanges: true })
+    await openFile(path, { discardChanges: true })
     ElMessage.success('配置文件已创建')
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '创建文件失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '创建文件失败'))
   }
 }
 
-const handleNewDir = async () => {
-  const parent = currentFilePath.value?.includes('/')
+async function handleNewDir() {
+  const parent = currentFilePath.value.includes('/')
     ? currentFilePath.value.split('/').slice(0, -1).join('/')
     : ''
   try {
     const { value } = await ElMessageBox.prompt('请输入目录名称', '新建目录', {
-      inputPattern: /^[^/\\]+$/,
-      inputErrorMessage: '目录名不能为空，且不能包含 / 或 \\',
       confirmButtonText: '创建',
-      cancelButtonText: '取消'
+      cancelButtonText: '取消',
     })
-    await configApi.createDirectory(parent, value.trim())
+    const name = String(value).trim()
+    if (!name || /[/\\]/.test(name)) {
+      ElMessage.warning('目录名不能为空，且不能包含 / 或 \\')
+      return
+    }
+    await configApi.createDirectory(parent, name)
     configInfo.value.pending_changes = true
     await loadTreeAndSites()
     ElMessage.success('目录已创建')
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '创建目录失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '创建目录失败'))
   }
 }
 
-const handleRename = async () => {
+async function handleRename() {
   if (!currentFilePath.value || currentFilePath.value === 'nginx.conf') return
-  const oldName = currentFilePath.value.split('/').pop()
+  const oldName = currentFilePath.value.split('/').pop() || ''
   try {
     const { value } = await ElMessageBox.prompt('请输入新名称', '重命名', {
       inputValue: oldName,
-      inputPattern: /^[^/\\]+$/,
-      inputErrorMessage: '名称不能为空，且不能包含 / 或 \\',
       confirmButtonText: '重命名',
-      cancelButtonText: '取消'
+      cancelButtonText: '取消',
     })
-    const response = await configApi.renamePath(currentFilePath.value, value.trim())
+    const name = String(value).trim()
+    if (!name || /[/\\]/.test(name)) {
+      ElMessage.warning('名称不能为空，且不能包含 / 或 \\')
+      return
+    }
+    const response = await configApi.renamePath(currentFilePath.value, name)
+    const nextPath = response.entry?.path
+    if (!nextPath) throw new Error('接口未返回重命名后的路径')
     configInfo.value.pending_changes = true
     await loadTreeAndSites()
-    await openFile(response.entry.path, { discardChanges: true })
+    await openFile(nextPath, { discardChanges: true })
     ElMessage.success('重命名成功')
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '重命名失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '重命名失败'))
   }
 }
 
-const handleDelete = async () => {
+async function handleDelete() {
   if (!currentFilePath.value || currentFilePath.value === 'nginx.conf') return
   try {
-    await ElMessageBox.confirm(`确定要删除 ${currentFilePath.value} 吗？`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(`确定删除“${currentFilePath.value}”吗？此操作不可恢复。`, '删除配置')
     await configApi.deletePath(currentFilePath.value)
     currentFilePath.value = ''
     configContent.value = ''
@@ -634,310 +468,285 @@ const handleDelete = async () => {
     if (nextFile) await openFile(nextFile, { discardChanges: true })
     ElMessage.success('删除成功')
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '删除失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '删除失败'))
   }
 }
 
-const handleSplitLegacy = async () => {
+async function handleSplitLegacy() {
   try {
-    await saveIfModified()
+    if (!await saveIfModified()) return
     await ElMessageBox.confirm(
-      '拆分会在工作副本中保留 nginx.conf.legacy，并将 server 等配置拆到 conf.d。不会直接覆盖线上配置。',
+      '拆分会保留 nginx.conf.legacy，并将 server 配置拆到 conf.d。是否继续？',
       '拆分老配置',
-      { type: 'warning', confirmButtonText: '开始拆分', cancelButtonText: '取消' }
     )
     const response = await configApi.splitLegacyConfig()
     await loadConfig()
-    const message = response.test_result?.success
-      ? `${response.message}，测试通过`
-      : `${response.message || '拆分完成'}，请检查测试结果`
-    ElMessage.success(message)
-    if (response.test_result && !response.test_result.success) {
-      showTestResult(response.test_result, '拆分后配置测试')
-    }
+    ElMessage.success(response.test_result?.success ? `${response.message || '拆分完成'}，测试通过` : response.message || '拆分完成')
+    if (response.test_result && !response.test_result.success) showTestResult(response.test_result, '拆分后配置测试')
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '拆分配置失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '拆分配置失败'))
   }
 }
 
-const handleMergedPreview = async () => {
+async function handleMergedPreview() {
   try {
-    await saveIfModified()
+    if (!await saveIfModified()) return
     const response = await configApi.getMergedPreview()
     previewContent.value = response.content || ''
     previewVisible.value = true
-    await nextTick()
   } catch (error) {
-    ElMessage.error(error?.detail || error?.message || '生成合并预览失败')
+    ElMessage.error(apiErrorMessage(error, '生成合并预览失败'))
   }
 }
 
-const handleLoadBackups = async () => {
+async function handleLoadBackups() {
   backupLoading.value = true
   try {
-    const res = await configApi.getBackups()
-    const list = res?.backups || []
-    backupOptions.value = list.map((item) => {
-      const timeText = item.created_at ? formatDateTime(item.created_at) : '未知时间'
-      const lastVersionTag = item.is_last_version ? ' [最后版本]' : ''
-      return {
-        id: item.id,
-        label: `${timeText}（ID: ${item.id}）${lastVersionTag}`
-      }
-    })
-    selectedBackupId.value = backupOptions.value[0]?.id || null
+    const response = await configApi.getBackups()
+    backupOptions.value = (response.backups || []).map(item => ({
+      id: item.id,
+      label: `${item.created_at ? formatDateTime(item.created_at) : '未知时间'} · #${item.id}${item.is_last_version ? ' · 当前线上版本' : ''}`,
+    }))
+    selectedBackupId.value = backupOptions.value[0]?.id.toString() || ''
   } catch (error) {
-    ElMessage.error(error?.detail || error?.message || '获取备份列表失败')
+    ElMessage.error(apiErrorMessage(error, '获取备份列表失败'))
   } finally {
     backupLoading.value = false
   }
 }
 
-const handleCreateBackup = async () => {
+async function handleCreateBackup() {
   backupLoading.value = true
   try {
-    const res = await configApi.createBackup()
-    if (res?.success) {
-      ElMessage.success('备份创建成功（已保存当前线上配置目录）')
-      await handleLoadBackups()
-    } else {
-      ElMessage.error(res?.message || '备份创建失败')
+    const response = await configApi.createBackup()
+    if (!response.success) {
+      ElMessage.error(response.message || '备份创建失败')
+      return
     }
+    ElMessage.success('当前线上配置已备份')
+    await handleLoadBackups()
   } catch (error) {
-    ElMessage.error(error?.detail || error?.message || '创建备份失败')
+    ElMessage.error(apiErrorMessage(error, '创建备份失败'))
   } finally {
     backupLoading.value = false
   }
 }
 
-const handleRollback = async () => {
-  if (!selectedBackupId.value) {
-    ElMessage.warning('请先选择一个备份版本')
+async function handleRollback() {
+  const backupId = Number(selectedBackupId.value)
+  if (!backupId) {
+    ElMessage.warning('请先选择备份版本')
     return
   }
   try {
-    await ElMessageBox.confirm('确定要将配置目录回滚到所选备份版本吗？回滚会覆盖当前工作副本。', '回滚确认', {
-      type: 'warning'
-    })
+    await ElMessageBox.confirm('回滚会覆盖当前工作副本，是否继续？', '回滚配置')
     backupLoading.value = true
-    const res = await configApi.restoreBackup(selectedBackupId.value)
-    if (res?.success) {
-      ElMessage.success('配置已回滚到所选版本')
-      await loadConfig()
-      await handleLoadBackups()
-    } else {
-      ElMessage.error(res?.message || '回滚失败')
+    const response = await configApi.restoreBackup(backupId)
+    if (!response.success) {
+      ElMessage.error(response.message || '回滚失败')
+      return
     }
+    ElMessage.success('配置已回滚到所选版本')
+    await Promise.all([loadConfig(), handleLoadBackups()])
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error?.detail || error?.message || '回滚失败')
-    }
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '回滚失败'))
   } finally {
     backupLoading.value = false
   }
 }
+
+onMounted(async () => {
+  await Promise.allSettled([loadConfig(), handleLoadBackups()])
+  window.addEventListener('keydown', handleSaveShortcut)
+})
+
+onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 </script>
 
-<style scoped>
-.config-page {
-  padding: 20px;
-}
+<template>
+  <div class="page-shell space-y-5">
+    <div class="page-heading gap-4">
+      <div>
+        <h2 class="page-title">配置管理</h2>
+        <p class="page-description">编辑工作副本、校验配置并安全同步到运行中的 Nginx。</p>
+      </div>
+      <div class="toolbar">
+        <Button variant="outline" :disabled="loading" @click="loadConfig">
+          <RefreshCw :class="['size-4', { 'animate-spin': loading }]" />刷新
+        </Button>
+        <Button variant="secondary" @click="handleTest"><TestTube2 class="size-4" />测试</Button>
+        <Button :disabled="!currentFilePath || saving" @click="handleSave">
+          <Save class="size-4" />{{ saving ? '保存中' : '保存' }}
+        </Button>
+        <Button variant="outline" @click="handleReload"><RefreshCw class="size-4" />重新装载</Button>
+      </div>
+    </div>
 
-.card-header,
-.header-actions,
-.config-toolbar,
-.backup-row,
-.editor-header {
-  display: flex;
-  align-items: center;
-}
+    <div v-if="pageError" class="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-red-200">
+      <Server class="mt-0.5 size-4 shrink-0" />
+      <div><div class="font-medium">配置数据加载失败</div><div class="mt-1 text-red-200/80">{{ pageError }}</div></div>
+    </div>
 
-.card-header {
-  justify-content: space-between;
-  gap: 16px;
-}
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
+      <Card>
+        <CardHeader class="border-b pb-4">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div><CardTitle class="text-base">运行配置</CardTitle><CardDescription class="mt-1">当前版本与工作副本状态</CardDescription></div>
+            <Badge :variant="configInfo.pending_changes ? 'secondary' : 'default'">
+              {{ configInfo.pending_changes ? '存在待应用修改' : '已同步' }}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent class="grid grid-cols-2 gap-px overflow-hidden p-0 lg:grid-cols-4">
+          <template v-if="loading">
+            <Skeleton v-for="index in 4" :key="index" class="m-4 h-12" />
+          </template>
+          <template v-else>
+            <div v-for="item in [
+              ['Nginx 版本', configInfo.nginx_version || '未知'],
+              ['安装目录', configInfo.install_path || '系统安装'],
+              ['配置目录', configInfo.config_dir || '未知'],
+              ['可执行文件', configInfo.binary || '未知'],
+            ]" :key="String(item[0])" class="min-w-0 border-r border-b p-4">
+              <div class="text-xs text-muted-foreground">{{ item[0] }}</div>
+              <div class="mt-1 truncate font-mono text-xs font-medium" :title="String(item[1])">{{ item[1] }}</div>
+            </div>
+          </template>
+        </CardContent>
+      </Card>
 
-.header-actions,
-.config-toolbar,
-.backup-row {
-  gap: 8px;
-  flex-wrap: wrap;
-}
+      <Card>
+        <CardHeader class="border-b pb-4">
+          <div class="flex items-center justify-between gap-3">
+            <div><CardTitle class="text-base">配置备份</CardTitle><CardDescription class="mt-1">最多保留最近 10 个版本</CardDescription></div>
+            <Archive class="size-5 text-primary" />
+          </div>
+        </CardHeader>
+        <CardContent class="space-y-3 pt-4">
+          <NativeSelect v-model="selectedBackupId" class="w-full" :disabled="backupLoading || !backupOptions.length" aria-label="选择配置备份">
+            <NativeSelectOption value="">{{ backupOptions.length ? '选择备份版本' : '暂无备份' }}</NativeSelectOption>
+            <NativeSelectOption v-for="item in backupOptions" :key="item.id" :value="item.id.toString()">{{ item.label }}</NativeSelectOption>
+          </NativeSelect>
+          <div class="grid grid-cols-3 gap-2">
+            <Button size="sm" variant="outline" :disabled="backupLoading" @click="handleLoadBackups"><RefreshCw class="size-4" /><span class="hidden sm:inline">刷新</span></Button>
+            <Button size="sm" variant="outline" :disabled="backupLoading" @click="handleCreateBackup"><Plus class="size-4" /><span class="hidden sm:inline">新备份</span></Button>
+            <Button size="sm" variant="outline" :disabled="backupLoading || !selectedBackupId" @click="handleRollback"><RotateCcw class="size-4" /><span class="hidden sm:inline">回滚</span></Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
 
-.config-info,
-.config-toolbar {
-  margin-bottom: 16px;
-}
+    <Card class="gap-0 py-0">
+      <CardContent class="flex flex-wrap gap-2 p-3">
+        <Button size="sm" @click="handleNewSite"><Plus class="size-4" />新建站点</Button>
+        <Button size="sm" variant="outline" @click="handleNewFile"><FileCode2 class="size-4" />新建文件</Button>
+        <Button size="sm" variant="outline" @click="handleNewDir"><FolderPlus class="size-4" />新建目录</Button>
+        <Button size="sm" variant="outline" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleRename"><Pencil class="size-4" />重命名</Button>
+        <Button size="sm" variant="destructive" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleDelete"><Trash2 class="size-4" />删除</Button>
+        <span class="hidden flex-1 md:block" />
+        <Button size="sm" variant="outline" @click="handleSplitLegacy"><Scissors class="size-4" />拆分老配置</Button>
+        <Button size="sm" variant="outline" @click="handleMergedPreview"><Eye class="size-4" />合并预览</Button>
+        <Button size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}</Button>
+      </CardContent>
+    </Card>
 
-.config-toolbar {
-  padding: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.025);
-}
+    <Card class="overflow-hidden gap-0 py-0">
+      <div class="grid min-w-0 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <aside class="min-w-0 border-b bg-muted/15 lg:border-r lg:border-b-0">
+          <Tabs v-model="sidebarTab" class="gap-0">
+            <div class="space-y-3 border-b p-3">
+              <TabsList class="grid w-full grid-cols-2">
+                <TabsTrigger value="sites">站点配置 <span class="ml-1 text-xs opacity-60">{{ siteItems.length }}</span></TabsTrigger>
+                <TabsTrigger value="files">文件树 <span class="ml-1 text-xs opacity-60">{{ flatEntries.length }}</span></TabsTrigger>
+              </TabsList>
+              <div class="relative">
+                <Search class="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input v-model="siteKeyword" class="pr-9 pl-9" :placeholder="sidebarTab === 'sites' ? '筛选域名或文件路径' : '筛选配置文件'" aria-label="筛选站点配置" />
+                <button v-if="siteKeyword" type="button" class="absolute right-2 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="清空筛选" @click="siteKeyword = ''"><X class="size-3.5" /></button>
+              </div>
+              <div class="flex items-center justify-between text-xs text-muted-foreground">
+                <span v-if="sidebarTab === 'sites'">显示 {{ filteredSites.length }} / {{ siteItems.length }} 个站点</span>
+                <span v-else>显示 {{ filteredEntries.length }} / {{ flatEntries.length }} 项</span>
+                <span v-if="sidebarTab === 'sites' && currentFilePath && !selectedSiteVisible">当前文件不在筛选结果中</span>
+              </div>
+            </div>
 
-.backup-select {
-  min-width: 320px;
-}
+            <TabsContent value="sites" class="m-0">
+              <ScrollArea class="h-[420px] lg:h-[640px]">
+                <div class="space-y-1 p-2">
+                  <button
+                    v-for="site in filteredSites"
+                    :key="site.path"
+                    type="button"
+                    :class="['w-full rounded-md border px-3 py-2.5 text-left transition-colors', site.path === currentFilePath ? 'border-primary/50 bg-primary/10' : 'border-transparent hover:border-border hover:bg-muted/60']"
+                    @click="openFile(site.path)"
+                  >
+                    <span :class="['block truncate text-sm font-medium', site.path === currentFilePath ? 'text-primary' : 'text-foreground']">{{ site.label }}</span>
+                    <span class="mt-1 block truncate font-mono text-[11px] text-muted-foreground">{{ site.path }}</span>
+                  </button>
+                  <div v-if="!filteredSites.length" class="grid min-h-40 place-items-center px-4 text-center text-sm text-muted-foreground">
+                    <div><Search class="mx-auto mb-2 size-5 opacity-50" />{{ siteItems.length ? '没有匹配的站点配置' : '暂无站点配置' }}</div>
+                  </div>
+                </div>
+              </ScrollArea>
+            </TabsContent>
 
-.backup-btn {
-  white-space: nowrap;
-}
+            <TabsContent value="files" class="m-0">
+              <ScrollArea class="h-[420px] lg:h-[640px]">
+                <div class="space-y-0.5 p-2">
+                  <button
+                    v-for="entry in filteredEntries"
+                    :key="entry.path"
+                    type="button"
+                    :disabled="entry.is_dir"
+                    :class="['flex w-full items-center gap-2 rounded-md py-2 pr-2 text-left text-sm transition-colors', entry.path === currentFilePath ? 'bg-primary/10 text-primary' : 'hover:bg-muted/60', entry.is_dir ? 'cursor-default text-muted-foreground' : 'cursor-pointer']"
+                    :style="{ paddingLeft: `${12 + entryDepth(entry) * 14}px` }"
+                    @click="!entry.is_dir && openFile(entry.path)"
+                  >
+                    <Folder v-if="entry.is_dir" class="size-4 shrink-0" />
+                    <FileCode2 v-else class="size-4 shrink-0" />
+                    <span class="truncate">{{ entry.name || entry.path.split('/').pop() }}</span>
+                  </button>
+                  <div v-if="!filteredEntries.length" class="grid min-h-40 place-items-center text-sm text-muted-foreground">没有匹配的配置文件</div>
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          </Tabs>
+        </aside>
 
-.config-path {
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-}
+        <main class="min-w-0 p-3">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-2">
+                <FileCode2 class="size-4 shrink-0 text-primary" />
+                <span class="truncate font-mono text-sm font-medium">{{ currentFilePath || '未选择文件' }}</span>
+                <Badge v-if="isModified" variant="secondary">未保存</Badge>
+              </div>
+              <div v-if="currentFilePath" class="mt-1 text-xs text-muted-foreground">工作副本 · Ctrl/Cmd + S 保存</div>
+            </div>
+            <div class="flex gap-2">
+              <Button size="sm" variant="outline" :disabled="!currentFilePath" @click="handleFormat"><Sparkles class="size-4" />格式化</Button>
+              <Button size="sm" variant="outline" :disabled="!currentFilePath" @click="handleValidate"><CheckCircle2 class="size-4" />校验</Button>
+            </div>
+          </div>
+          <MonacoEditor v-if="currentFilePath" v-model="configContent" language="nginx" height="clamp(480px, 62vh, 680px)" @change="handleContentChange" />
+          <div v-else class="grid min-h-[480px] place-items-center rounded-md border border-dashed text-sm text-muted-foreground">
+            <div class="text-center"><FileCode2 class="mx-auto mb-2 size-7 opacity-40" />请选择一个配置文件</div>
+          </div>
+        </main>
+      </div>
+      <div class="flex items-start gap-3 border-t bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+        <Server class="mt-0.5 size-4 shrink-0 text-primary" />
+        <span>保存只更新工作副本；“重新装载”会先测试配置，成功后自动备份并覆盖线上配置。</span>
+      </div>
+    </Card>
 
-.text-muted {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.config-workspace {
-  display: grid;
-  grid-template-columns: minmax(260px, 320px) 1fr;
-  gap: 16px;
-  min-height: 680px;
-}
-
-.config-sidebar,
-.editor-panel {
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-primary);
-}
-
-.config-sidebar {
-  padding: 8px;
-  background: var(--bg-secondary);
-}
-
-.site-item {
-  position: relative;
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  background: transparent;
-  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
-}
-
-.site-item + .site-item {
-  margin-top: 6px;
-}
-
-.site-item::before {
-  content: '';
-  position: absolute;
-  top: 9px;
-  bottom: 9px;
-  left: 0;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: transparent;
-}
-
-.site-item:hover {
-  border-color: var(--border-light);
-  background: var(--bg-hover);
-}
-
-.site-item.active {
-  border-color: rgba(8, 196, 97, 0.45);
-  background: rgba(8, 196, 97, 0.1);
-}
-
-.site-item.active::before {
-  background: var(--nginx-green);
-}
-
-.site-name,
-.site-path {
-  display: block;
-}
-
-.site-name {
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.site-path {
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.site-item.active .site-name {
-  color: var(--nginx-green-light);
-}
-
-.site-item.active .site-path {
-  color: var(--text-primary);
-}
-
-.config-tree {
-  background: transparent;
-}
-
-.editor-panel {
-  padding: 12px;
-  min-width: 0;
-}
-
-.editor-header {
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.current-file {
-  margin-right: 8px;
-  font-family: 'Courier New', monospace;
-  font-weight: 600;
-}
-
-.working-copy-alert {
-  margin-top: 16px;
-}
-
-.working-copy-text {
-  margin: 6px 0 0;
-}
-
-.preview-content {
-  max-height: 70vh;
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: #111827;
-  color: #e5e7eb;
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  white-space: pre-wrap;
-}
-
-@media (max-width: 900px) {
-  .config-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .card-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-</style>
+    <Dialog v-model:open="previewVisible">
+      <DialogContent class="max-h-[88vh] max-w-5xl overflow-hidden">
+        <DialogHeader><DialogTitle>合并配置预览</DialogTitle><DialogDescription>工作副本展开 include 后的完整配置，仅供检查。</DialogDescription></DialogHeader>
+        <pre class="max-h-[68vh] overflow-auto rounded-md border bg-[#0b0f14] p-4 font-mono text-xs leading-5 text-slate-200">{{ previewContent || '暂无预览内容' }}</pre>
+        <DialogFooter><Button @click="previewVisible = false">关闭</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </div>
+</template>
