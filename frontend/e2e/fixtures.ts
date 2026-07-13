@@ -32,9 +32,9 @@ export async function installApiFixture(page: Page, user: FixtureUser) {
     } else if (path.endsWith('/nginx/setup/check')) {
       body = { has_compiled_nginx: true, has_default_tar: true }
     } else if (path.endsWith('/system/version/check-update')) {
-      body = { success: true, has_update: false, current_version: '1.0.3' }
+      body = { success: true, has_update: false, current_version: '1.1.1' }
     } else if (path.endsWith('/system/version')) {
-      body = { version: '1.0.3' }
+      body = { version: '1.1.1' }
     }
 
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })

@@ -22,7 +22,7 @@
           <div class="step-description">
             <ui-icon class="step-icon"><Box /></ui-icon>
             <h3>准备 Nginx 源码包</h3>
-            <p>系统检测到默认的 Nginx 1.29.3 源码包，需要将其复制到构建目录以准备编译。</p>
+            <p>系统检测到默认的 Nginx 1.31.2 源码包，需要将其复制到构建目录以准备编译。</p>
           </div>
           <div class="step-actions">
             <ui-button
@@ -45,7 +45,7 @@
           <div class="step-description">
             <ui-icon class="step-icon"><Tools /></ui-icon>
             <h3>编译 Nginx</h3>
-            <p>开始编译 Nginx 1.29.3，这个过程可能需要几分钟时间，请耐心等待。</p>
+            <p>开始编译 Nginx 1.31.2，这个过程可能需要几分钟时间，请耐心等待。</p>
           </div>
           <div v-if="compiling" class="compile-progress">
             <ui-progress
@@ -149,7 +149,7 @@ const progressState = {
   progressCheckTimer: null  // 进度检查定时器
 }
 
-const defaultVersion = '1.29.3'
+const defaultVersion = '1.31.2'
 
 const handlePrepare = async () => {
   preparing.value = true
