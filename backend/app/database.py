@@ -169,7 +169,7 @@ def _migrate_add_certificate_issue_fields():
 
 
 def _migrate_add_user_admin():
-    """迁移：增加管理员标记，并确保升级后至少存在一个有效管理员。"""
+    """迁移：增加管理员标记，并将超级管理员收敛为唯一账户。"""
     try:
         inspector = inspect(engine)
         if not inspector.has_table("users"):
@@ -183,9 +183,6 @@ def _migrate_add_user_admin():
                         "DEFAULT 0 NOT NULL"
                     )
                 )
-            conn.execute(
-                text("UPDATE users SET is_admin = 1 WHERE username = 'admin'")
-            )
             admin_count = conn.execute(
                 text("SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_active = 1")
             ).scalar_one()
@@ -193,7 +190,8 @@ def _migrate_add_user_admin():
                 fallback_id = conn.execute(
                     text(
                         "SELECT id FROM users WHERE is_active = 1 "
-                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                        "ORDER BY CASE WHEN username = 'admin' THEN 0 ELSE 1 END, "
+                        "created_at ASC, id ASC LIMIT 1"
                     )
                 ).scalar_one_or_none()
                 if fallback_id is not None:
@@ -201,6 +199,25 @@ def _migrate_add_user_admin():
                         text("UPDATE users SET is_admin = 1 WHERE id = :user_id"),
                         {"user_id": fallback_id},
                     )
+            keeper_id = conn.execute(
+                text(
+                    "SELECT id FROM users WHERE is_admin = 1 "
+                    "ORDER BY is_active DESC, "
+                    "CASE WHEN username = 'admin' THEN 0 ELSE 1 END, "
+                    "created_at ASC, id ASC LIMIT 1"
+                )
+            ).scalar_one_or_none()
+            if keeper_id is not None:
+                conn.execute(
+                    text("UPDATE users SET is_admin = 0 WHERE id != :user_id"),
+                    {"user_id": keeper_id},
+                )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_users_single_admin "
+                    "ON users(is_admin) WHERE is_admin = 1"
+                )
+            )
     except Exception as e:
         if "no such table" not in str(e).lower():
             print(f"迁移 users.is_admin 字段时出错: {e}")

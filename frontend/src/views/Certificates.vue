@@ -511,6 +511,7 @@
     <ui-dialog
       v-model="uploadDialogVisible"
       :title="uploadForm.certId ? '重新上传证书' : '上传证书'"
+      :description="uploadForm.certId ? '替换当前域名的证书与私钥文件。' : '支持分别上传证书和私钥，也支持上传证书压缩包。'"
       width="600px"
       top="8vh"
       :close-on-click-modal="false"
@@ -2421,20 +2422,6 @@ onMounted(() => {
 
 .action-icon-btn {
   margin: 0;
-}
-
-.cert-upload-dialog :deep(.ui-dialog__body) {
-  max-height: calc(85vh - 120px);
-  overflow-y: auto;
-  padding: 20px;
-}
-
-.cert-upload-dialog :deep(.ui-upload) {
-  width: 100%;
-}
-
-.cert-upload-dialog :deep(.ui-upload .ui-button) {
-  width: 100%;
 }
 
 .expiry-cell {

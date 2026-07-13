@@ -14,7 +14,7 @@ import {
   type InjectionKey,
   type PropType,
 } from 'vue'
-import { LoaderCircle } from 'lucide-vue-next'
+import { Check, FileArchive, LoaderCircle, UploadCloud, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -105,8 +105,11 @@ const UiDialog = defineComponent({
   props: {
     modelValue: Boolean,
     title: String,
+    description: String,
     width: [String, Number],
     closeOnClickModal: { type: Boolean, default: true },
+    closeOnPressEscape: { type: Boolean, default: true },
+    showClose: { type: Boolean, default: true },
   },
   emits: ['update:modelValue', 'close', 'closed', 'open'],
   setup(props, { slots, emit, attrs }) {
@@ -117,17 +120,24 @@ const UiDialog = defineComponent({
     }
     return () => h(Dialog, { open: props.modelValue, 'onUpdate:open': onOpenChange }, {
       default: () => h(DialogContent, {
-        class: cn('max-h-[90vh] overflow-y-auto sm:max-w-xl', attrs.class as string),
+        class: cn('ui-dialog max-h-[90vh] gap-0 overflow-hidden p-0 sm:max-w-xl', attrs.class as string),
         style: props.width ? { width: typeof props.width === 'number' ? `${props.width}px` : props.width, maxWidth: 'calc(100vw - 2rem)' } : undefined,
+        showCloseButton: props.showClose,
         onInteractOutside: props.closeOnClickModal ? undefined : (event: Event) => event.preventDefault(),
+        onEscapeKeyDown: props.closeOnPressEscape ? undefined : (event: Event) => event.preventDefault(),
       }, {
         default: () => [
-          props.title || slots.header ? h(DialogHeader, null, {
-            default: () => props.title ? h(DialogTitle, null, () => props.title) : slots.header?.(),
+          props.title || slots.header ? h(DialogHeader, { class: 'ui-dialog__header border-b px-6 py-5 pr-12' }, {
+            default: () => props.title ? [
+              h(DialogTitle, { class: 'text-base' }, () => props.title),
+              props.description ? h(DialogDescription, null, () => props.description) : null,
+            ] : slots.header?.(),
           }) : null,
-          h(DialogDescription, { class: 'sr-only' }, () => props.title || '对话框'),
-          h('div', { class: 'min-w-0 py-1' }, slots.default?.()),
-          slots.footer ? h(DialogFooter, null, slots.footer()) : null,
+          props.description ? null : h(DialogDescription, { class: 'sr-only' }, () => props.title || '对话框'),
+          h('div', { class: 'ui-dialog__body min-h-0 min-w-0 overflow-y-auto px-6 py-5' }, slots.default?.()),
+          slots.footer ? h(DialogFooter, { class: 'ui-dialog__footer border-t bg-muted/20 px-6 py-4' }, {
+            default: () => slots.footer?.(),
+          }) : null,
         ],
       }),
     })
@@ -287,7 +297,7 @@ const UiForm = defineComponent({
       return valid
     }
     expose({ validate, validateField: validate, clearValidate: () => undefined, resetFields: () => undefined })
-    return () => h('form', { ...attrs, class: cn(props.inline && 'flex flex-wrap items-start gap-3', attrs.class as string), onSubmit: (event: Event) => event.preventDefault() }, slots.default?.())
+    return () => h('form', { ...attrs, class: cn(props.inline ? 'flex flex-wrap items-start gap-3' : 'grid gap-4', attrs.class as string), onSubmit: (event: Event) => event.preventDefault() }, slots.default?.())
   },
 })
 
@@ -426,8 +436,117 @@ const UiTabs = defineComponent({
 })
 
 const stepsKey: InjectionKey<{ register: (item: RegisteredItem) => void; remove: (id: number) => void }> = Symbol('ui-steps')
-const UiStep = defineComponent({ name: 'UiStep', props: { title: String, description: String, icon: Object }, setup(props, { slots }) { const owner = inject(stepsKey); const id = getCurrentInstance()?.uid || Math.random(); owner?.register({ id, props: props as unknown as LooseRecord, slots }); onBeforeUnmount(() => owner?.remove(id)); return () => null } })
-const UiSteps = defineComponent({ name: 'UiSteps', props: { active: { type: Number, default: 0 }, finishStatus: String, alignCenter: Boolean, direction: String }, setup(props, { slots, attrs }) { const items = registry(stepsKey); return () => h('div', { ...attrs, class: cn('flex gap-3', props.direction === 'vertical' ? 'flex-col' : 'overflow-x-auto', attrs.class as string) }, [items.map((item, index) => h('div', { class: cn('flex min-w-32 flex-1 items-center gap-2 rounded-md border p-3', index < props.active && 'border-primary/50', index === props.active && 'bg-primary/10') }, [h('span', { class: cn('grid size-7 place-items-center rounded-full bg-muted text-xs font-semibold', index <= props.active && 'bg-primary text-primary-foreground') }, String(index + 1)), h('div', null, [h('div', { class: 'text-sm font-medium' }, String(item.props.title || '')), item.props.description ? h('div', { class: 'text-xs text-muted-foreground' }, String(item.props.description)) : null])])), h('div', { class: 'hidden' }, slots.default?.())]) } })
+const UiStep = defineComponent({
+  name: 'UiStep',
+  props: { title: String, description: String, icon: Object, status: String },
+  setup(props, { slots }) {
+    const owner = inject(stepsKey)
+    const id = getCurrentInstance()?.uid || Math.random()
+    owner?.register({ id, props: props as unknown as LooseRecord, slots })
+    watch(props, () => owner?.register({ id, props: props as unknown as LooseRecord, slots }), { deep: true })
+    onBeforeUnmount(() => owner?.remove(id))
+    return () => null
+  },
+})
+
+const UiSteps = defineComponent({
+  name: 'UiSteps',
+  props: {
+    active: { type: Number, default: 0 },
+    finishStatus: { type: String, default: 'finish' },
+    alignCenter: Boolean,
+    direction: { type: String, default: 'horizontal' },
+  },
+  setup(props, { slots, attrs }) {
+    const items = registry(stepsKey)
+    const stepStatus = (item: RegisteredItem, index: number) => {
+      if (item.props.status) return String(item.props.status)
+      if (index < props.active) return props.finishStatus === 'success' ? 'success' : 'finish'
+      if (index === props.active) return 'process'
+      return 'wait'
+    }
+    const marker = (item: RegisteredItem, index: number, status: string) => {
+      const icon = item.slots.icon?.() || (item.props.icon ? h(item.props.icon as Component) : null)
+      const content = status === 'success'
+        ? h(Check, { class: 'size-4' })
+        : icon || String(index + 1)
+      return h('span', {
+        class: cn(
+          'relative z-10 grid size-8 shrink-0 place-items-center rounded-full border bg-background text-xs font-semibold transition-colors',
+          status === 'success' && 'border-primary bg-primary text-primary-foreground',
+          status === 'finish' && 'border-primary bg-primary/15 text-primary',
+          status === 'process' && 'border-primary bg-primary/10 text-primary ring-4 ring-primary/10',
+          status === 'wait' && 'border-border text-muted-foreground',
+          status === 'error' && 'border-destructive bg-destructive/10 text-destructive',
+          '[&>svg]:size-4',
+        ),
+      }, content)
+    }
+    const content = (item: RegisteredItem, status: string) => h('div', {
+      class: cn('min-w-0', props.alignCenter && props.direction !== 'vertical' && 'text-center'),
+    }, [
+      h('div', {
+        class: cn(
+          'text-sm font-medium leading-5',
+          status === 'process' && 'text-primary',
+          status === 'wait' && 'text-muted-foreground',
+          status === 'error' && 'text-destructive',
+        ),
+      }, String(item.props.title || '')),
+      item.props.description
+        ? h('div', { class: 'mt-0.5 text-xs leading-4 text-muted-foreground' }, String(item.props.description))
+        : null,
+    ])
+
+    return () => {
+      const vertical = props.direction === 'vertical'
+      const steps = items.map((item, index) => {
+        const status = stepStatus(item, index)
+        if (vertical) {
+          return h('div', {
+            class: 'ui-step relative flex min-w-0 gap-3 pb-6 last:pb-0',
+            'data-status': status,
+            'aria-current': status === 'process' ? 'step' : undefined,
+          }, [
+            index < items.length - 1 ? h('span', {
+              class: cn(
+                'absolute bottom-0 left-[15px] top-8 w-px bg-border',
+                index < props.active && 'bg-primary',
+              ),
+            }) : null,
+            marker(item, index, status),
+            content(item, status),
+          ])
+        }
+        return h('div', {
+          class: 'ui-step relative min-w-32 px-2',
+          'data-status': status,
+          'aria-current': status === 'process' ? 'step' : undefined,
+        }, [
+          index < items.length - 1 ? h('span', {
+            class: cn(
+              'absolute left-[calc(50%+1.5rem)] right-[calc(-50%+1.5rem)] top-[15px] h-px bg-border',
+              index < props.active && 'bg-primary',
+            ),
+          }) : null,
+          h('div', { class: cn('flex flex-col gap-2', props.alignCenter ? 'items-center text-center' : 'items-start') }, [
+            marker(item, index, status),
+            content(item, status),
+          ]),
+        ])
+      })
+      return h('div', {
+        ...attrs,
+        class: cn(
+          'ui-steps w-full',
+          vertical ? 'flex flex-col' : 'grid min-w-max overflow-visible py-1',
+          attrs.class as string,
+        ),
+        style: vertical ? undefined : { gridTemplateColumns: `repeat(${Math.max(items.length, 1)}, minmax(8rem, 1fr))` },
+      }, [steps, h('div', { class: 'hidden' }, slots.default?.())])
+    }
+  },
+})
 
 const UiTag = defineComponent({ name: 'UiTag', props: { type: String, effect: String, size: String, closable: Boolean }, emits: ['close'], setup(props, { slots, emit, attrs }) { return () => h(Badge, { ...attrs, variant: props.type === 'danger' ? 'destructive' : props.type === 'success' ? 'default' : 'secondary', class: cn(props.type === 'warning' && 'bg-amber-500/15 text-amber-400', props.type === 'info' && 'bg-blue-500/15 text-blue-400', attrs.class as string) }, { default: () => [slots.default?.(), props.closable ? h('button', { class: 'ml-1', onClick: () => emit('close') }, '×') : null] }) } })
 const UiAlert = defineComponent({ name: 'UiAlert', props: { title: String, description: String, type: String, closable: Boolean, showIcon: Boolean }, setup(props, { slots, attrs }) { return () => h('div', { ...attrs, role: 'alert', class: cn('rounded-lg border p-3 text-sm', props.type === 'error' && 'border-red-500/40 bg-red-500/10 text-red-200', props.type === 'warning' && 'border-amber-500/40 bg-amber-500/10 text-amber-100', props.type === 'success' && 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100', props.type === 'info' && 'border-blue-500/40 bg-blue-500/10 text-blue-100', attrs.class as string) }, [props.title ? h('div', { class: 'font-medium' }, props.title) : null, h('div', { class: props.title ? 'mt-1 text-current/80' : '' }, slots.default?.() || props.description)]) } })
@@ -451,16 +570,151 @@ const UiDatePicker = defineComponent({
   },
 })
 
+interface UploadFileItem {
+  name: string
+  size: number
+  raw: File
+}
+
 const UiUpload = defineComponent({
   name: 'UiUpload',
-  props: { action: String, autoUpload: Boolean, showFileList: Boolean, accept: String, multiple: Boolean, drag: Boolean, limit: Number, disabled: Boolean, onChange: Function, onRemove: Function, beforeUpload: Function, httpRequest: Function },
+  props: {
+    action: String,
+    autoUpload: Boolean,
+    showFileList: { type: Boolean, default: true },
+    accept: String,
+    multiple: Boolean,
+    drag: Boolean,
+    limit: Number,
+    disabled: Boolean,
+    onChange: Function,
+    onRemove: Function,
+    beforeUpload: Function,
+    beforeRemove: Function,
+    httpRequest: Function,
+  },
   emits: ['change', 'remove', 'exceed'],
   setup(props, { slots, emit, attrs, expose }) {
     const input = ref<HTMLInputElement>()
-    const files = ref<File[]>([])
-    const change = (event: Event) => { const selected = [...((event.target as HTMLInputElement).files || [])]; if (props.limit && files.value.length + selected.length > props.limit) { emit('exceed', selected); return } files.value = props.multiple ? [...files.value, ...selected] : selected.slice(0, 1); for (const raw of selected) { const file = { name: raw.name, size: raw.size, raw }; props.onChange?.(file, files.value); emit('change', file, files.value) } }
-    expose({ clearFiles: () => { files.value = []; if (input.value) input.value.value = '' }, submit: () => files.value.forEach(raw => props.httpRequest?.({ file: raw })) })
-    return () => h('div', { ...attrs, class: cn('space-y-2', attrs.class as string) }, [h('input', { ref: input, type: 'file', class: 'sr-only', accept: props.accept, multiple: props.multiple, disabled: props.disabled, onChange: change }), h('div', { class: cn(props.drag && 'grid min-h-32 cursor-pointer place-items-center rounded-lg border border-dashed p-6 text-center hover:border-primary/60'), onClick: () => input.value?.click() }, slots.trigger?.() || slots.default?.() || h(Button, { type: 'button', variant: 'secondary' }, () => '选择文件')), slots.tip ? h('div', { class: 'text-xs text-muted-foreground' }, slots.tip()) : null])
+    const files = ref<UploadFileItem[]>([])
+    const dragging = ref(false)
+
+    const formatFileSize = (size: number) => {
+      if (size < 1024) return `${size} B`
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+      return `${(size / 1024 / 1024).toFixed(1)} MB`
+    }
+
+    const clearFiles = () => {
+      files.value = []
+      if (input.value) input.value.value = ''
+    }
+
+    const selectFiles = (selected: File[]) => {
+      if (!selected.length || props.disabled) return
+      const nextFiles = selected.map(raw => ({ name: raw.name, size: raw.size, raw }))
+      if (props.limit && (props.multiple ? files.value.length + nextFiles.length : nextFiles.length) > props.limit) {
+        emit('exceed', selected, files.value)
+        return
+      }
+      files.value = props.multiple ? [...files.value, ...nextFiles] : nextFiles.slice(0, 1)
+      nextFiles.forEach(file => {
+        emit('change', file, files.value)
+      })
+      if (input.value) input.value.value = ''
+    }
+
+    const change = (event: Event) => selectFiles([...((event.target as HTMLInputElement).files || [])])
+
+    const removeFile = async (file: UploadFileItem) => {
+      const allowed = await props.beforeRemove?.(file, files.value)
+      if (allowed === false) return
+      files.value = files.value.filter(item => item !== file)
+      emit('remove', file, files.value)
+    }
+
+    const openFileDialog = () => {
+      if (!props.disabled) input.value?.click()
+    }
+
+    expose({
+      clearFiles,
+      open: openFileDialog,
+      submit: () => files.value.forEach(file => props.httpRequest?.({ file: file.raw })),
+    })
+
+    return () => h('div', {
+      ...attrs,
+      class: cn('ui-upload w-full space-y-2', attrs.class as string),
+    }, [
+      h('input', {
+        ref: input,
+        type: 'file',
+        class: 'sr-only',
+        accept: props.accept,
+        multiple: props.multiple,
+        disabled: props.disabled,
+        onChange: change,
+      }),
+      h('div', {
+        role: 'button',
+        tabindex: props.disabled ? -1 : 0,
+        class: cn(
+          'group flex min-h-28 w-full cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-5 py-5 text-center transition-colors hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+          dragging.value && 'border-primary bg-primary/10',
+          props.disabled && 'pointer-events-none cursor-not-allowed opacity-50',
+        ),
+        onClick: openFileDialog,
+        onKeydown: (event: KeyboardEvent) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            openFileDialog()
+          }
+        },
+        onDragenter: (event: DragEvent) => { event.preventDefault(); dragging.value = true },
+        onDragover: (event: DragEvent) => { event.preventDefault(); dragging.value = true },
+        onDragleave: (event: DragEvent) => {
+          event.preventDefault()
+          if (event.currentTarget === event.target) dragging.value = false
+        },
+        onDrop: (event: DragEvent) => {
+          event.preventDefault()
+          dragging.value = false
+          selectFiles([...(event.dataTransfer?.files || [])])
+        },
+      }, [
+        h('span', { class: 'mb-3 grid size-10 place-items-center rounded-full bg-primary/10 text-primary' }, [
+          h(UploadCloud, { class: 'size-5' }),
+        ]),
+        h('p', { class: 'text-sm font-medium' }, props.multiple ? '拖拽文件到这里批量上传' : '拖拽文件到这里上传'),
+        h('p', { class: 'mt-1 text-xs text-muted-foreground' }, '也可以点击下方按钮选择文件'),
+        h('div', {
+          class: 'mt-3',
+          onClick: (event: MouseEvent) => { event.stopPropagation(); openFileDialog() },
+        },
+          slots.trigger?.() || slots.default?.() || h(Button, { type: 'button', variant: 'secondary' }, () => '选择文件')),
+      ]),
+      props.showFileList && files.value.length
+        ? h('div', { class: 'grid gap-2' }, files.value.map(file => h('div', {
+          key: `${file.name}-${file.size}-${file.raw.lastModified}`,
+          class: 'flex items-center gap-3 rounded-md border bg-background px-3 py-2',
+        }, [
+          h(FileArchive, { class: 'size-4 shrink-0 text-primary' }),
+          h('div', { class: 'min-w-0 flex-1' }, [
+            h('p', { class: 'truncate text-sm font-medium', title: file.name }, file.name),
+            h('p', { class: 'text-xs text-muted-foreground' }, formatFileSize(file.size)),
+          ]),
+          h('button', {
+            type: 'button',
+            class: 'grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive',
+            'aria-label': `移除 ${file.name}`,
+            disabled: props.disabled,
+            onClick: (event: MouseEvent) => { event.stopPropagation(); void removeFile(file) },
+          }, [h(X, { class: 'size-4' })]),
+        ])))
+        : null,
+      slots.tip ? h('div', { class: 'text-xs leading-relaxed text-muted-foreground' }, slots.tip()) : null,
+    ])
   },
 })
 
@@ -492,6 +746,8 @@ const components: Record<string, Component> = {
   UiUpload, UiDropdown, UiDropdownMenu, UiDropdownItem, UiPagination, UiTree,
   ...simpleContainers,
 }
+
+export { UiDialog, UiStep, UiSteps, UiUpload }
 
 export function installAppCompat(app: App) {
   Object.entries(components).forEach(([name, component]) => app.component(name, component))

@@ -131,8 +131,10 @@
     <ui-dialog
       v-model="uploadDialogVisible"
       title="上传静态资源包"
+      description="上传压缩包后可选择 Nginx 版本进行部署。"
       width="600px"
       :close-on-click-modal="false"
+      @closed="resetUploadSelection"
     >
       <ui-form :model="uploadForm" label-width="140px">
         <ui-form-item label="资源包文件">
@@ -141,6 +143,7 @@
             :auto-upload="false"
             :limit="1"
             :on-change="handleFileChange"
+            :on-remove="handleFileRemove"
             :before-remove="() => !uploading"
             accept=".zip,.tar.gz,.tgz,.tar"
           >
@@ -418,6 +421,16 @@ const handleFileChange = (file) => {
   selectedFile.value = file.raw
 }
 
+const handleFileRemove = () => {
+  selectedFile.value = null
+}
+
+const resetUploadSelection = () => {
+  if (uploading.value) return
+  uploadRef.value?.clearFiles()
+  selectedFile.value = null
+}
+
 const handleUpload = async () => {
   if (!selectedFile.value) {
     ElMessage.warning('请先选择资源包文件')
@@ -669,10 +682,4 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  width: 100%;
-}
 </style>

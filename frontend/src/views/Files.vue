@@ -200,14 +200,50 @@
         </ui-table-column>
       </ui-table>
 
-      <!-- 隐藏的上传输入框 -->
-      <input
-        ref="uploadInput"
-        type="file"
-        multiple
-        style="display: none"
-        @change="handleFileChange"
-      />
+      <ui-dialog
+        v-model="uploadDialogVisible"
+        title="上传文件"
+        description="支持一次选择或拖拽多个文件。"
+        width="620px"
+        :close-on-click-modal="false"
+        :show-close="!uploading"
+      >
+        <div class="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
+          <div class="text-xs text-muted-foreground">上传位置</div>
+          <div class="mt-1 break-all font-mono text-xs">
+            {{ displayRootPath || selectedDirectory || '-' }}/{{ currentPath || '' }}
+          </div>
+        </div>
+        <ui-upload
+          ref="uploadRef"
+          multiple
+          :disabled="uploading"
+          :on-change="syncUploadFiles"
+          :on-remove="syncUploadFiles"
+        >
+          <ui-button type="primary" :disabled="uploading">
+            <ui-icon><UploadFilled /></ui-icon>
+            选择文件
+          </ui-button>
+          <template #tip>
+            文件将上传到当前目录；同名文件是否覆盖由服务端规则决定。
+          </template>
+        </ui-upload>
+        <template #footer>
+          <span class="dialog-footer">
+            <ui-button :disabled="uploading" @click="uploadDialogVisible = false">取消</ui-button>
+            <ui-button
+              type="primary"
+              :loading="uploading"
+              :disabled="!selectedUploadFiles.length"
+              @click="handleUploadSubmit"
+            >
+              <ui-icon><UploadFilled /></ui-icon>
+              上传 {{ selectedUploadFiles.length ? `(${selectedUploadFiles.length})` : '' }}
+            </ui-button>
+          </span>
+        </template>
+      </ui-dialog>
 
       <!-- 文件编辑对话框（MonacoEditor） -->
       <ui-dialog
@@ -271,7 +307,10 @@ import MonacoEditor from '../components/MonacoEditor.vue'
 const fileList = ref([])
 const currentPath = ref('')
 const loading = ref(false)
-const uploadInput = ref(null)
+const uploadRef = ref(null)
+const uploadDialogVisible = ref(false)
+const uploading = ref(false)
+const selectedUploadFiles = ref([])
 const versions = ref([])
 const selectedDirectory = ref(null)
 const rootOnly = ref(false)
@@ -375,34 +414,38 @@ const loadFiles = async () => {
 }
 
 const handleUpload = () => {
-  if (uploadInput.value) {
-    uploadInput.value.value = ''
-    uploadInput.value.click()
-  }
-}
-
-const handleFileChange = async (event) => {
-  const files = Array.from(event.target.files || [])
-  if (!files.length) return
   if (!selectedDirectory.value) {
     ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
+  selectedUploadFiles.value = []
+  uploadRef.value?.clearFiles()
+  uploadDialogVisible.value = true
+}
+
+const syncUploadFiles = (_file, fileList = []) => {
+  selectedUploadFiles.value = fileList.map(item => item.raw).filter(Boolean)
+}
+
+const handleUploadSubmit = async () => {
+  if (!selectedUploadFiles.value.length || !selectedDirectory.value) return
+  uploading.value = true
   try {
     const res = await filesApi.uploadFile(
       currentPath.value || undefined,
-      files,
+      selectedUploadFiles.value,
       selectedDirectory.value,
       rootOnly.value
     )
     ElMessage.success(res.message || '上传成功')
-    loadFiles()
+    uploadDialogVisible.value = false
+    uploadRef.value?.clearFiles()
+    selectedUploadFiles.value = []
+    await loadFiles()
   } catch (error) {
     ElMessage.error(error.detail || '上传失败')
   } finally {
-    if (uploadInput.value) {
-      uploadInput.value.value = ''
-    }
+    uploading.value = false
   }
 }
 
@@ -804,13 +847,6 @@ onMounted(async () => {
   margin-left: 8px;
   font-size: 12px;
   color: var(--nginx-green);
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  width: 100%;
 }
 
 .edit-dialog {
