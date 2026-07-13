@@ -1,1116 +1,464 @@
-<template>
-  <div class="dashboard page-shell">
-    <!-- Nginx状态卡片 -->
-    <ui-row :gutter="20" class="mb-20">
-      <ui-col :span="24">
-        <ui-card>
-          <template #header>
-            <div class="card-header">
-              <span>Nginx 运行状态</span>
-              <div class="card-actions">
-                <ui-button type="info" text @click="refreshStatus">
-                  <ui-icon><Refresh /></ui-icon>
-                  刷新
-                </ui-button>
-                <ui-button
-                  type="success"
-                  text
-                  :disabled="taskStatus.is_running"
-                  @click="triggerIncrementalAnalyze"
-                >
-                  <ui-icon style="margin-right: 4px;"><DataAnalysis /></ui-icon>
-                  增量分析
-                </ui-button>
-                <ui-button
-                  type="primary"
-                  text
-                  :disabled="taskStatus.is_running"
-                  @click="triggerAnalyzeNow"
-                >
-                  <ui-icon style="margin-right: 4px;"><DataAnalysis /></ui-icon>
-                  全量分析
-                </ui-button>
-              </div>
-            </div>
-          </template>
-          <ui-descriptions :column="2" border size="small" class="nginx-status-descriptions">
-            <ui-descriptions-item label="运行状态">
-              <ui-tag :type="nginxStatus.running ? 'success' : 'danger'" size="small">
-                {{ nginxStatus.running ? '运行中' : '已停止' }}
-              </ui-tag>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="进程ID">
-              <ui-text type="info" size="small">{{ nginxStatus.pid || '无' }}</ui-text>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="当前 Nginx 目录">
-              <ui-text type="info" size="small">{{ nginxStatus.directory || '-' }}</ui-text>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="当前 Nginx 版本">
-              <ui-tag v-if="nginxStatus.version" type="info" size="small">
-                {{ nginxStatus.version }}
-              </ui-tag>
-              <span v-else class="text-muted">未知</span>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="运行时间" :span="2">
-              <ui-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</ui-text>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="统计分析状态">
-              <ui-tag
-                class="analysis-status-tag"
-                :type="analysisTagType"
-                size="small"
-              >
-                {{ analysisTagText }}
-              </ui-tag>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="任务分析行数" :span="1">
-              <ui-text type="info" size="small">
-                <span v-if="taskStatus.analyzed_lines != null && taskStatus.analyzed_lines > 0">
-                  {{ formatNumber(taskStatus.analyzed_lines) }}
-                </span>
-                <span v-else class="text-muted">-</span>
-              </ui-text>
-            </ui-descriptions-item>
-            <ui-descriptions-item label="上次分析时间" :span="1">
-              <ui-text type="info" size="small">
-                {{ taskStatus.last_analysis_time ? formatDateTime(taskStatus.last_analysis_time) : '-' }}
-              </ui-text>
-            </ui-descriptions-item>
-          </ui-descriptions>
-        </ui-card>
-      </ui-col>
-    </ui-row>
-
-    <!-- 统计指标卡片 -->
-    <ui-row :gutter="20" class="mb-20">
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: var(--nginx-green);">
-              <ui-icon size="24"><DataLine /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ formatNumber(stats.summary?.total_requests || 0) }}</div>
-              <div class="stat-label">总请求数</div>
-            </div>
-          </div>
-        </ui-card>
-      </ui-col>
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: var(--nginx-green-light);">
-              <ui-icon size="24"><SuccessFilled /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ formatNumber(stats.summary?.success_requests || 0) }}</div>
-              <div class="stat-label">成功请求</div>
-            </div>
-          </div>
-        </ui-card>
-      </ui-col>
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #E6A23C;">
-              <ui-icon size="24"><WarningFilled /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ formatNumber(stats.summary?.error_requests || 0) }}</div>
-              <div class="stat-label">错误请求</div>
-            </div>
-          </div>
-        </ui-card>
-      </ui-col>
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #dc2626;">
-              <ui-icon size="24"><Lock /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ formatNumber(stats.summary?.attack_count || 0) }}</div>
-              <div class="stat-label">攻击检测</div>
-            </div>
-          </div>
-        </ui-card>
-      </ui-col>
-    </ui-row>
-
-    <!-- 系统资源卡片 -->
-    <ui-row :gutter="20" class="mb-20">
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #409EFF;">
-              <ui-icon size="24"><Odometer /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ systemResources.cpu?.percent || 0 }}%</div>
-              <div class="stat-label">CPU使用率</div>
-              <div class="stat-extra" v-if="systemResources.cpu?.count">
-                {{ systemResources.cpu.count.logical }}核
-              </div>
-            </div>
-          </div>
-          <ui-progress
-            :percentage="systemResources.cpu?.percent || 0"
-            :color="getProgressColor(systemResources.cpu?.percent || 0)"
-            :show-text="false"
-            class="stat-progress"
-          />
-        </ui-card>
-      </ui-col>
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #67C23A;">
-              <ui-icon size="24"><DataBoard /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ formatBytes(systemResources.memory?.used || 0) }}</div>
-              <div class="stat-label">内存使用</div>
-              <div class="stat-extra" v-if="systemResources.memory">
-                {{ systemResources.memory.percent?.toFixed(1) }}%
-              </div>
-            </div>
-          </div>
-          <ui-progress
-            :percentage="systemResources.memory?.percent || 0"
-            :color="getProgressColor(systemResources.memory?.percent || 0)"
-            :show-text="false"
-            class="stat-progress"
-          />
-        </ui-card>
-      </ui-col>
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #E6A23C;">
-              <ui-icon size="24"><Folder /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ systemResources.disk?.root?.percent?.toFixed(1) || 0 }}%</div>
-              <div class="stat-label">磁盘使用</div>
-              <div class="stat-extra" v-if="systemResources.disk?.root">
-                {{ formatBytesShort(systemResources.disk.root.used || 0) }} / {{ formatBytesShort(systemResources.disk.root.total || 0) }}
-              </div>
-            </div>
-          </div>
-          <ui-progress
-            :percentage="systemResources.disk?.root?.percent || 0"
-            :color="getProgressColor(systemResources.disk?.root?.percent || 0)"
-            :show-text="false"
-            class="stat-progress"
-          />
-        </ui-card>
-      </ui-col>
-      <ui-col :xs="24" :sm="12" :md="6">
-        <ui-card class="stat-card resource-card">
-          <div class="stat-content">
-            <div class="stat-icon" style="background: #909399;">
-              <ui-icon size="24"><Share /></ui-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-value">{{ systemResources.network?.connections || 0 }}</div>
-              <div class="stat-label">网络连接</div>
-              <div class="stat-extra" v-if="systemResources.network">
-                ↑{{ formatBytesShort(systemResources.network.bytes_sent || 0) }}
-                ↓{{ formatBytesShort(systemResources.network.bytes_recv || 0) }}
-              </div>
-            </div>
-          </div>
-        </ui-card>
-      </ui-col>
-    </ui-row>
-
-    <!-- 图表区域 -->
-    <ui-row :gutter="20" class="mb-20">
-      <!-- 访问趋势图 -->
-      <ui-col :xs="24" :md="16">
-        <ui-card>
-          <template #header>
-            <div class="card-header">
-              <span>访问趋势</span>
-              <ui-radio-group v-model="timeRange" size="small" @change="loadStatistics">
-                <ui-radio-button :label="1">1小时</ui-radio-button>
-                <ui-radio-button :label="24">24小时</ui-radio-button>
-                <ui-radio-button :label="168">7天</ui-radio-button>
-              </ui-radio-group>
-            </div>
-          </template>
-          <v-chart
-            class="chart"
-            :option="trendChartOption"
-            autoresize
-          />
-        </ui-card>
-      </ui-col>
-      
-      <!-- 状态码分布 -->
-      <ui-col :xs="24" :md="8">
-        <ui-card>
-          <template #header>
-            <span>状态码分布</span>
-          </template>
-          <v-chart
-            class="chart"
-            :option="statusChartOption"
-            autoresize
-          />
-        </ui-card>
-      </ui-col>
-    </ui-row>
-
-    <!-- 详细统计表格 -->
-    <ui-row :gutter="20">
-      <!-- Top IP -->
-      <ui-col :xs="24" :md="12">
-        <ui-card>
-          <template #header>
-            <span>访问量 Top 10 IP</span>
-          </template>
-          <ui-table :data="stats.top_ips || []" stripe>
-            <ui-table-column prop="ip" label="IP地址" />
-            <ui-table-column prop="count" label="访问次数" width="120" align="right">
-              <template #default="{ row }">
-                {{ formatNumber(row.count) }}
-              </template>
-            </ui-table-column>
-          </ui-table>
-        </ui-card>
-      </ui-col>
-
-      <!-- Top 路径 -->
-      <ui-col :xs="24" :md="12">
-        <ui-card>
-          <template #header>
-            <span>访问量 Top 10 路径</span>
-          </template>
-          <ui-table :data="stats.top_paths || []" stripe>
-            <ui-table-column prop="path" label="路径" show-overflow-tooltip />
-            <ui-table-column prop="count" label="访问次数" width="120" align="right">
-              <template #default="{ row }">
-                {{ formatNumber(row.count) }}
-              </template>
-            </ui-table-column>
-          </ui-table>
-        </ui-card>
-      </ui-col>
-    </ui-row>
-
-    <!-- 攻击检测列表 -->
-    <ui-row :gutter="20" class="mt-20" v-if="stats.attacks && stats.attacks.length > 0">
-      <ui-col :span="24">
-        <ui-card>
-          <template #header>
-            <span>
-              <ui-icon><Warning /></ui-icon>
-              攻击检测记录（最近{{ stats.attacks.length }}条）
-            </span>
-          </template>
-          <ui-table :data="stats.attacks" stripe>
-            <ui-table-column prop="time" label="时间" width="180">
-              <template #default="{ row }">
-                {{ row.time ? formatDateTime(row.time) : '-' }}
-              </template>
-            </ui-table-column>
-            <ui-table-column prop="ip" label="IP地址" width="150" />
-            <ui-table-column prop="path" label="路径" show-overflow-tooltip />
-            <ui-table-column prop="status" label="状态码" width="100" align="center" />
-            <ui-table-column prop="attacks" label="攻击类型">
-              <template #default="{ row }">
-                <ui-tag
-                  v-for="(attack, index) in row.attacks"
-                  :key="index"
-                  type="danger"
-                  size="small"
-                  class="mr-5"
-                >
-                  {{ attack }}
-                </ui-tag>
-              </template>
-            </ui-table-column>
-          </ui-table>
-        </ui-card>
-      </ui-col>
-    </ui-row>
-  </div>
-</template>
-
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { configApi } from '../api/config'
-import { statisticsApi } from '../api/statistics'
-import { systemApi } from '../api/system'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import {
+  Activity,
+  AlertTriangle,
+  BarChart3,
+  Database,
+  HardDrive,
+  Network,
+  RefreshCw,
+  ScanSearch,
+  Server,
+  ShieldCheck,
+  TriangleAlert,
+} from 'lucide-vue-next'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { apiErrorMessage } from '@/api'
+import { configApi, type NginxStatusResponse } from '@/api/config'
+import {
+  statisticsApi,
+  type AnalysisTaskStatusResponse,
+  type AttackRecord,
+  type StatisticsSummary,
+  type TopIp,
+  type TopPath,
+  type TrendData,
+} from '@/api/statistics'
+import { systemApi, type SystemResourcesResponse } from '@/api/system'
 import { ElMessage } from '@/lib/feedback'
-import { formatDateTime } from '../utils/date'
+import { formatDateTime } from '@/utils/date'
+import { formatFileSize } from '@/utils/format'
 
-const nginxStatus = ref<any>({
-  running: false,
-  version: null,
-  directory: null,
-  pid: null,
-  uptime: null
-})
+type TimeRange = 1 | 24 | 168
 
-const stats = ref<any>({
-  summary: {},
-  top_ips: [],
-  top_paths: [],
-  hourly_trend: {},
-  status_distribution: {},
-  attacks: []
-})
+const EMPTY_SUMMARY: StatisticsSummary = {
+  total_requests: 0,
+  success_requests: 0,
+  error_requests: 0,
+  error_rate: 0,
+  attack_count: 0,
+  error_log_count: 0,
+}
 
-const systemResources = ref<any>({
+const EMPTY_RESOURCES: SystemResourcesResponse = {
+  success: false,
   cpu: {},
   memory: {},
   disk: {},
   network: {},
-  system: {}
-})
-
-const systemVersion = ref<any>({
-  version: null,
-  build_time_formatted: null
-})
-
-// 统计分析任务状态（从独立接口获取，不依赖时间范围）
-const taskStatus = ref<any>({
-  status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing' | 'failed'
-  is_running: false,          // 后台任务是否在执行
-  last_analysis_time: null,   // 上次分析到的日志时间
-  analyzed_lines: 0,          // 任务分析行数
-  last_start_time: null,      // 最近一次任务开始时间
-  last_end_time: null,        // 最近一次任务结束时间
-  last_error: null,           // 最近一次任务错误
-  last_success: null,         // 最近一次任务是否成功
-  last_trigger: null,         // 最近一次任务触发方式
-  last_duration_seconds: 0,  // 最近一次任务总耗时（秒）
-  running_duration_seconds: null  // 当前运行中任务耗时（秒）
-})
-
-// 防抖控制：记录上次增量分析触发的时间
-const lastIncrementalAnalyzeTime = ref(0)
-const INCREMENTAL_ANALYZE_COOLDOWN = 10000 // 10秒冷却时间，与后端保持一致
-
-// 统计分析状态标签（保持固定宽度，避免布局抖动）
-const analysisTagType = computed(() => {
-  const s = taskStatus.value.status
-  if (s === 'analyzing') return 'info'
-  if (s === 'ready') return 'success'
-  if (s === 'failed') return 'danger'
-  if (s === 'not_ready') return 'warning'
-  return 'info'
-})
-
-const analysisTagText = computed(() => {
-  const s = taskStatus.value.status
-  if (s === 'analyzing') return '分析中'
-  if (s === 'ready') return '正常'
-  if (s === 'failed') return '失败'
-  if (s === 'not_ready') return '未就绪'
-  return '未知'
-})
-
-
-// 访问趋势时间范围（单位：小时）
-// 1 小时：后端按 5 分钟粒度聚合
-// 24 小时：按小时聚合
-// 168 小时（7 天）：按天聚合
-const timeRange = ref(1)
-const loading = ref(false)
-
-// 仪表盘分块加载的各区域 loading 状态
-const loadingSummary = ref(false)       // 顶部统计卡片
-const loadingTrend = ref(false)         // 访问趋势图
-const loadingTopIPs = ref(false)        // Top IP 表格
-const loadingTopPaths = ref(false)      // Top Path 表格
-const loadingStatusDist = ref(false)    // 状态码分布图
-const loadingAttacks = ref(false)       // 攻击记录表格
-
-let refreshTimer = null
-
-// 格式化数字
-const formatNumber = (num) => {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(2) + 'M'
-  } else if (num >= 1000) {
-    return (num / 1000).toFixed(2) + 'K'
-  }
-  return num.toString()
+  system: {},
 }
 
-// 格式化字节
-const formatBytes = (bytes) => {
-  if (!bytes || bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-}
+const nginxStatus = ref<NginxStatusResponse>({ running: false })
+const taskStatus = ref<AnalysisTaskStatusResponse>({ success: false, status: 'unknown', is_running: false })
+const resources = ref<SystemResourcesResponse>(EMPTY_RESOURCES)
+const summary = ref<StatisticsSummary>({ ...EMPTY_SUMMARY })
+const trend = ref<TrendData>({ hours: [], counts: [] })
+const statusDistribution = ref<Record<string, number>>({})
+const topIps = ref<TopIp[]>([])
+const topPaths = ref<TopPath[]>([])
+const attacks = ref<AttackRecord[]>([])
+const timeRange = ref<TimeRange>(1)
+const loading = ref(true)
+const statisticsLoading = ref(false)
+const refreshing = ref(false)
+const pageError = ref('')
+const lastUpdatedAt = ref<Date | null>(null)
+const lastAnalyzeAt = ref(0)
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+let analyzeTimer: ReturnType<typeof setTimeout> | null = null
 
-// 格式化字节（简短版，用于小空间显示）
-const formatBytesShort = (bytes) => {
-  if (!bytes || bytes === 0) return '0B'
-  const k = 1024
-  const sizes = ['B', 'K', 'M', 'G', 'T']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i]
-}
+const numberFormatter = new Intl.NumberFormat('zh-CN', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
 
-// 获取进度条颜色
-const getProgressColor = (percent) => {
-  if (percent < 50) return '#67C23A'
-  if (percent < 80) return '#E6A23C'
-  return '#F56C6C'
-}
-
-// 访问趋势图配置
-const trendChartOption = computed(() => {
-  const hourly = stats.value.hourly_trend || {}
-  return {
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross'
-      },
-      backgroundColor: 'rgba(26, 35, 50, 0.95)',
-      borderColor: '#2d3748',
-      textStyle: {
-        color: '#e4e7ed'
-      }
-    },
-    xAxis: {
-      type: 'category',
-      data: hourly.hours || [],
-      axisLabel: {
-        rotate: 45,
-        color: '#b3b8c3'
-      },
-      axisLine: {
-        lineStyle: {
-          color: '#2d3748'
-        }
-      }
-    },
-    yAxis: {
-      type: 'value',
-      name: '请求数',
-      nameTextStyle: {
-        color: '#b3b8c3'
-      },
-      axisLabel: {
-        color: '#b3b8c3'
-      },
-      axisLine: {
-        lineStyle: {
-          color: '#2d3748'
-        }
-      },
-      splitLine: {
-        lineStyle: {
-          color: '#2d3748',
-          type: 'dashed'
-        }
-      }
-    },
-    series: [
-      {
-        name: '访问量',
-        type: 'line',
-        smooth: true,
-        data: hourly.counts || [],
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(0, 150, 57, 0.3)' },
-              { offset: 1, color: 'rgba(0, 150, 57, 0.1)' }
-            ]
-          }
-        },
-        itemStyle: {
-          color: '#009639'
-        }
-      }
-    ],
-    grid: {
-      left: '3%',
-      right: '4%',
-      bottom: '15%',
-      containLabel: true
-    },
-    backgroundColor: 'transparent',
-    textStyle: {
-      color: '#e4e7ed'
-    }
+const analysisState = computed(() => {
+  switch (taskStatus.value.status) {
+    case 'analyzing': return { text: '分析中', variant: 'secondary' as const }
+    case 'ready': return { text: '正常', variant: 'default' as const }
+    case 'failed': return { text: '失败', variant: 'destructive' as const }
+    case 'not_ready': return { text: '未就绪', variant: 'outline' as const }
+    default: return { text: '未知', variant: 'secondary' as const }
   }
 })
 
-// 状态码分布图配置
+const successRate = computed(() => summary.value.total_requests
+  ? (summary.value.success_requests / summary.value.total_requests) * 100
+  : 0)
+
+const hasTrendData = computed(() => trend.value.hours.length > 0 && trend.value.counts.length > 0)
+const hasStatusData = computed(() => Object.keys(statusDistribution.value).length > 0)
+
+const trendChartOption = computed(() => ({
+  animationDuration: 350,
+  tooltip: {
+    trigger: 'axis',
+    backgroundColor: '#111827',
+    borderColor: '#334155',
+    textStyle: { color: '#f8fafc' },
+  },
+  grid: { left: 16, right: 18, top: 18, bottom: 12, containLabel: true },
+  xAxis: {
+    type: 'category',
+    boundaryGap: false,
+    data: trend.value.hours,
+    axisLabel: {
+      color: '#94a3b8',
+      formatter: (value: string) => timeRange.value === 168 ? value.slice(5) : value.slice(11),
+    },
+    axisLine: { lineStyle: { color: '#334155' } },
+  },
+  yAxis: {
+    type: 'value',
+    minInterval: 1,
+    axisLabel: { color: '#94a3b8' },
+    splitLine: { lineStyle: { color: '#1f2937' } },
+  },
+  series: [{
+    name: '请求数',
+    type: 'line',
+    smooth: true,
+    symbol: 'circle',
+    symbolSize: 6,
+    data: trend.value.counts,
+    lineStyle: { color: '#16a34a', width: 2 },
+    itemStyle: { color: '#22c55e' },
+    areaStyle: { color: 'rgba(34, 197, 94, 0.12)' },
+  }],
+}))
+
 const statusChartOption = computed(() => {
-  const statusDist = stats.value.status_distribution || {}
-  const colors = {
-    '2xx': '#009639',
-    '3xx': '#00A86B',
-    '4xx': '#E6A23C',
-    '5xx': '#dc2626'
+  const colors: Record<string, string> = {
+    '2': '#22c55e',
+    '3': '#3b82f6',
+    '4': '#f59e0b',
+    '5': '#ef4444',
   }
-  
-  const data = Object.entries(statusDist)
-    .map(([status, count]) => {
-      let category = 'other'
-      const code = parseInt(status)
-      if (code >= 200 && code < 300) category = '2xx'
-      else if (code >= 300 && code < 400) category = '3xx'
-      else if (code >= 400 && code < 500) category = '4xx'
-      else if (code >= 500) category = '5xx'
-      
-      return {
-        value: Number(count),
-        name: `HTTP ${status}`,
-        itemStyle: { color: colors[category] || 'var(--text-muted)' }
-      }
-    })
+  const data = Object.entries(statusDistribution.value)
+    .map(([code, count]) => ({
+      name: `HTTP ${code}`,
+      value: Number(count),
+      itemStyle: { color: colors[code.charAt(0)] || '#64748b' },
+    }))
     .sort((a, b) => b.value - a.value)
-    .slice(0, 10)
-  
+
   return {
-    backgroundColor: 'transparent',
-    textStyle: {
-      color: '#e4e7ed'
-    },
     tooltip: {
       trigger: 'item',
-      formatter: '{b}: {c} ({d}%)',
-      backgroundColor: 'rgba(26, 35, 50, 0.95)',
-      borderColor: '#2d3748',
-      textStyle: {
-        color: '#e4e7ed'
-      }
+      formatter: '{b}<br/>{c} 次（{d}%）',
+      backgroundColor: '#111827',
+      borderColor: '#334155',
+      textStyle: { color: '#f8fafc' },
     },
-    series: [
-      {
-        type: 'pie',
-        radius: ['40%', '70%'],
-        avoidLabelOverlap: false,
-        itemStyle: {
-          borderRadius: 10,
-          borderColor: 'transparent',
-          borderWidth: 0
-        },
-        label: {
-          show: true,
-          formatter: '{b}\n{c}'
-        },
-        data: data
-      }
-    ]
+    legend: { bottom: 0, textStyle: { color: '#94a3b8' } },
+    series: [{
+      type: 'pie',
+      radius: ['48%', '72%'],
+      center: ['50%', '43%'],
+      label: { show: false },
+      emphasis: { label: { show: true, color: '#f8fafc', formatter: '{b}\n{c}' } },
+      data,
+    }],
   }
 })
 
-// 加载Nginx状态
-const loadNginxStatus = async () => {
-  try {
-    const response = await configApi.getStatus()
-    nginxStatus.value = response
-  } catch (error) {
-    ElMessage.error('获取状态失败: ' + (error.detail || error.message || '未知错误'))
-  }
+function compactNumber(value: number | null | undefined): string {
+  return numberFormatter.format(Number(value || 0))
 }
 
-// 加载任务状态（独立接口，不依赖时间范围）
-const loadTaskStatus = async () => {
-  try {
-    const response = await statisticsApi.getTaskStatus()
-    if (response.success) {
-      taskStatus.value = {
-        status: response.status || 'unknown',
-        is_running: response.is_running || false,
-        last_analysis_time: response.last_analysis_time || null,
-        analyzed_lines: response.analyzed_lines || 0,
-        last_start_time: response.last_start_time || null,
-        last_end_time: response.last_end_time || null,
-        last_error: response.last_error || null,
-        last_success: response.last_success,
-        last_trigger: response.last_trigger || null,
-        last_duration_seconds: response.last_duration_seconds || 0,
-        running_duration_seconds: response.running_duration_seconds || null
-      }
-    }
-  } catch (error) {
-    console.error('获取任务状态失败:', error)
-  }
+function percent(value: number | null | undefined): number {
+  return Math.min(100, Math.max(0, Number(value || 0)))
 }
 
-// 加载基础统计数据（只返回统计数据，不包含任务状态）
-const loadStatisticsSummary = async () => {
-  if (loadingSummary.value) return
-  loadingSummary.value = true
-  
+async function loadStatusAndResources() {
+  const [statusResult, taskResult, resourcesResult] = await Promise.allSettled([
+    configApi.getStatus(),
+    statisticsApi.getTaskStatus(),
+    systemApi.getResources(),
+  ])
+
+  if (statusResult.status === 'fulfilled') nginxStatus.value = statusResult.value
+  if (taskResult.status === 'fulfilled' && taskResult.value.success) taskStatus.value = taskResult.value
+  if (resourcesResult.status === 'fulfilled' && resourcesResult.value.success) resources.value = resourcesResult.value
+
+  const failures = [statusResult, taskResult, resourcesResult].filter(result => result.status === 'rejected')
+  if (failures.length === 3) throw (failures[0] as PromiseRejectedResult).reason
+}
+
+async function loadStatistics() {
+  if (statisticsLoading.value) return
+  statisticsLoading.value = true
   try {
-    const response = await statisticsApi.getSummary(timeRange.value)
-    if (response.success) {
-      stats.value.summary = response.summary
-    }
-  } catch (error) {
-    console.error('获取基础统计数据失败:', error)
+    const [summaryResult, trendResult, statusResult, ipsResult, pathsResult, attacksResult] = await Promise.allSettled([
+      statisticsApi.getSummary(timeRange.value),
+      statisticsApi.getTrend(timeRange.value),
+      statisticsApi.getStatusDistribution(timeRange.value),
+      statisticsApi.getTopIPs(timeRange.value, 10),
+      statisticsApi.getTopPaths(timeRange.value, 10),
+      statisticsApi.getAttacks(timeRange.value, 50),
+    ])
+
+    summary.value = summaryResult.status === 'fulfilled' && summaryResult.value.success
+      ? summaryResult.value.summary || { ...EMPTY_SUMMARY }
+      : { ...EMPTY_SUMMARY }
+    trend.value = trendResult.status === 'fulfilled'
+      ? trendResult.value.hourly_trend
+      : { hours: [], counts: [] }
+    statusDistribution.value = statusResult.status === 'fulfilled'
+      ? statusResult.value.status_distribution
+      : {}
+    topIps.value = ipsResult.status === 'fulfilled' ? ipsResult.value.top_ips : []
+    topPaths.value = pathsResult.status === 'fulfilled' ? pathsResult.value.top_paths : []
+    attacks.value = attacksResult.status === 'fulfilled' ? attacksResult.value.attacks : []
   } finally {
-    loadingSummary.value = false
+    statisticsLoading.value = false
   }
 }
 
-// 手动触发增量分析（带防抖和冷却时间检查）
-const triggerIncrementalAnalyze = async () => {
+async function refreshAll(showFeedback = false) {
+  if (refreshing.value) return
+  refreshing.value = true
+  pageError.value = ''
+  try {
+    await Promise.all([loadStatusAndResources(), loadStatistics()])
+    lastUpdatedAt.value = new Date()
+    if (showFeedback) ElMessage.success('仪表盘数据已刷新')
+  } catch (error) {
+    pageError.value = apiErrorMessage(error, '仪表盘数据加载失败')
+    if (showFeedback) ElMessage.error(pageError.value)
+  } finally {
+    loading.value = false
+    refreshing.value = false
+  }
+}
+
+async function changeRange(range: TimeRange) {
+  if (timeRange.value === range) return
+  timeRange.value = range
+  await loadStatistics()
+  lastUpdatedAt.value = new Date()
+}
+
+async function triggerAnalyze(full: boolean) {
   if (taskStatus.value.is_running) {
-    ElMessage.info('分析任务正在运行中，请稍候')
+    ElMessage.info('分析任务正在运行中')
+    return
+  }
+  if (!full && Date.now() - lastAnalyzeAt.value < 10_000) {
+    ElMessage.warning('操作过于频繁，请稍后再试')
     return
   }
 
-  // 检查冷却时间
-  const now = Date.now()
-  const timeSinceLastTrigger = now - lastIncrementalAnalyzeTime.value
-  if (timeSinceLastTrigger < INCREMENTAL_ANALYZE_COOLDOWN) {
-    const remainingSeconds = Math.ceil((INCREMENTAL_ANALYZE_COOLDOWN - timeSinceLastTrigger) / 1000)
-    ElMessage.warning(`请等待 ${remainingSeconds} 秒后再试`)
-    return
-  }
-
+  lastAnalyzeAt.value = Date.now()
+  taskStatus.value = { ...taskStatus.value, is_running: true, status: 'analyzing', analyzed_lines: 0 }
   try {
-    // 记录触发时间
-    lastIncrementalAnalyzeTime.value = now
-    
-    // 任务开始时立即重置 analyzed_lines 为 0
-    taskStatus.value.analyzed_lines = 0
-    taskStatus.value.is_running = true
-    taskStatus.value.status = 'analyzing'
-    
-    // 页面触发：执行增量分析（full=false）
-    // 一次分析会同时分析5分钟、1小时、1天三个时间范围
-    const res = await statisticsApi.triggerAnalyze(false)
-    if (res.success) {
-      ElMessage.success(res.message || '增量分析已在后台启动')
-      // 立即刷新任务状态
-      loadTaskStatus()
-      // 稍等几秒再刷新一次任务状态和统计数据
-      setTimeout(() => {
-        loadTaskStatus()
-        loadStatisticsSummary()
-      }, 3000)
-    } else {
-      ElMessage.warning(res.message || '增量分析启动失败')
-      loadTaskStatus()
+    const response = await statisticsApi.triggerAnalyze(full)
+    if (!response.success) {
+      ElMessage.warning(response.message || '分析任务未启动')
+      await loadStatusAndResources()
+      return
     }
+    ElMessage.success(response.message || `${full ? '全量' : '增量'}分析已启动`)
+    if (analyzeTimer) clearTimeout(analyzeTimer)
+    analyzeTimer = setTimeout(() => void refreshAll(), full ? 5000 : 3000)
   } catch (error) {
-    console.error('触发增量分析失败:', error)
-    // 提取错误详情
-    let errorMessage = '未知错误'
-    if (error.status === 429) {
-      // 429 Too Many Requests
-      errorMessage = error.detail || error.message || '分析过于频繁，请稍后再试'
-    } else {
-      errorMessage = error.message || error.detail || '未知错误'
-    }
-    ElMessage.error('触发增量分析失败: ' + errorMessage)
-    loadTaskStatus()
+    taskStatus.value = { ...taskStatus.value, is_running: false, status: 'failed' }
+    ElMessage.error(apiErrorMessage(error, '启动分析失败'))
   }
 }
 
-// 手动触发全量统计分析
-const triggerAnalyzeNow = async () => {
-  if (taskStatus.value.is_running) return
-
-  try {
-    // 任务开始时立即重置 analyzed_lines 为 0
-    taskStatus.value.analyzed_lines = 0
-    taskStatus.value.is_running = true
-    taskStatus.value.status = 'analyzing'
-    
-    // 页面触发：执行全量分析（full=true）
-    // 一次分析会同时分析5分钟、1小时、1天三个时间范围
-    const res = await statisticsApi.triggerAnalyze(true)
-    if (res.success) {
-      ElMessage.success(res.message || '全量分析已在后台启动')
-      // 立即刷新任务状态
-      loadTaskStatus()
-      // 稍等几秒再刷新一次任务状态和统计数据
-      setTimeout(() => {
-        loadTaskStatus()
-        loadStatisticsSummary()
-      }, 5000)
-    } else {
-      if (res.message) {
-        ElMessage.warning(res.message)
-      }
-      loadTaskStatus()
-    }
-  } catch (error) {
-    console.error('手动触发统计分析失败:', error)
-    ElMessage.error('手动触发统计分析失败: ' + (error.detail || error.message || '未知错误'))
-    loadTaskStatus()
-  }
-}
-
-// 加载时间趋势数据
-const loadStatisticsTrend = async () => {
-  if (loadingTrend.value) return
-  loadingTrend.value = true
-  
-  try {
-    const response = await statisticsApi.getTrend(timeRange.value)
-    if (response.success && response.hourly_trend) {
-      stats.value.hourly_trend = response.hourly_trend
-    } else {
-      console.warn(`[Dashboard] 趋势数据为空 (${timeRange.value}小时):`, response.message || '未知错误')
-      // 如果数据为空，设置为空对象，避免图表报错
-      stats.value.hourly_trend = { hours: [], counts: [] }
-    }
-  } catch (error) {
-    console.error('获取趋势数据失败:', error)
-    stats.value.hourly_trend = { hours: [], counts: [] }
-  } finally {
-    loadingTrend.value = false
-  }
-}
-
-// 加载Top IPs
-const loadTopIPs = async () => {
-  if (loadingTopIPs.value) return
-  loadingTopIPs.value = true
-  
-  try {
-    const response = await statisticsApi.getTopIPs(timeRange.value, 10)
-    if (response.success) {
-      stats.value.top_ips = response.top_ips
-    }
-  } catch (error) {
-    console.error('获取Top IPs失败:', error)
-  } finally {
-    loadingTopIPs.value = false
-  }
-}
-
-// 加载Top Paths
-const loadTopPaths = async () => {
-  if (loadingTopPaths.value) return
-  loadingTopPaths.value = true
-  
-  try {
-    const response = await statisticsApi.getTopPaths(timeRange.value, 10)
-    if (response.success) {
-      stats.value.top_paths = response.top_paths
-    }
-  } catch (error) {
-    console.error('获取Top Paths失败:', error)
-  } finally {
-    loadingTopPaths.value = false
-  }
-}
-
-// 加载状态码分布
-const loadStatusDistribution = async () => {
-  if (loadingStatusDist.value) return
-  loadingStatusDist.value = true
-  
-  try {
-    const response = await statisticsApi.getStatusDistribution(timeRange.value)
-    if (response.success) {
-      stats.value.status_distribution = response.status_distribution
-    }
-  } catch (error) {
-    console.error('获取状态码分布失败:', error)
-  } finally {
-    loadingStatusDist.value = false
-  }
-}
-
-// 加载攻击检测（延迟加载）
-const loadAttacks = async () => {
-  if (loadingAttacks.value) return
-  loadingAttacks.value = true
-  
-  try {
-    const response = await statisticsApi.getAttacks(timeRange.value, 50)
-    if (response.success) {
-      stats.value.attacks = response.attacks
-    }
-  } catch (error) {
-    console.error('获取攻击检测失败:', error)
-  } finally {
-    loadingAttacks.value = false
-  }
-}
-
-// 加载所有统计数据（按优先级分批加载）
-const loadStatistics = async () => {
-  // 第一批：任务状态和基础统计（立即加载，最轻量）
-  loadTaskStatus()
-  loadStatisticsSummary()
-  
-  // 第二批：图表数据（稍后加载）
-  setTimeout(() => {
-    loadStatisticsTrend()
-    loadStatusDistribution()
-  }, 100)
-  
-  // 第三批：Top数据（再稍后加载）
-  setTimeout(() => {
-    loadTopIPs()
-    loadTopPaths()
-  }, 300)
-  
-  // 第四批：攻击检测（最后加载，数据量大）
-  setTimeout(() => {
-    loadAttacks()
-  }, 500)
-}
-
-// 加载系统资源
-const loadSystemResources = async () => {
-  try {
-    const response = await systemApi.getResources()
-    if (response.success) {
-      systemResources.value = response
-    } else {
-      console.warn('获取系统资源失败:', response.error)
-    }
-  } catch (error) {
-    console.error('获取系统资源失败:', error)
-    // 不显示错误消息，因为系统资源可能不可用
-  }
-}
-
-// 加载系统版本
-const loadSystemVersion = async () => {
-  try {
-    const response = await systemApi.getVersion()
-    if (response.success) {
-      systemVersion.value = {
-        version: response.version,
-        build_time_formatted: response.build_time_formatted
-      }
-    }
-  } catch (error) {
-    console.error('获取系统版本失败:', error)
-    // 不显示错误消息，版本信息不是关键功能
-  }
-}
-
-// 刷新状态
-const refreshStatus = () => {
-  loadNginxStatus()
-  loadTaskStatus()
-  loadStatistics()
-  loadSystemResources()
-  loadSystemVersion()
-}
-
-// 组件挂载
 onMounted(() => {
-  loadNginxStatus()
-  loadTaskStatus()
-  loadStatistics()
-  loadSystemResources()
-  loadSystemVersion()
-  
-  // 每30秒自动刷新（任务状态和统计数据）
-  refreshTimer = setInterval(() => {
-    loadNginxStatus()
-    loadTaskStatus()
-    loadStatistics()
-    loadSystemResources()
-    // 版本信息不需要频繁刷新，只在初始加载时获取
-  }, 30000)
+  void refreshAll()
+  refreshTimer = setInterval(() => void refreshAll(), 30_000)
 })
 
-// 组件卸载
 onUnmounted(() => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-  }
+  if (refreshTimer) clearInterval(refreshTimer)
+  if (analyzeTimer) clearTimeout(analyzeTimer)
 })
 </script>
 
-<style scoped>
-.dashboard {
-  padding: 20px;
-  background-color: var(--bg-primary);
-  min-height: 100%;
-}
+<template>
+  <div class="page-shell space-y-5">
+    <div class="page-heading gap-4">
+      <div>
+        <h2 class="page-title">仪表盘</h2>
+        <p class="page-description">
+          Nginx 运行状态、访问统计和主机资源概览
+          <span v-if="lastUpdatedAt"> · 更新于 {{ formatDateTime(lastUpdatedAt) }}</span>
+        </p>
+      </div>
+      <div class="toolbar">
+        <Button variant="secondary" :disabled="refreshing" @click="refreshAll(true)">
+          <RefreshCw :class="['size-4', { 'animate-spin': refreshing }]" />刷新
+        </Button>
+        <Button variant="outline" :disabled="taskStatus.is_running" @click="triggerAnalyze(false)">
+          <ScanSearch class="size-4" />增量分析
+        </Button>
+        <Button :disabled="taskStatus.is_running" @click="triggerAnalyze(true)">
+          <BarChart3 class="size-4" />全量分析
+        </Button>
+      </div>
+    </div>
 
-.mb-20 {
-  margin-bottom: 20px;
-}
+    <div v-if="pageError" class="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-red-200">
+      <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+      <div><div class="font-medium">部分数据加载失败</div><div class="mt-1 text-red-200/80">{{ pageError }}</div></div>
+    </div>
 
-.mt-20 {
-  margin-top: 20px;
-}
+    <Card>
+      <CardHeader class="border-b pb-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle class="flex items-center gap-2 text-base"><Server class="size-4 text-primary" />Nginx 运行状态</CardTitle>
+            <CardDescription class="mt-1">当前生产实例与统计分析任务</CardDescription>
+          </div>
+          <div class="flex items-center gap-2">
+            <Badge :variant="nginxStatus.running ? 'default' : 'destructive'">
+              <span :class="['mr-1.5 size-1.5 rounded-full', nginxStatus.running ? 'bg-emerald-200' : 'bg-red-200']" />
+              {{ nginxStatus.running ? '运行中' : '已停止' }}
+            </Badge>
+            <Badge :variant="analysisState.variant">分析：{{ analysisState.text }}</Badge>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent class="grid grid-cols-2 gap-px overflow-hidden p-0 xl:grid-cols-4">
+        <div v-for="item in [
+          ['进程 ID', nginxStatus.pid || '—'],
+          ['当前版本', nginxStatus.version || '未知'],
+          ['运行目录', nginxStatus.directory || '—'],
+          ['运行时间', nginxStatus.uptime || '—'],
+          ['已分析行数', taskStatus.analyzed_lines ? compactNumber(taskStatus.analyzed_lines) : '—'],
+          ['上次分析', taskStatus.last_analysis_time ? formatDateTime(taskStatus.last_analysis_time) : '—'],
+          ['上次耗时', taskStatus.last_duration_seconds ? `${taskStatus.last_duration_seconds.toFixed(1)} 秒` : '—'],
+          ['任务来源', taskStatus.last_trigger || '—'],
+        ]" :key="String(item[0])" class="min-w-0 border-b border-r p-4 last:border-b-0">
+          <div class="text-xs text-muted-foreground">{{ item[0] }}</div>
+          <div class="mt-1 truncate text-sm font-medium" :title="String(item[1])">{{ item[1] }}</div>
+        </div>
+      </CardContent>
+    </Card>
 
-.mr-5 {
-  margin-right: 5px;
-}
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <template v-if="loading">
+        <Skeleton v-for="index in 4" :key="index" class="h-28 rounded-xl" />
+      </template>
+      <template v-else>
+        <Card v-for="metric in [
+          { label: '总请求数', value: compactNumber(summary.total_requests), note: `${timeRange} 小时`, icon: Activity, tone: 'text-primary bg-primary/10' },
+          { label: '成功请求', value: compactNumber(summary.success_requests), note: `成功率 ${successRate.toFixed(1)}%`, icon: ShieldCheck, tone: 'text-emerald-400 bg-emerald-500/10' },
+          { label: '错误请求', value: compactNumber(summary.error_requests), note: `错误率 ${summary.error_rate.toFixed(1)}%`, icon: AlertTriangle, tone: 'text-amber-400 bg-amber-500/10' },
+          { label: '攻击检测', value: compactNumber(summary.attack_count), note: `错误日志 ${compactNumber(summary.error_log_count)}`, icon: ScanSearch, tone: 'text-red-400 bg-red-500/10' },
+        ]" :key="metric.label" class="gap-0 py-0">
+          <CardContent class="flex items-start justify-between p-5">
+            <div><div class="text-sm text-muted-foreground">{{ metric.label }}</div><div class="mt-2 text-2xl font-semibold tracking-tight">{{ metric.value }}</div><div class="mt-1 text-xs text-muted-foreground">{{ metric.note }}</div></div>
+            <span :class="['grid size-9 place-items-center rounded-lg', metric.tone]"><component :is="metric.icon" class="size-4" /></span>
+          </CardContent>
+        </Card>
+      </template>
+    </div>
 
-.ml-10 {
-  margin-left: 10px;
-}
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <Card class="gap-0 py-0">
+        <CardContent class="space-y-4 p-5">
+          <div class="flex items-center justify-between"><div><div class="text-sm text-muted-foreground">CPU 使用率</div><div class="mt-1 text-xl font-semibold">{{ percent(resources.cpu.percent).toFixed(1) }}%</div></div><Activity class="size-5 text-primary" /></div>
+          <Progress :model-value="percent(resources.cpu.percent)" /><div class="text-xs text-muted-foreground">{{ resources.cpu.count?.logical || 0 }} 个逻辑核心</div>
+        </CardContent>
+      </Card>
+      <Card class="gap-0 py-0">
+        <CardContent class="space-y-4 p-5">
+          <div class="flex items-center justify-between"><div><div class="text-sm text-muted-foreground">内存使用</div><div class="mt-1 text-xl font-semibold">{{ formatFileSize(resources.memory.used) }}</div></div><Database class="size-5 text-primary" /></div>
+          <Progress :model-value="percent(resources.memory.percent)" /><div class="text-xs text-muted-foreground">{{ percent(resources.memory.percent).toFixed(1) }}% / {{ formatFileSize(resources.memory.total) }}</div>
+        </CardContent>
+      </Card>
+      <Card class="gap-0 py-0">
+        <CardContent class="space-y-4 p-5">
+          <div class="flex items-center justify-between"><div><div class="text-sm text-muted-foreground">磁盘使用</div><div class="mt-1 text-xl font-semibold">{{ percent(resources.disk.root?.percent).toFixed(1) }}%</div></div><HardDrive class="size-5 text-primary" /></div>
+          <Progress :model-value="percent(resources.disk.root?.percent)" /><div class="text-xs text-muted-foreground">{{ formatFileSize(resources.disk.root?.used) }} / {{ formatFileSize(resources.disk.root?.total) }}</div>
+        </CardContent>
+      </Card>
+      <Card class="gap-0 py-0">
+        <CardContent class="space-y-4 p-5">
+          <div class="flex items-center justify-between"><div><div class="text-sm text-muted-foreground">网络连接</div><div class="mt-1 text-xl font-semibold">{{ compactNumber(resources.network.connections) }}</div></div><Network class="size-5 text-primary" /></div>
+          <div class="grid grid-cols-2 gap-3 text-xs text-muted-foreground"><span>上传 {{ formatFileSize(resources.network.bytes_sent) }}</span><span>下载 {{ formatFileSize(resources.network.bytes_recv) }}</span></div>
+        </CardContent>
+      </Card>
+    </div>
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: var(--text-primary);
-}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div><h3 class="text-base font-medium">访问统计</h3><p class="text-sm text-muted-foreground">切换时间范围会同步刷新所有统计区域。</p></div>
+      <div class="inline-flex rounded-lg border bg-muted/40 p-1">
+        <Button v-for="option in [{ value: 1, label: '1 小时' }, { value: 24, label: '24 小时' }, { value: 168, label: '7 天' }]" :key="option.value" size="sm" :variant="timeRange === option.value ? 'secondary' : 'ghost'" @click="changeRange(option.value as TimeRange)">{{ option.label }}</Button>
+      </div>
+    </div>
 
-.card-header span {
-  color: var(--text-primary);
-  font-weight: 500;
-}
+    <div class="grid gap-4 xl:grid-cols-3">
+      <Card class="xl:col-span-2">
+        <CardHeader class="pb-2"><CardTitle class="text-base">访问趋势</CardTitle><CardDescription>所选时间范围内的请求变化</CardDescription></CardHeader>
+        <CardContent>
+          <Skeleton v-if="statisticsLoading" class="h-72 w-full" />
+          <v-chart v-else-if="hasTrendData" class="h-72 w-full" :option="trendChartOption" autoresize />
+          <div v-else class="grid h-72 place-items-center text-sm text-muted-foreground">暂无趋势数据，请先执行分析</div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader class="pb-2"><CardTitle class="text-base">状态码分布</CardTitle><CardDescription>HTTP 响应状态构成</CardDescription></CardHeader>
+        <CardContent>
+          <Skeleton v-if="statisticsLoading" class="h-72 w-full" />
+          <v-chart v-else-if="hasStatusData" class="h-72 w-full" :option="statusChartOption" autoresize />
+          <div v-else class="grid h-72 place-items-center text-sm text-muted-foreground">暂无状态码数据</div>
+        </CardContent>
+      </Card>
+    </div>
 
-.stat-card {
-  margin-bottom: 20px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
+    <div class="grid gap-4 xl:grid-cols-2">
+      <Card>
+        <CardHeader><CardTitle class="text-base">访问量 Top 10 IP</CardTitle><CardDescription>访问最频繁的客户端地址</CardDescription></CardHeader>
+        <CardContent class="px-0">
+          <Table><TableHeader><TableRow><TableHead class="pl-6">IP 地址</TableHead><TableHead class="pr-6 text-right">访问次数</TableHead></TableRow></TableHeader><TableBody>
+            <TableRow v-for="item in topIps" :key="item.ip"><TableCell class="pl-6 font-mono text-xs">{{ item.ip }}</TableCell><TableCell class="pr-6 text-right font-medium">{{ compactNumber(item.count) }}</TableCell></TableRow>
+            <TableRow v-if="!topIps.length"><TableCell colspan="2" class="h-24 text-center text-muted-foreground">暂无数据</TableCell></TableRow>
+          </TableBody></Table>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle class="text-base">访问量 Top 10 路径</CardTitle><CardDescription>请求最集中的 URL 路径</CardDescription></CardHeader>
+        <CardContent class="px-0">
+          <Table><TableHeader><TableRow><TableHead class="pl-6">路径</TableHead><TableHead class="pr-6 text-right">访问次数</TableHead></TableRow></TableHeader><TableBody>
+            <TableRow v-for="item in topPaths" :key="item.path"><TableCell class="max-w-[18rem] truncate pl-6 font-mono text-xs" :title="item.path">{{ item.path }}</TableCell><TableCell class="pr-6 text-right font-medium">{{ compactNumber(item.count) }}</TableCell></TableRow>
+            <TableRow v-if="!topPaths.length"><TableCell colspan="2" class="h-24 text-center text-muted-foreground">暂无数据</TableCell></TableRow>
+          </TableBody></Table>
+        </CardContent>
+      </Card>
+    </div>
 
-.stat-card :deep(.ui-card__body) {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.resource-card {
-  display: flex;
-  flex-direction: column;
-  min-height: 140px;
-}
-
-.stat-content {
-  display: flex;
-  align-items: flex-start;
-  padding: 8px 0;
-  flex: 1;
-}
-
-.stat-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-white);
-  margin-right: 15px;
-  flex-shrink: 0;
-}
-
-.stat-info {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.stat-value {
-  font-size: 26px;
-  font-weight: bold;
-  color: var(--text-primary);
-  line-height: 1.2;
-  margin-bottom: 6px;
-  word-break: break-all;
-}
-
-.stat-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-
-.stat-extra {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 4px;
-  line-height: 1.2;
-  word-break: break-all;
-}
-
-.stat-progress {
-  margin-top: 12px;
-}
-
-/* 统一资源卡片样式 */
-.resource-card .stat-content {
-  min-height: 80px;
-}
-
-.chart {
-  height: 300px;
-  width: 100%;
-}
-
-:deep(.ui-card__header) {
-  font-weight: 500;
-  background-color: var(--bg-secondary);
-  border-bottom-color: var(--border-color);
-  color: var(--text-primary);
-}
-
-:deep(.ui-descriptions__label) {
-  font-weight: 500;
-}
-
-/* Nginx 运行状态描述列表样式 - 无边框 */
-.nginx-status-descriptions {
-  background-color: transparent;
-}
-
-.nginx-status-descriptions :deep(.ui-descriptions__table) {
-  border: none;
-  background-color: transparent;
-}
-
-.nginx-status-descriptions :deep(.ui-descriptions__table td),
-.nginx-status-descriptions :deep(.ui-descriptions__table th) {
-  border: none;
-  background-color: transparent;
-  padding: 12px 16px;
-}
-
-.nginx-status-descriptions :deep(.ui-descriptions__label) {
-  background-color: transparent !important;
-  color: var(--text-secondary);
-  font-weight: 500;
-  padding-right: 20px;
-}
-
-.nginx-status-descriptions :deep(.ui-descriptions__content) {
-  background-color: transparent !important;
-  color: var(--text-primary);
-}
-
-.analysis-status-tag {
-  min-width: 64px;
-  display: inline-flex;
-  justify-content: center;
-}
-
-.analysis-duration-text {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.status-value {
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.stat-icon :deep(.ui-icon) {
-  color: #ffffff;
-}
-</style>
+    <Card v-if="attacks.length">
+      <CardHeader><CardTitle class="flex items-center gap-2 text-base"><AlertTriangle class="size-4 text-red-400" />攻击检测记录</CardTitle><CardDescription>最近 {{ attacks.length }} 条可疑请求</CardDescription></CardHeader>
+      <CardContent class="px-0">
+        <Table><TableHeader><TableRow><TableHead class="pl-6">时间</TableHead><TableHead>来源 IP</TableHead><TableHead>路径</TableHead><TableHead>状态</TableHead><TableHead class="pr-6">类型</TableHead></TableRow></TableHeader><TableBody>
+          <TableRow v-for="(item, index) in attacks" :key="`${item.time}-${index}`"><TableCell class="whitespace-nowrap pl-6 text-xs text-muted-foreground">{{ formatDateTime(item.time) }}</TableCell><TableCell class="font-mono text-xs">{{ item.ip }}</TableCell><TableCell class="max-w-72 truncate font-mono text-xs" :title="item.path">{{ item.path }}</TableCell><TableCell>{{ item.status }}</TableCell><TableCell class="pr-6"><div class="flex flex-wrap gap-1"><Badge v-for="attack in item.attacks" :key="attack" variant="destructive">{{ attack }}</Badge></div></TableCell></TableRow>
+        </TableBody></Table>
+      </CardContent>
+    </Card>
+  </div>
+</template>

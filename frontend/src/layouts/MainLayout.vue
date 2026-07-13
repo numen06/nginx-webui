@@ -144,6 +144,7 @@ const visibleNavigation = computed(() => navigation
   .filter(group => group.items.length))
 
 const currentTitle = computed(() => String(route.meta.title || 'Nginx WebUI'))
+const userInitial = computed(() => (authStore.username || 'U').slice(0, 1).toUpperCase())
 const displayCurrentVersion = computed(() => updateStatus.value.currentVersion || systemVersion.value || '—')
 const showSetupWizard = computed({
   get: () => setupStore.showSetupWizard,
@@ -257,32 +258,6 @@ onMounted(() => {
               <span v-if="updateStatus.hasUpdate" class="ml-auto size-2 rounded-full bg-amber-400" />
             </SidebarMenuButton>
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <SidebarMenuButton class="w-full">
-                  <User />
-                  <span class="truncate">{{ authStore.username || '用户' }}</span>
-                  <ChevronDown class="ml-auto" />
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" class="w-56">
-                <DropdownMenuLabel>
-                  <div>{{ authStore.username }}</div>
-                  <div class="text-xs font-normal text-muted-foreground">
-                    {{ authStore.isAdmin ? '超级管理员' : '普通用户' }}
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem @click="router.push('/profile')">
-                  <User class="size-4" /> 用户中心
-                </DropdownMenuItem>
-                <DropdownMenuItem @click="handleLogout">
-                  <LogOut class="size-4" /> 退出登录
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarMenuItem>
         </SidebarMenu>
         <a
           href="https://gitee.com/numen06/nginx-webui"
@@ -301,9 +276,38 @@ onMounted(() => {
         <SidebarTrigger />
         <Separator orientation="vertical" class="h-5" />
         <h1 class="truncate text-sm font-medium md:text-base">{{ currentTitle }}</h1>
-        <Badge v-if="authStore.isAdmin" variant="secondary" class="ml-auto hidden sm:inline-flex">
-          <BadgeCheck class="mr-1 size-3" />超级管理员
-        </Badge>
+        <div class="ml-auto flex items-center gap-2">
+          <Badge v-if="authStore.isAdmin" variant="secondary" class="hidden md:inline-flex">
+            <BadgeCheck class="mr-1 size-3" />超级管理员
+          </Badge>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button variant="ghost" class="h-10 gap-2 px-2 sm:px-3">
+                <span class="grid size-7 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                  {{ userInitial }}
+                </span>
+                <span class="hidden max-w-32 truncate text-sm sm:inline">{{ authStore.username || '用户' }}</span>
+                <ChevronDown class="hidden size-3.5 text-muted-foreground sm:block" />
+                <span class="sr-only">打开用户菜单</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" class="w-56">
+              <DropdownMenuLabel>
+                <div>{{ authStore.username }}</div>
+                <div class="text-xs font-normal text-muted-foreground">
+                  {{ authStore.isAdmin ? '超级管理员' : '普通用户' }}
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem @click="router.push('/profile')">
+                <User class="size-4" /> 用户中心
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="handleLogout">
+                <LogOut class="size-4" /> 退出登录
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </header>
       <main class="min-w-0 flex-1 overflow-x-hidden">
         <RouterView />

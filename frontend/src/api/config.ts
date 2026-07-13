@@ -1,5 +1,14 @@
 import api from './index'
 
+export interface NginxStatusResponse {
+  running: boolean
+  version?: string | null
+  directory?: string | null
+  pid?: number | string | null
+  uptime?: string | null
+  error?: string
+}
+
 export const configApi = {
   // 获取配置
   getConfig() {
@@ -53,7 +62,7 @@ export const configApi = {
 
   // 获取状态
   getStatus() {
-    return api.get('/config/status')
+    return api.get<NginxStatusResponse>('/config/status')
   },
 
   // 获取备份列表
