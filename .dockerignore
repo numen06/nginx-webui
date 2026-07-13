@@ -93,11 +93,11 @@ backend/.coverage
 *.tar.gz
 *.zip
 *.tgz
-!backend/default-nginx/nginx-1.29.3.tar.gz
+!backend/default-nginx/nginx-*.tar.gz
+!backend/default-nginx/nginx-*.tgz
 
 # 其他
 .cache/
 .pytest_cache/
 .coverage
 htmlcov/
-

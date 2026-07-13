@@ -8,6 +8,8 @@ from app.utils.dynamic_registry import (
     DYNAMIC_LOCATION_BLOCK_END,
     DYNAMIC_LOCATION_BLOCK_START,
     DYNAMIC_LOCATION_INCLUDE,
+    DYNAMIC_UPSTREAM_FILE,
+    LEGACY_DYNAMIC_UPSTREAM_FILES,
     DynamicServiceGroup,
     _write_dynamic_files,
     render_dynamic_nginx_config,
@@ -66,10 +68,15 @@ class DynamicRegistryConfigTests(unittest.TestCase):
                 "}\n",
                 encoding="utf-8",
             )
+            legacy_upstream = conf_d_dir / LEGACY_DYNAMIC_UPSTREAM_FILES[0]
+            legacy_upstream.write_text("# legacy generated config\n", encoding="utf-8")
 
             _write_dynamic_files(conf_dir, rendered)
             first_content = webui.read_text(encoding="utf-8")
 
+            self.assertFalse(legacy_upstream.exists())
+            self.assertTrue((conf_d_dir / DYNAMIC_UPSTREAM_FILE).exists())
+            self.assertGreater(DYNAMIC_UPSTREAM_FILE, webui.name)
             self.assertNotIn(DYNAMIC_LOCATION_INCLUDE, first_content)
             self.assertIn(DYNAMIC_LOCATION_BLOCK_START, first_content)
             self.assertIn(DYNAMIC_LOCATION_BLOCK_END, first_content)

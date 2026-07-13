@@ -23,7 +23,8 @@ from app.utils.nginx import (
 from app.utils.nginx_status_cache import clear_nginx_status_cache
 
 
-DYNAMIC_UPSTREAM_FILE = "00-webui-dynamic-upstreams.conf"
+DYNAMIC_UPSTREAM_FILE = "zz-webui-dynamic-upstreams.conf"
+LEGACY_DYNAMIC_UPSTREAM_FILES = ("00-webui-dynamic-upstreams.conf",)
 DYNAMIC_LOCATION_INCLUDE = "include conf.d/webui-dynamic/locations/*.conf;"
 DYNAMIC_LOCATION_BLOCK_START = "# BEGIN NGINX WEBUI DYNAMIC LOCATIONS"
 DYNAMIC_LOCATION_BLOCK_END = "# END NGINX WEBUI DYNAMIC LOCATIONS"
@@ -412,6 +413,11 @@ def _write_dynamic_files(conf_dir: Path, rendered: Dict[str, str]) -> None:
     conf_d_dir = conf_dir / "conf.d"
     locations_dir = conf_d_dir / "webui-dynamic" / "locations"
     locations_dir.mkdir(parents=True, exist_ok=True)
+
+    for legacy_name in LEGACY_DYNAMIC_UPSTREAM_FILES:
+        legacy_path = conf_d_dir / legacy_name
+        if legacy_path.exists():
+            legacy_path.unlink()
 
     upstream_path = conf_d_dir / DYNAMIC_UPSTREAM_FILE
     upstream_path.write_text(rendered["upstreams"], encoding="utf-8")
