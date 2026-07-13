@@ -168,6 +168,44 @@ def _migrate_add_certificate_issue_fields():
         db.close()
 
 
+def _migrate_add_user_admin():
+    """迁移：增加管理员标记，并确保升级后至少存在一个有效管理员。"""
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table("users"):
+            return
+        columns = [col["name"] for col in inspector.get_columns("users")]
+        with engine.begin() as conn:
+            if "is_admin" not in columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE users ADD COLUMN is_admin BOOLEAN "
+                        "DEFAULT 0 NOT NULL"
+                    )
+                )
+            conn.execute(
+                text("UPDATE users SET is_admin = 1 WHERE username = 'admin'")
+            )
+            admin_count = conn.execute(
+                text("SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_active = 1")
+            ).scalar_one()
+            if not admin_count:
+                fallback_id = conn.execute(
+                    text(
+                        "SELECT id FROM users WHERE is_active = 1 "
+                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                    )
+                ).scalar_one_or_none()
+                if fallback_id is not None:
+                    conn.execute(
+                        text("UPDATE users SET is_admin = 1 WHERE id = :user_id"),
+                        {"user_id": fallback_id},
+                    )
+    except Exception as e:
+        if "no such table" not in str(e).lower():
+            print(f"迁移 users.is_admin 字段时出错: {e}")
+
+
 def init_db():
     """初始化数据库，创建所有表"""
     Base.metadata.create_all(bind=engine)
@@ -176,6 +214,7 @@ def init_db():
     _migrate_add_is_last_version()
     _migrate_add_certbot_cert_name()
     _migrate_add_certificate_issue_fields()
+    _migrate_add_user_admin()
     
     # 创建默认管理员账户（如果不存在）
     db = SessionLocal()
@@ -188,6 +227,7 @@ def init_db():
                 username="admin",
                 password_hash=password_hash,
                 is_active=True,
+                is_admin=True,
                 created_at=datetime.now()
             )
             db.add(admin_user)

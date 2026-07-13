@@ -1,131 +1,131 @@
 <template>
-  <div class="config-page">
-    <el-card>
+  <div class="config-page page-shell">
+    <ui-card>
       <template #header>
         <div class="card-header">
           <span>Nginx 配置</span>
           <div class="header-actions">
-            <el-button @click="handleFormat" :disabled="!currentFilePath">
-              <el-icon><MagicStick /></el-icon>
+            <ui-button @click="handleFormat" :disabled="!currentFilePath">
+              <ui-icon><MagicStick /></ui-icon>
               <span class="btn-label">格式化</span>
-            </el-button>
-            <el-button @click="handleValidate" :disabled="!currentFilePath">
-              <el-icon><Finished /></el-icon>
+            </ui-button>
+            <ui-button @click="handleValidate" :disabled="!currentFilePath">
+              <ui-icon><Finished /></ui-icon>
               <span class="btn-label">校验配置</span>
-            </el-button>
-            <el-button @click="handleTest">
-              <el-icon><Cpu /></el-icon>
+            </ui-button>
+            <ui-button @click="handleTest">
+              <ui-icon><Cpu /></ui-icon>
               <span class="btn-label">测试配置</span>
-            </el-button>
-            <el-button type="success" @click="handleSave" :loading="saving" :disabled="!currentFilePath">
-              <el-icon><DocumentChecked /></el-icon>
+            </ui-button>
+            <ui-button type="success" @click="handleSave" :loading="saving" :disabled="!currentFilePath">
+              <ui-icon><DocumentChecked /></ui-icon>
               <span class="btn-label">保存</span>
-            </el-button>
-            <el-button type="warning" @click="handleApply" :loading="applying">
-              <el-icon><Upload /></el-icon>
+            </ui-button>
+            <ui-button type="warning" @click="handleApply" :loading="applying">
+              <ui-icon><Upload /></ui-icon>
               <span class="btn-label">强制覆盖</span>
-            </el-button>
-            <el-button type="warning" @click="handleReload">
-              <el-icon><Refresh /></el-icon>
+            </ui-button>
+            <ui-button type="warning" @click="handleReload">
+              <ui-icon><Refresh /></ui-icon>
               <span class="btn-label">重新装载</span>
-            </el-button>
+            </ui-button>
           </div>
         </div>
       </template>
 
       <div class="config-info">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item v-if="configInfo.install_path" label="当前 Nginx 目录">
-            <el-text type="info" size="small">{{ configInfo.install_path }}</el-text>
-          </el-descriptions-item>
-          <el-descriptions-item label="当前 Nginx 版本">
-            <el-tag v-if="configInfo.nginx_version" type="info" size="small">
+        <ui-descriptions :column="2" border size="small">
+          <ui-descriptions-item v-if="configInfo.install_path" label="当前 Nginx 目录">
+            <ui-text type="info" size="small">{{ configInfo.install_path }}</ui-text>
+          </ui-descriptions-item>
+          <ui-descriptions-item label="当前 Nginx 版本">
+            <ui-tag v-if="configInfo.nginx_version" type="info" size="small">
               {{ configInfo.nginx_version }}
-            </el-tag>
+            </ui-tag>
             <span v-else class="text-muted">未知</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="配置目录" :span="2">
-            <el-text v-if="configInfo.config_dir" class="config-path" size="small">
+          </ui-descriptions-item>
+          <ui-descriptions-item label="配置目录" :span="2">
+            <ui-text v-if="configInfo.config_dir" class="config-path" size="small">
               {{ configInfo.config_dir }}
-            </el-text>
+            </ui-text>
             <span v-else class="text-muted">未知</span>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="configInfo.binary" label="可执行文件路径" :span="2">
-            <el-text type="info" size="small">{{ configInfo.binary }}</el-text>
-          </el-descriptions-item>
-          <el-descriptions-item label="临时配置状态">
-            <el-tag :type="configInfo.pending_changes ? 'warning' : 'success'" size="small">
+          </ui-descriptions-item>
+          <ui-descriptions-item v-if="configInfo.binary" label="可执行文件路径" :span="2">
+            <ui-text type="info" size="small">{{ configInfo.binary }}</ui-text>
+          </ui-descriptions-item>
+          <ui-descriptions-item label="临时配置状态">
+            <ui-tag :type="configInfo.pending_changes ? 'warning' : 'success'" size="small">
               {{ configInfo.pending_changes ? '存在未应用的修改' : '已与运行版本同步' }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="配置备份版本" :span="2">
+            </ui-tag>
+          </ui-descriptions-item>
+          <ui-descriptions-item label="配置备份版本" :span="2">
             <div class="backup-row">
-              <el-select
+              <ui-select
                 v-model="selectedBackupId"
                 placeholder="选择一个备份版本（最多显示最近 10 个）"
                 class="backup-select"
                 :disabled="backupLoading || backupOptions.length === 0"
               >
-                <el-option
+                <ui-option
                   v-for="item in backupOptions"
                   :key="item.id"
                   :label="item.label"
                   :value="item.id"
                 />
-              </el-select>
-              <el-button class="backup-btn" @click="handleLoadBackups" :loading="backupLoading" link>
-                <el-icon><RefreshRight /></el-icon>
+              </ui-select>
+              <ui-button class="backup-btn" @click="handleLoadBackups" :loading="backupLoading" link>
+                <ui-icon><RefreshRight /></ui-icon>
                 <span class="btn-label">刷新</span>
-              </el-button>
-              <el-button type="primary" class="backup-btn" @click="handleCreateBackup" :loading="backupLoading">
-                <el-icon><DocumentAdd /></el-icon>
+              </ui-button>
+              <ui-button type="primary" class="backup-btn" @click="handleCreateBackup" :loading="backupLoading">
+                <ui-icon><DocumentAdd /></ui-icon>
                 <span class="btn-label">备份当前线上配置</span>
-              </el-button>
-              <el-button type="warning" class="backup-btn" :disabled="!selectedBackupId" @click="handleRollback">
-                <el-icon><RefreshLeft /></el-icon>
+              </ui-button>
+              <ui-button type="warning" class="backup-btn" :disabled="!selectedBackupId" @click="handleRollback">
+                <ui-icon><RefreshLeft /></ui-icon>
                 <span class="btn-label">回滚到所选版本</span>
-              </el-button>
+              </ui-button>
             </div>
-          </el-descriptions-item>
-        </el-descriptions>
+          </ui-descriptions-item>
+        </ui-descriptions>
       </div>
 
       <div class="config-toolbar">
-        <el-button type="primary" @click="handleNewSite">
-          <el-icon><DocumentAdd /></el-icon>
+        <ui-button type="primary" @click="handleNewSite">
+          <ui-icon><DocumentAdd /></ui-icon>
           <span class="btn-label">新建站点</span>
-        </el-button>
-        <el-button @click="handleNewFile">
-          <el-icon><DocumentAdd /></el-icon>
+        </ui-button>
+        <ui-button @click="handleNewFile">
+          <ui-icon><DocumentAdd /></ui-icon>
           <span class="btn-label">新建文件</span>
-        </el-button>
-        <el-button @click="handleNewDir">
-          <el-icon><FolderAdd /></el-icon>
+        </ui-button>
+        <ui-button @click="handleNewDir">
+          <ui-icon><FolderAdd /></ui-icon>
           <span class="btn-label">新建目录</span>
-        </el-button>
-        <el-button @click="handleRename" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'">
-          <el-icon><Edit /></el-icon>
+        </ui-button>
+        <ui-button @click="handleRename" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'">
+          <ui-icon><Edit /></ui-icon>
           <span class="btn-label">重命名</span>
-        </el-button>
-        <el-button type="danger" @click="handleDelete" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'">
-          <el-icon><Delete /></el-icon>
+        </ui-button>
+        <ui-button type="danger" @click="handleDelete" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'">
+          <ui-icon><Delete /></ui-icon>
           <span class="btn-label">删除</span>
-        </el-button>
-        <el-button type="warning" @click="handleSplitLegacy">
-          <el-icon><Scissor /></el-icon>
+        </ui-button>
+        <ui-button type="warning" @click="handleSplitLegacy">
+          <ui-icon><Scissor /></ui-icon>
           <span class="btn-label">拆分老配置</span>
-        </el-button>
-        <el-button @click="handleMergedPreview">
-          <el-icon><View /></el-icon>
+        </ui-button>
+        <ui-button @click="handleMergedPreview">
+          <ui-icon><View /></ui-icon>
           <span class="btn-label">合并预览</span>
-        </el-button>
+        </ui-button>
       </div>
 
       <div class="config-workspace">
         <aside class="config-sidebar">
-          <el-tabs v-model="sidebarTab" stretch>
-            <el-tab-pane label="站点配置" name="sites">
-              <el-scrollbar height="620px">
+          <ui-tabs v-model="sidebarTab" stretch>
+            <ui-tab-pane label="站点配置" name="sites">
+              <ui-scrollbar height="620px">
                 <div
                   v-for="site in siteItems"
                   :key="site.path"
@@ -136,12 +136,12 @@
                   <span class="site-name">{{ site.label }}</span>
                   <span class="site-path">{{ site.path }}</span>
                 </div>
-                <el-empty v-if="siteItems.length === 0" description="暂无站点配置" :image-size="72" />
-              </el-scrollbar>
-            </el-tab-pane>
-            <el-tab-pane label="文件树" name="files">
-              <el-scrollbar height="620px">
-                <el-tree
+                <ui-empty v-if="siteItems.length === 0" description="暂无站点配置" :image-size="72" />
+              </ui-scrollbar>
+            </ui-tab-pane>
+            <ui-tab-pane label="文件树" name="files">
+              <ui-scrollbar height="620px">
+                <ui-tree
                   class="config-tree"
                   :data="fileTree"
                   node-key="path"
@@ -150,18 +150,18 @@
                   highlight-current
                   @node-click="handleTreeNodeClick"
                 />
-              </el-scrollbar>
-            </el-tab-pane>
-          </el-tabs>
+              </ui-scrollbar>
+            </ui-tab-pane>
+          </ui-tabs>
         </aside>
 
         <main class="editor-panel">
           <div class="editor-header">
             <div>
               <span class="current-file">{{ currentFilePath || '未选择文件' }}</span>
-              <el-tag v-if="isModified" type="warning" size="small">未保存</el-tag>
+              <ui-tag v-if="isModified" type="warning" size="small">未保存</ui-tag>
             </div>
-            <el-text v-if="currentFilePath" type="info" size="small">工作副本</el-text>
+            <ui-text v-if="currentFilePath" type="info" size="small">工作副本</ui-text>
           </div>
           <MonacoEditor
             v-if="currentFilePath"
@@ -170,32 +170,32 @@
             height="620px"
             @change="handleContentChange"
           />
-          <el-empty v-else description="请选择一个配置文件" />
+          <ui-empty v-else description="请选择一个配置文件" />
         </main>
       </div>
 
-      <el-alert class="working-copy-alert" type="info" show-icon :closable="false">
+      <ui-alert class="working-copy-alert" type="info" show-icon :closable="false">
         <template #title>配置目录临时副本模式</template>
         <p class="working-copy-text">
           保存后仅更新工作副本，测试通过后点击“重新装载”才会覆盖线上 conf/ 配置目录并自动备份。
         </p>
-      </el-alert>
-    </el-card>
+      </ui-alert>
+    </ui-card>
 
-    <el-dialog v-model="previewVisible" title="合并预览" width="80%">
+    <ui-dialog v-model="previewVisible" title="合并预览" width="80%">
       <pre class="preview-content">{{ previewContent }}</pre>
       <template #footer>
-        <el-button type="primary" @click="previewVisible = false">关闭</el-button>
+        <ui-button type="primary" @click="previewVisible = false">关闭</ui-button>
       </template>
-    </el-dialog>
+    </ui-dialog>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { configApi } from '../api/config'
 import MonacoEditor from '../components/MonacoEditor.vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
 import { formatDateTime } from '../utils/date'
 import {
   MagicStick,
@@ -212,7 +212,7 @@ import {
   FolderAdd,
   View,
   Scissor
-} from '@element-plus/icons-vue'
+} from '@/components/icons'
 
 const configContent = ref('')
 const originalContent = ref('')
@@ -347,7 +347,7 @@ const findDefaultFile = () => {
   return firstFile?.path || ''
 }
 
-const openFile = async (path, options = {}) => {
+const openFile = async (path, options: { reload?: boolean; discardChanges?: boolean } = {}) => {
   if (!path) return
   if (path === currentFilePath.value && !options.reload) return
   if (isModified.value && !options.discardChanges) {

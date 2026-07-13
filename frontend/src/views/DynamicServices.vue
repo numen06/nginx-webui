@@ -1,49 +1,49 @@
 <template>
-  <div class="dynamic-services-page">
-    <el-card>
+  <div class="dynamic-services-page page-shell">
+    <ui-card>
       <template #header>
         <div class="card-header">
           <span>动态服务</span>
           <div class="header-actions">
-            <el-button @click="loadAll" :loading="loading">
-              <el-icon><RefreshRight /></el-icon>
+            <ui-button @click="loadAll" :loading="loading">
+              <ui-icon><RefreshRight /></ui-icon>
               <span class="btn-label">刷新</span>
-            </el-button>
-            <el-button @click="openPreview">
-              <el-icon><View /></el-icon>
+            </ui-button>
+            <ui-button @click="openPreview">
+              <ui-icon><View /></ui-icon>
               <span class="btn-label">配置预览</span>
-            </el-button>
-            <el-button @click="openSettingsDialog">
-              <el-icon><Setting /></el-icon>
+            </ui-button>
+            <ui-button @click="openSettingsDialog">
+              <ui-icon><Setting /></ui-icon>
               <span class="btn-label">注册设置</span>
-            </el-button>
-            <el-button type="primary" @click="openCreateDialog">
-              <el-icon><Plus /></el-icon>
+            </ui-button>
+            <ui-button type="primary" @click="openCreateDialog">
+              <ui-icon><Plus /></ui-icon>
               <span class="btn-label">新增服务</span>
-            </el-button>
+            </ui-button>
           </div>
         </div>
       </template>
 
-      <el-alert class="auth-alert" type="info" show-icon :closable="false">
+      <ui-alert class="auth-alert" type="info" show-icon :closable="false">
         <template #title>注册鉴权</template>
         <div class="auth-status">
-          <el-tag type="success" size="small">
+          <ui-tag type="success" size="small">
             登录 Token / Basic 认证已启用
-          </el-tag>
-          <el-tag
+          </ui-tag>
+          <ui-tag
             :type="authStatus.explicit_ip_whitelist_enabled || authStatus.auto_same_subnet_enabled ? 'success' : 'warning'"
             size="small"
           >
             {{ whitelistLabel }}
-          </el-tag>
-          <el-text v-if="authNetworks.length" class="auth-networks" size="small">
+          </ui-tag>
+          <ui-text v-if="authNetworks.length" class="auth-networks" size="small">
             {{ authNetworks.join(', ') }}
-          </el-text>
+          </ui-text>
         </div>
-      </el-alert>
+      </ui-alert>
 
-      <el-table
+      <ui-table
         v-loading="loading"
         :data="services"
         style="width: 100%"
@@ -51,176 +51,176 @@
         size="small"
         row-key="id"
       >
-        <el-table-column type="expand">
+        <ui-table-column type="expand">
           <template #default="{ row }">
             <div class="instances-panel">
-              <el-table :data="row.instances" size="small" border>
-                <el-table-column prop="instance_id" label="实例 ID" min-width="180" />
-                <el-table-column prop="target_url" label="目标地址" min-width="220" show-overflow-tooltip />
-                <el-table-column label="状态" width="110">
+              <ui-table :data="row.instances" size="small" border>
+                <ui-table-column prop="instance_id" label="实例 ID" min-width="180" />
+                <ui-table-column prop="target_url" label="目标地址" min-width="220" show-overflow-tooltip />
+                <ui-table-column label="状态" width="110">
                   <template #default="{ row: instance }">
-                    <el-tag :type="instance.status === 'active' && !instance.expired ? 'success' : 'info'" size="small">
+                    <ui-tag :type="instance.status === 'active' && !instance.expired ? 'success' : 'info'" size="small">
                       {{ instance.expired ? 'expired' : instance.status }}
-                    </el-tag>
+                    </ui-tag>
                   </template>
-                </el-table-column>
-                <el-table-column prop="ttl_seconds" label="TTL" width="90" />
-                <el-table-column label="最近心跳" width="180">
+                </ui-table-column>
+                <ui-table-column prop="ttl_seconds" label="TTL" width="90" />
+                <ui-table-column label="最近心跳" width="180">
                   <template #default="{ row: instance }">
                     {{ formatDateTime(instance.last_heartbeat_at) }}
                   </template>
-                </el-table-column>
-                <el-table-column label="操作" width="120" fixed="right">
+                </ui-table-column>
+                <ui-table-column label="操作" width="120" fixed="right">
                   <template #default="{ row: instance }">
-                    <el-button
+                    <ui-button
                       type="warning"
                       link
                       :disabled="instance.status !== 'active'"
                       @click="offlineInstance(row, instance)"
                     >
                       下线
-                    </el-button>
+                    </ui-button>
                   </template>
-                </el-table-column>
-              </el-table>
-              <el-empty v-if="row.instances.length === 0" description="暂无实例" :image-size="60" />
+                </ui-table-column>
+              </ui-table>
+              <ui-empty v-if="row.instances.length === 0" description="暂无实例" :image-size="60" />
             </div>
           </template>
-        </el-table-column>
-        <el-table-column prop="service_name" label="服务名" min-width="170" />
-        <el-table-column label="假域名" min-width="180">
+        </ui-table-column>
+        <ui-table-column prop="service_name" label="服务名" min-width="170" />
+        <ui-table-column label="假域名" min-width="180">
           <template #default="{ row }">
-            <el-link
+            <ui-link
               v-if="row.virtual_hosts?.length"
               type="primary"
               @click="copyHost(row.virtual_hosts[0])"
             >
               {{ row.virtual_hosts[0] }}
-            </el-link>
+            </ui-link>
             <span v-else>-</span>
           </template>
-        </el-table-column>
-        <el-table-column prop="route_prefix" label="路径前缀" min-width="140">
+        </ui-table-column>
+        <ui-table-column prop="route_prefix" label="路径前缀" min-width="140">
           <template #default="{ row }">
-            <el-link type="primary" @click="copyRoute(row.route_prefix)">{{ row.route_prefix }}</el-link>
+            <ui-link type="primary" @click="copyRoute(row.route_prefix)">{{ row.route_prefix }}</ui-link>
           </template>
-        </el-table-column>
-        <el-table-column label="启用" width="100">
+        </ui-table-column>
+        <ui-table-column label="启用" width="100">
           <template #default="{ row }">
-            <el-switch
+            <ui-switch
               v-model="row.enabled"
               :loading="row._toggling"
               @change="(value) => toggleService(row, value)"
             />
           </template>
-        </el-table-column>
-        <el-table-column label="实例" width="120">
+        </ui-table-column>
+        <ui-table-column label="实例" width="120">
           <template #default="{ row }">
-            <el-tag type="success" size="small">{{ row.active_instance_count }}</el-tag>
+            <ui-tag type="success" size="small">{{ row.active_instance_count }}</ui-tag>
             <span class="instance-total">/ {{ row.instance_count }}</span>
           </template>
-        </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-        <el-table-column label="更新时间" width="180">
+        </ui-table-column>
+        <ui-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+        <ui-table-column label="更新时间" width="180">
           <template #default="{ row }">
             {{ formatDateTime(row.updated_at) }}
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        </ui-table-column>
+        <ui-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
-            <el-button link type="danger" @click="deleteService(row)">删除</el-button>
+            <ui-button link type="primary" @click="openEditDialog(row)">编辑</ui-button>
+            <ui-button link type="danger" @click="deleteService(row)">删除</ui-button>
           </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        </ui-table-column>
+      </ui-table>
+    </ui-card>
 
-    <el-dialog
+    <ui-dialog
       v-model="formVisible"
       :title="editingService ? '编辑服务' : '新增服务'"
       width="520px"
       destroy-on-close
     >
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
-        <el-form-item label="服务名" prop="service_name">
-          <el-input v-model="form.service_name" :disabled="!!editingService" placeholder="order-service" />
-        </el-form-item>
-        <el-form-item label="路径前缀" prop="route_prefix">
-          <el-input v-model="form.route_prefix" placeholder="/orders" />
-        </el-form-item>
-        <el-form-item label="启用" prop="enabled">
-          <el-switch v-model="form.enabled" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="3" placeholder="可选" />
-        </el-form-item>
-      </el-form>
+      <ui-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <ui-form-item label="服务名" prop="service_name">
+          <ui-input v-model="form.service_name" :disabled="!!editingService" placeholder="order-service" />
+        </ui-form-item>
+        <ui-form-item label="路径前缀" prop="route_prefix">
+          <ui-input v-model="form.route_prefix" placeholder="/orders" />
+        </ui-form-item>
+        <ui-form-item label="启用" prop="enabled">
+          <ui-switch v-model="form.enabled" />
+        </ui-form-item>
+        <ui-form-item label="描述">
+          <ui-input v-model="form.description" type="textarea" :rows="3" placeholder="可选" />
+        </ui-form-item>
+      </ui-form>
       <template #footer>
-        <el-button @click="formVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
+        <ui-button @click="formVisible = false">取消</ui-button>
+        <ui-button type="primary" :loading="saving" @click="submitForm">保存</ui-button>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
-    <el-dialog v-model="previewVisible" title="动态服务配置预览" width="80%">
+    <ui-dialog v-model="previewVisible" title="动态服务配置预览" width="80%">
       <pre class="preview-content">{{ previewContent }}</pre>
       <template #footer>
-        <el-button type="primary" @click="previewVisible = false">关闭</el-button>
+        <ui-button type="primary" @click="previewVisible = false">关闭</ui-button>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
-    <el-dialog v-model="settingsVisible" title="动态注册设置" width="620px" destroy-on-close>
-      <el-form :model="settingsForm" label-width="150px">
-        <el-form-item label="IP 白名单">
-          <el-input
+    <ui-dialog v-model="settingsVisible" title="动态注册设置" width="620px" destroy-on-close>
+      <ui-form :model="settingsForm" label-width="150px">
+        <ui-form-item label="IP 白名单">
+          <ui-input
             v-model="settingsForm.ip_whitelist"
             type="textarea"
             :rows="3"
             placeholder="192.168.1.0/24, 10.0.0.5"
           />
           <div class="form-tip">留空时自动允许本机和同网段；填写后仅允许这些 IP/CIDR，其他来源需 Token 或 Basic 认证。</div>
-        </el-form-item>
-        <el-form-item label="假域名后缀">
-          <el-input v-model="settingsForm.domain_suffix" placeholder="apps.local" clearable />
-        </el-form-item>
-        <el-form-item label="默认 TTL">
-          <el-input-number v-model="settingsForm.default_ttl_seconds" :min="30" :max="86400" :step="30" />
+        </ui-form-item>
+        <ui-form-item label="假域名后缀">
+          <ui-input v-model="settingsForm.domain_suffix" placeholder="apps.local" clearable />
+        </ui-form-item>
+        <ui-form-item label="默认 TTL">
+          <ui-input-number v-model="settingsForm.default_ttl_seconds" :min="30" :max="86400" :step="30" />
           <span class="unit-label">秒</span>
-        </el-form-item>
-        <el-form-item label="清理间隔">
-          <el-input-number v-model="settingsForm.cleanup_interval_seconds" :min="10" :max="86400" :step="10" />
+        </ui-form-item>
+        <ui-form-item label="清理间隔">
+          <ui-input-number v-model="settingsForm.cleanup_interval_seconds" :min="10" :max="86400" :step="10" />
           <span class="unit-label">秒</span>
-        </el-form-item>
-        <el-form-item label="离线保留时间">
-          <el-input-number v-model="settingsForm.offline_retention_seconds" :min="60" :max="2592000" :step="3600" />
+        </ui-form-item>
+        <ui-form-item label="离线保留时间">
+          <ui-input-number v-model="settingsForm.offline_retention_seconds" :min="60" :max="2592000" :step="3600" />
           <span class="unit-label">秒</span>
-        </el-form-item>
-        <el-form-item label="主动健康探测">
-          <el-switch v-model="settingsForm.health_check_enabled" />
-        </el-form-item>
-        <el-form-item label="探测超时">
-          <el-input-number v-model="settingsForm.health_check_timeout_seconds" :min="1" :max="60" :step="1" />
+        </ui-form-item>
+        <ui-form-item label="主动健康探测">
+          <ui-switch v-model="settingsForm.health_check_enabled" />
+        </ui-form-item>
+        <ui-form-item label="探测超时">
+          <ui-input-number v-model="settingsForm.health_check_timeout_seconds" :min="1" :max="60" :step="1" />
           <span class="unit-label">秒</span>
-        </el-form-item>
-      </el-form>
+        </ui-form-item>
+      </ui-form>
       <template #footer>
-        <el-button @click="settingsVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingSettings" @click="submitSettings">保存</el-button>
+        <ui-button @click="settingsVisible = false">取消</ui-button>
+        <ui-button type="primary" :loading="savingSettings" @click="submitSettings">保存</ui-button>
       </template>
-    </el-dialog>
+    </ui-dialog>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, RefreshRight, Setting, View } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
+import { Plus, RefreshRight, Setting, View } from '@/components/icons'
 import { dynamicServicesApi } from '../api/dynamicServices'
 import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
 const saving = ref(false)
 const services = ref([])
-const authStatus = ref({})
+const authStatus = ref<any>({})
 const formVisible = ref(false)
 const settingsVisible = ref(false)
 const previewVisible = ref(false)

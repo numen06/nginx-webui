@@ -27,11 +27,12 @@
 - **证书**：Certbot (Let's Encrypt)
 
 #### 前端技术
-- **框架**：Vue 3 (组合式API)
+- **框架**：Vue 3.5 + TypeScript（组合式 API）
 - **路由**：Vue Router 4
 - **状态管理**：Pinia
-- **UI组件库**：Element Plus
-- **构建工具**：Vite
+- **UI组件库**：shadcn-vue + Reka UI + Lucide
+- **样式系统**：Tailwind CSS 4
+- **构建工具**：Vite 6
 - **图表库**：ECharts
 - **代码编辑器**：Monaco Editor
 
@@ -482,22 +483,20 @@ def create_tarball(source_dir: str, output_file: str) -> bool
 
 ### 入口文件
 
-#### main.js - 应用入口
+#### main.ts - 应用入口
 **职责**：Vue应用初始化和全局配置
 
-```javascript
+```typescript
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
 import router from './router'
 import App from './App.vue'
+import './styles/theme.css'
 
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus)
 
 app.mount('#app')
 ```
@@ -1075,7 +1074,7 @@ server {
 
 - [FastAPI文档](https://fastapi.tiangolo.com/)
 - [Vue 3文档](https://vuejs.org/)
-- [Element Plus文档](https://element-plus.org/)
+- [shadcn-vue 文档](https://www.shadcn-vue.com/)
 - [Nginx文档](https://nginx.org/en/docs/)
 - [Certbot文档](https://certbot.eff.org/)
 

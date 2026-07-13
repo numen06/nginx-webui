@@ -1,492 +1,276 @@
-<template>
-  <div class="users-page">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>用户管理</span>
-          <div>
-            <el-button type="info" @click="handleChangePassword">
-              <el-icon><Lock /></el-icon>
-              <span class="btn-label">修改我的密码</span>
-            </el-button>
-            <el-button type="primary" @click="handleCreate">
-              <el-icon><CirclePlus /></el-icon>
-              <span class="btn-label">新增用户</span>
-            </el-button>
-          </div>
-        </div>
-      </template>
-      <div class="table-toolbar">
-        <el-input
-          v-model="keyword"
-          placeholder="搜索用户名"
-          clearable
-          class="toolbar-field"
-        >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
-        <el-select v-model="statusFilter" class="toolbar-field status-filter">
-          <el-option label="全部状态" value="all" />
-          <el-option label="激活" value="active" />
-          <el-option label="禁用" value="inactive" />
-        </el-select>
-        <div class="toolbar-actions">
-          <el-button @click="handleRefresh">
-            <el-icon><Refresh /></el-icon>
-            <span class="btn-label">刷新</span>
-          </el-button>
-        </div>
-      </div>
-      <el-table :data="filteredUsers" style="width: 100%" v-loading="loading">
-        <el-table-column prop="id" label="ID" width="100" align="center" />
-        <el-table-column
-          prop="username"
-          label="用户名"
-          min-width="220"
-          show-overflow-tooltip
-        />
-        <el-table-column prop="is_active" label="状态" width="120" align="center">
-          <template #default="scope">
-            <el-tag :type="scope.row.is_active ? 'success' : 'danger'">
-              {{ scope.row.is_active ? '激活' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="created_at"
-          label="创建时间"
-          min-width="180"
-          align="center"
-        >
-          <template #default="scope">
-            {{ formatDateTime(scope.row.created_at) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="320" align="center">
-          <template #default="scope">
-            <el-button size="small" type="info" @click="handleEdit(scope.row)">
-              <el-icon><Edit /></el-icon>
-              <span class="btn-label">编辑</span>
-            </el-button>
-            <el-button size="small" type="warning" @click="handleResetPassword(scope.row)">
-              <el-icon><Key /></el-icon>
-              <span class="btn-label">重置密码</span>
-            </el-button>
-            <el-button 
-              size="small" 
-              type="danger" 
-              @click="handleDelete(scope.row)"
-              :disabled="scope.row.id === currentUserId"
-            >
-              <el-icon><Delete /></el-icon>
-              <span class="btn-label">删除</span>
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- 创建/编辑用户对话框 -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="500px"
-      :close-on-click-modal="false"
-    >
-      <el-form :model="formData" :rules="formRules" ref="formRef" label-width="100px">
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="formData.username" :disabled="isEdit" />
-        </el-form-item>
-        <el-form-item v-if="!isEdit" label="密码" prop="password">
-          <el-input v-model="formData.password" type="password" show-password />
-        </el-form-item>
-        <el-form-item label="状态" prop="is_active">
-          <el-switch v-model="formData.is_active" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button type="info" @click="dialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
-            <span class="btn-label">取消</span>
-          </el-button>
-          <el-button type="primary" @click="handleSubmit">
-            <el-icon><Check /></el-icon>
-            <span class="btn-label">确定</span>
-          </el-button>
-        </span>
-      </template>
-    </el-dialog>
-
-    <!-- 重置密码对话框 -->
-    <el-dialog
-      v-model="passwordDialogVisible"
-      title="重置密码"
-      width="500px"
-      :close-on-click-modal="false"
-    >
-      <el-form :model="passwordForm" :rules="passwordRules" ref="passwordFormRef" label-width="100px">
-        <el-form-item label="新密码" prop="new_password">
-          <el-input v-model="passwordForm.new_password" type="password" show-password />
-        </el-form-item>
-        <el-form-item label="确认密码" prop="confirm_password">
-          <el-input v-model="passwordForm.confirm_password" type="password" show-password />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button type="info" @click="passwordDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
-            <span class="btn-label">取消</span>
-          </el-button>
-          <el-button type="primary" @click="handlePasswordSubmit">
-            <el-icon><Check /></el-icon>
-            <span class="btn-label">确定</span>
-          </el-button>
-        </span>
-      </template>
-    </el-dialog>
-
-    <!-- 修改当前用户密码对话框 -->
-    <el-dialog
-      v-model="changePasswordDialogVisible"
-      title="修改密码"
-      width="500px"
-      :close-on-click-modal="false"
-    >
-      <el-form :model="changePasswordForm" :rules="changePasswordRules" ref="changePasswordFormRef" label-width="100px">
-        <el-form-item label="旧密码" prop="old_password">
-          <el-input v-model="changePasswordForm.old_password" type="password" show-password />
-        </el-form-item>
-        <el-form-item label="新密码" prop="new_password">
-          <el-input v-model="changePasswordForm.new_password" type="password" show-password />
-        </el-form-item>
-        <el-form-item label="确认密码" prop="confirm_password">
-          <el-input v-model="changePasswordForm.confirm_password" type="password" show-password />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button type="info" @click="changePasswordDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
-            <span class="btn-label">取消</span>
-          </el-button>
-          <el-button type="primary" @click="handleChangePasswordSubmit">
-            <el-icon><Check /></el-icon>
-            <span class="btn-label">确定</span>
-          </el-button>
-        </span>
-      </template>
-    </el-dialog>
-  </div>
-</template>
-
-<script setup>
-import { ref, onMounted, computed } from 'vue'
-import { usersApi } from '../api/users'
-import { useAuthStore } from '../store/auth'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Lock, CirclePlus, Edit, Key, Delete, CloseBold, Check, Search, Refresh } from '@element-plus/icons-vue'
-import { formatDateTime } from '../utils/date'
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import { z } from 'zod'
+import { KeyRound, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, UserRound } from 'lucide-vue-next'
+import type { User } from '@/api/auth'
+import { usersApi, type CreateUserPayload, type UpdateUserPayload } from '@/api/users'
+import { apiErrorMessage } from '@/api'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
+import { useAuthStore } from '@/store/auth'
+import { formatDateTime } from '@/utils/date'
 
 const authStore = useAuthStore()
-const userList = ref([])
+const users = ref<User[]>([])
 const loading = ref(false)
 const keyword = ref('')
 const statusFilter = ref('all')
-const dialogVisible = ref(false)
-const passwordDialogVisible = ref(false)
-const changePasswordDialogVisible = ref(false)
-const isEdit = ref(false)
-const formRef = ref(null)
-const passwordFormRef = ref(null)
-const changePasswordFormRef = ref(null)
-const currentEditUserId = ref(null)
-const currentResetPasswordUserId = ref(null)
+const editorOpen = ref(false)
+const passwordOpen = ref(false)
+const editingId = ref<number | null>(null)
+const resettingUser = ref<User | null>(null)
+const submitting = ref(false)
+const formError = ref('')
+const passwordError = ref('')
 
-const currentUserId = computed(() => {
-  return authStore.user?.id
+const form = reactive<CreateUserPayload>({
+  username: '',
+  password: '',
+  is_active: true,
+  is_admin: false,
 })
+const passwordForm = reactive({ password: '', confirm: '' })
 
 const filteredUsers = computed(() => {
-  const keywordValue = keyword.value.trim().toLowerCase()
-  return userList.value.filter((user) => {
-    const matchKeyword = keywordValue
-      ? user.username.toLowerCase().includes(keywordValue)
-      : true
-    const matchStatus =
-      statusFilter.value === 'all'
-        ? true
-        : statusFilter.value === 'active'
-          ? user.is_active
-          : !user.is_active
-    return matchKeyword && matchStatus
+  const query = keyword.value.trim().toLowerCase()
+  return users.value.filter(user => {
+    const matchesQuery = !query || user.username.toLowerCase().includes(query)
+    const matchesStatus = statusFilter.value === 'all'
+      || (statusFilter.value === 'active' ? user.is_active : !user.is_active)
+    return matchesQuery && matchesStatus
   })
 })
 
-const dialogTitle = computed(() => {
-  return isEdit.value ? '编辑用户' : '新增用户'
+const userSchema = z.object({
+  username: z.string().trim().min(3, '用户名至少 3 个字符').max(50, '用户名最多 50 个字符'),
+  password: z.string().max(100, '密码最多 100 个字符'),
+  is_active: z.boolean(),
+  is_admin: z.boolean(),
 })
 
-const formData = ref({
-  username: '',
-  password: '',
-  is_active: true
-})
-
-const passwordForm = ref({
-  new_password: '',
-  confirm_password: ''
-})
-
-const changePasswordForm = ref({
-  old_password: '',
-  new_password: '',
-  confirm_password: ''
-})
-
-// 验证确认密码
-const validateConfirmPassword = (rule, value, callback) => {
-  if (value !== passwordForm.value.new_password) {
-    callback(new Error('两次输入的密码不一致'))
-  } else {
-    callback()
-  }
-}
-
-// 验证修改密码的确认密码
-const validateChangePasswordConfirm = (rule, value, callback) => {
-  if (value !== changePasswordForm.value.new_password) {
-    callback(new Error('两次输入的密码不一致'))
-  } else {
-    callback()
-  }
-}
-
-const formRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 50, message: '用户名长度在 3 到 50 个字符', trigger: 'blur' }
-  ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, max: 100, message: '密码长度在 6 到 100 个字符', trigger: 'blur' }
-  ]
-}
-
-const passwordRules = {
-  new_password: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, max: 100, message: '密码长度在 6 到 100 个字符', trigger: 'blur' }
-  ],
-  confirm_password: [
-    { required: true, message: '请确认密码', trigger: 'blur' },
-    { validator: validateConfirmPassword, trigger: 'blur' }
-  ]
-}
-
-const changePasswordRules = {
-  old_password: [
-    { required: true, message: '请输入旧密码', trigger: 'blur' }
-  ],
-  new_password: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, max: 100, message: '密码长度在 6 到 100 个字符', trigger: 'blur' }
-  ],
-  confirm_password: [
-    { required: true, message: '请确认密码', trigger: 'blur' },
-    { validator: validateChangePasswordConfirm, trigger: 'blur' }
-  ]
-}
-
-const loadUsers = async () => {
+async function loadUsers() {
   loading.value = true
   try {
     const response = await usersApi.getUsers()
-    userList.value = response.users || []
+    users.value = response.users
   } catch (error) {
-    ElMessage.error('加载用户列表失败')
+    ElMessage.error(apiErrorMessage(error, '加载用户列表失败'))
   } finally {
     loading.value = false
   }
 }
 
-const handleCreate = () => {
-  isEdit.value = false
-  currentEditUserId.value = null
-  formData.value = {
-    username: '',
-    password: '',
-    is_active: true
-  }
-  dialogVisible.value = true
+function openCreate() {
+  editingId.value = null
+  Object.assign(form, { username: '', password: '', is_active: true, is_admin: false })
+  formError.value = ''
+  editorOpen.value = true
 }
 
-const handleRefresh = () => {
-  loadUsers()
-}
-
-const handleEdit = (user) => {
-  isEdit.value = true
-  currentEditUserId.value = user.id
-  formData.value = {
+function openEdit(user: User) {
+  editingId.value = user.id
+  Object.assign(form, {
     username: user.username,
     password: '',
-    is_active: user.is_active
-  }
-  dialogVisible.value = true
-}
-
-const handleSubmit = async () => {
-  if (!formRef.value) return
-  
-  await formRef.value.validate(async (valid) => {
-    if (!valid) return
-    
-    try {
-      if (isEdit.value) {
-        const updateData = {
-          username: formData.value.username,
-          is_active: formData.value.is_active
-        }
-        await usersApi.updateUser(currentEditUserId.value, updateData)
-        ElMessage.success('用户信息更新成功')
-      } else {
-        await usersApi.createUser(formData.value)
-        ElMessage.success('用户创建成功')
-      }
-      dialogVisible.value = false
-      loadUsers()
-    } catch (error) {
-      ElMessage.error(error.response?.data?.detail || '操作失败')
-    }
+    is_active: user.is_active,
+    is_admin: user.is_admin,
   })
+  formError.value = ''
+  editorOpen.value = true
 }
 
-const handleResetPassword = (user) => {
-  currentResetPasswordUserId.value = user.id
-  passwordForm.value = {
-    new_password: '',
-    confirm_password: ''
+async function submitUser() {
+  const parsed = userSchema.safeParse(form)
+  if (!parsed.success) {
+    formError.value = parsed.error.issues[0]?.message || '请检查表单内容'
+    return
   }
-  passwordDialogVisible.value = true
-}
+  if (editingId.value == null && form.password.length < 6) {
+    formError.value = '密码至少 6 个字符'
+    return
+  }
 
-const handlePasswordSubmit = async () => {
-  if (!passwordFormRef.value) return
-  
-  await passwordFormRef.value.validate(async (valid) => {
-    if (!valid) return
-    
-    try {
-      await usersApi.resetPassword(currentResetPasswordUserId.value, passwordForm.value.new_password)
-      ElMessage.success('密码重置成功')
-      passwordDialogVisible.value = false
-    } catch (error) {
-      ElMessage.error(error.response?.data?.detail || '密码重置失败')
-    }
-  })
-}
-
-const handleDelete = async (user) => {
+  submitting.value = true
+  formError.value = ''
   try {
-    await ElMessageBox.confirm(
-      `确定要删除用户 "${user.username}" 吗？此操作不可恢复。`,
-      '提示',
-      { type: 'warning' }
-    )
-    await usersApi.deleteUser(user.id)
-    ElMessage.success('删除成功')
-    loadUsers()
+    if (editingId.value == null) {
+      await usersApi.createUser(parsed.data as CreateUserPayload)
+      ElMessage.success('用户创建成功')
+    } else {
+      const payload: UpdateUserPayload = {
+        username: parsed.data.username,
+        is_active: parsed.data.is_active,
+        is_admin: parsed.data.is_admin,
+      }
+      await usersApi.updateUser(editingId.value, payload)
+      ElMessage.success('用户信息已更新')
+      if (editingId.value === authStore.user?.id) await authStore.ensureUser(true)
+    }
+    editorOpen.value = false
+    await loadUsers()
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error(error.response?.data?.detail || '删除失败')
-    }
+    formError.value = apiErrorMessage(error)
+  } finally {
+    submitting.value = false
   }
 }
 
-const handleChangePassword = () => {
-  changePasswordForm.value = {
-    old_password: '',
-    new_password: '',
-    confirm_password: ''
+function openPasswordReset(user: User) {
+  resettingUser.value = user
+  Object.assign(passwordForm, { password: '', confirm: '' })
+  passwordError.value = ''
+  passwordOpen.value = true
+}
+
+async function submitPasswordReset() {
+  if (passwordForm.password.length < 6) {
+    passwordError.value = '密码至少 6 个字符'
+    return
   }
-  changePasswordDialogVisible.value = true
+  if (passwordForm.password !== passwordForm.confirm) {
+    passwordError.value = '两次输入的密码不一致'
+    return
+  }
+  if (!resettingUser.value) return
+  submitting.value = true
+  try {
+    await usersApi.resetPassword(resettingUser.value.id, passwordForm.password)
+    ElMessage.success('密码重置成功')
+    passwordOpen.value = false
+  } catch (error) {
+    passwordError.value = apiErrorMessage(error, '密码重置失败')
+  } finally {
+    submitting.value = false
+  }
 }
 
-const handleChangePasswordSubmit = async () => {
-  if (!changePasswordFormRef.value) return
-  
-  await changePasswordFormRef.value.validate(async (valid) => {
-    if (!valid) return
-    
-    try {
-      await usersApi.changePassword(
-        changePasswordForm.value.old_password,
-        changePasswordForm.value.new_password
-      )
-      ElMessage.success('密码修改成功，请重新登录')
-      changePasswordDialogVisible.value = false
-      // 可以选择是否自动退出登录
-      setTimeout(() => {
-        authStore.logout()
-        window.location.href = '/login'
-      }, 1500)
-    } catch (error) {
-      ElMessage.error(error.response?.data?.detail || '密码修改失败')
-    }
-  })
+async function deleteUser(user: User) {
+  try {
+    await ElMessageBox.confirm(`确定删除用户“${user.username}”吗？此操作不可恢复。`, '删除用户')
+    await usersApi.deleteUser(user.id)
+    ElMessage.success('用户已删除')
+    await loadUsers()
+  } catch (error) {
+    if (error !== 'cancel') ElMessage.error(apiErrorMessage(error, '删除失败'))
+  }
 }
 
-onMounted(() => {
-  loadUsers()
-})
+onMounted(loadUsers)
 </script>
 
-<style scoped>
-.users-page {
-  padding: 20px;
-}
+<template>
+  <div class="page-shell">
+    <div class="page-heading">
+      <div>
+        <h2 class="page-title">用户管理</h2>
+        <p class="page-description">管理系统账户、状态与超级管理员权限。</p>
+      </div>
+      <div class="toolbar">
+        <Button variant="secondary" :disabled="loading" @click="loadUsers">
+          <RefreshCw :class="['size-4', { 'animate-spin': loading }]" />刷新
+        </Button>
+        <Button @click="openCreate"><Plus class="size-4" />新增用户</Button>
+      </div>
+    </div>
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
+    <Card>
+      <CardHeader class="border-b pb-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle class="text-base">账户列表</CardTitle>
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <div class="relative sm:w-64">
+              <Search class="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input v-model="keyword" class="pl-9" placeholder="搜索用户名" />
+            </div>
+            <Select v-model="statusFilter">
+              <SelectTrigger class="sm:w-36"><SelectValue placeholder="账户状态" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="active">已启用</SelectItem>
+                <SelectItem value="inactive">已停用</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent class="p-0">
+        <div class="hidden overflow-x-auto md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>用户</TableHead><TableHead>权限</TableHead><TableHead>状态</TableHead><TableHead>创建时间</TableHead><TableHead class="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="user in filteredUsers" :key="user.id">
+                <TableCell><div class="flex items-center gap-2"><UserRound class="size-4 text-muted-foreground" /><span class="font-medium">{{ user.username }}</span><Badge v-if="user.id === authStore.user?.id" variant="outline">当前账户</Badge></div></TableCell>
+                <TableCell><Badge :variant="user.is_admin ? 'default' : 'secondary'"><ShieldCheck v-if="user.is_admin" class="mr-1 size-3" />{{ user.is_admin ? '超级管理员' : '普通用户' }}</Badge></TableCell>
+                <TableCell><Badge :variant="user.is_active ? 'outline' : 'destructive'">{{ user.is_active ? '已启用' : '已停用' }}</Badge></TableCell>
+                <TableCell class="text-muted-foreground">{{ formatDateTime(user.created_at) }}</TableCell>
+                <TableCell><div class="flex justify-end gap-1"><Button size="icon" variant="ghost" title="编辑" @click="openEdit(user)"><Pencil class="size-4" /></Button><Button size="icon" variant="ghost" title="重置密码" @click="openPasswordReset(user)"><KeyRound class="size-4" /></Button><Button size="icon" variant="ghost" title="删除" :disabled="user.id === authStore.user?.id" @click="deleteUser(user)"><Trash2 class="size-4 text-destructive" /></Button></div></TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
 
-.table-toolbar {
-  margin-bottom: 16px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-}
+        <div class="grid gap-3 p-4 md:hidden">
+          <div v-for="user in filteredUsers" :key="user.id" class="space-y-3 rounded-lg border p-4">
+            <div class="flex items-start justify-between gap-3"><div><div class="font-medium">{{ user.username }}</div><div class="mt-1 text-xs text-muted-foreground">{{ formatDateTime(user.created_at) }}</div></div><Badge :variant="user.is_active ? 'outline' : 'destructive'">{{ user.is_active ? '已启用' : '已停用' }}</Badge></div>
+            <Badge :variant="user.is_admin ? 'default' : 'secondary'">{{ user.is_admin ? '超级管理员' : '普通用户' }}</Badge>
+            <div class="flex gap-2"><Button size="sm" variant="secondary" @click="openEdit(user)"><Pencil class="size-4" />编辑</Button><Button size="sm" variant="secondary" @click="openPasswordReset(user)"><KeyRound class="size-4" />重置密码</Button></div>
+          </div>
+        </div>
 
-.toolbar-field {
-  flex: 1 1 220px;
-}
+        <div v-if="!loading && !filteredUsers.length" class="grid min-h-36 place-items-center text-sm text-muted-foreground">没有符合条件的用户</div>
+      </CardContent>
+    </Card>
+  </div>
 
-.status-filter {
-  max-width: 160px;
-}
+  <Dialog v-model:open="editorOpen">
+    <DialogContent>
+      <DialogHeader><DialogTitle>{{ editingId == null ? '新增用户' : '编辑用户' }}</DialogTitle><DialogDescription>设置登录名称、账户状态与管理权限。</DialogDescription></DialogHeader>
+      <form class="space-y-4" @submit.prevent="submitUser">
+        <div class="space-y-2"><Label for="user-name">用户名</Label><Input id="user-name" v-model="form.username" autocomplete="off" /></div>
+        <div v-if="editingId == null" class="space-y-2"><Label for="user-password">初始密码</Label><Input id="user-password" v-model="form.password" type="password" autocomplete="new-password" /></div>
+        <div class="flex items-center justify-between rounded-lg border p-3"><div><Label>启用账户</Label><p class="text-xs text-muted-foreground">停用后该用户无法登录。</p></div><Switch v-model="form.is_active" /></div>
+        <div class="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="is-admin" v-model="form.is_admin" /><div><Label for="is-admin">超级管理员</Label><p class="text-xs text-muted-foreground">允许管理用户及重置其他账户密码。</p></div></div>
+        <p v-if="formError" class="text-sm text-destructive">{{ formError }}</p>
+        <DialogFooter><Button type="button" variant="secondary" @click="editorOpen = false">取消</Button><Button type="submit" :disabled="submitting">{{ submitting ? '保存中…' : '保存' }}</Button></DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 
-.toolbar-actions {
-  display: flex;
-  align-items: center;
-}
-
-.toolbar-actions .el-button {
-  margin-left: auto;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-</style>
-
+  <Dialog v-model:open="passwordOpen">
+    <DialogContent>
+      <DialogHeader><DialogTitle>重置密码</DialogTitle><DialogDescription>为 {{ resettingUser?.username }} 设置新的登录密码。</DialogDescription></DialogHeader>
+      <form class="space-y-4" @submit.prevent="submitPasswordReset">
+        <div class="space-y-2"><Label for="reset-password">新密码</Label><Input id="reset-password" v-model="passwordForm.password" type="password" autocomplete="new-password" /></div>
+        <div class="space-y-2"><Label for="confirm-password">确认新密码</Label><Input id="confirm-password" v-model="passwordForm.confirm" type="password" autocomplete="new-password" /></div>
+        <p v-if="passwordError" class="text-sm text-destructive">{{ passwordError }}</p>
+        <DialogFooter><Button type="button" variant="secondary" @click="passwordOpen = false">取消</Button><Button type="submit" :disabled="submitting">确认重置</Button></DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
+</template>

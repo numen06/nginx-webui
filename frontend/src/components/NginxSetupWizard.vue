@@ -1,5 +1,5 @@
 <template>
-  <el-dialog
+  <ui-dialog
     v-model="visible"
     title="Nginx 初始设置向导"
     width="800px"
@@ -10,45 +10,45 @@
     class="setup-wizard-dialog"
   >
     <div class="wizard-content">
-      <el-steps :active="currentStep" finish-status="success" align-center>
-        <el-step title="准备源码包" />
-        <el-step title="编译 Nginx" />
-        <el-step title="发布到生产" />
-      </el-steps>
+      <ui-steps :active="currentStep" finish-status="success" align-center>
+        <ui-step title="准备源码包" />
+        <ui-step title="编译 Nginx" />
+        <ui-step title="发布到生产" />
+      </ui-steps>
 
       <div class="step-content">
         <!-- 步骤1: 准备源码包 -->
         <div v-if="currentStep === 0" class="step-panel">
           <div class="step-description">
-            <el-icon class="step-icon"><Box /></el-icon>
+            <ui-icon class="step-icon"><Box /></ui-icon>
             <h3>准备 Nginx 源码包</h3>
             <p>系统检测到默认的 Nginx 1.29.3 源码包，需要将其复制到构建目录以准备编译。</p>
           </div>
           <div class="step-actions">
-            <el-button
+            <ui-button
               type="primary"
               size="large"
               :loading="preparing"
               @click="handlePrepare"
             >
-              <el-icon v-if="!preparing"><Download /></el-icon>
+              <ui-icon v-if="!preparing"><Download /></ui-icon>
               <span>{{ preparing ? '正在准备...' : '准备源码包' }}</span>
-            </el-button>
+            </ui-button>
           </div>
           <div v-if="prepareError" class="error-message">
-            <el-alert type="error" :title="prepareError" :closable="false" />
+            <ui-alert type="error" :title="prepareError" :closable="false" />
           </div>
         </div>
 
         <!-- 步骤2: 编译 Nginx -->
         <div v-if="currentStep === 1" class="step-panel">
           <div class="step-description">
-            <el-icon class="step-icon"><Tools /></el-icon>
+            <ui-icon class="step-icon"><Tools /></ui-icon>
             <h3>编译 Nginx</h3>
             <p>开始编译 Nginx 1.29.3，这个过程可能需要几分钟时间，请耐心等待。</p>
           </div>
           <div v-if="compiling" class="compile-progress">
-            <el-progress
+            <ui-progress
               :percentage="compileProgress"
               :status="compileProgress === 100 ? 'success' : null"
               :stroke-width="20"
@@ -56,58 +56,58 @@
             <p class="progress-text">{{ compileStatusText }}</p>
           </div>
           <div v-if="compileError" class="error-message">
-            <el-alert type="error" :title="compileError" :closable="false" />
-            <el-button type="primary" @click="handleRetryCompile">重试</el-button>
+            <ui-alert type="error" :title="compileError" :closable="false" />
+            <ui-button type="primary" @click="handleRetryCompile">重试</ui-button>
           </div>
         </div>
 
         <!-- 步骤3: 发布到生产 -->
         <div v-if="currentStep === 2" class="step-panel">
           <div class="step-description">
-            <el-icon class="step-icon"><Promotion /></el-icon>
+            <ui-icon class="step-icon"><Promotion /></ui-icon>
             <h3>发布到生产环境</h3>
             <p>将编译好的 Nginx 版本发布到生产环境（last 目录），以便后续使用。</p>
           </div>
           <div class="step-actions">
-            <el-button
+            <ui-button
               type="primary"
               size="large"
               :loading="publishing"
               @click="handlePublish"
             >
-              <el-icon v-if="!publishing"><Promotion /></el-icon>
+              <ui-icon v-if="!publishing"><Promotion /></ui-icon>
               <span>{{ publishing ? '正在发布...' : '发布到生产' }}</span>
-            </el-button>
+            </ui-button>
           </div>
           <div v-if="publishError" class="error-message">
-            <el-alert type="error" :title="publishError" :closable="false" />
-            <el-button type="primary" @click="handleRetryPublish">重试</el-button>
+            <ui-alert type="error" :title="publishError" :closable="false" />
+            <ui-button type="primary" @click="handleRetryPublish">重试</ui-button>
           </div>
         </div>
 
         <!-- 完成 -->
         <div v-if="currentStep === 3" class="step-panel success-panel">
           <div class="step-description">
-            <el-icon class="step-icon success-icon"><CircleCheck /></el-icon>
+            <ui-icon class="step-icon success-icon"><CircleCheck /></ui-icon>
             <h3>设置完成！</h3>
             <p>Nginx 已成功设置并发布到生产环境，您现在可以开始使用系统了。</p>
           </div>
           <div class="step-actions">
-            <el-button type="primary" size="large" @click="handleComplete">
+            <ui-button type="primary" size="large" @click="handleComplete">
               完成
-            </el-button>
+            </ui-button>
           </div>
         </div>
       </div>
     </div>
-  </el-dialog>
+  </ui-dialog>
 </template>
 
-<script setup>
-import { ref, computed, watch } from 'vue'
+<script setup lang="ts">
+import { ref, computed } from 'vue'
 import { nginxApi } from '../api/nginx'
-import { ElMessage } from 'element-plus'
-import { Box, Download, Tools, Promotion, CircleCheck } from '@element-plus/icons-vue'
+import { ElMessage } from '@/lib/feedback'
+import { Box, Download, Tools, Promotion, CircleCheck } from '@/components/icons'
 
 const props = defineProps({
   modelValue: {
@@ -148,11 +148,6 @@ const progressState = {
   smoothProgressTimer: null,  // 平滑进度定时器
   progressCheckTimer: null  // 进度检查定时器
 }
-
-// 监听进度变化，用于调试
-watch(compileProgress, (newVal, oldVal) => {
-  console.log(`[进度条] 进度值变化: ${oldVal.toFixed(1)}% -> ${newVal.toFixed(1)}%`)
-})
 
 const defaultVersion = '1.29.3'
 
@@ -261,7 +256,6 @@ const handleCompile = async () => {
         
         if (finalProgress > compileProgress.value) {
           compileProgress.value = Math.floor(finalProgress * 10) / 10 // 保留一位小数
-          console.log(`[编译进度] 更新到: ${compileProgress.value.toFixed(1)}% (时间进度: ${timeBasedProgress.toFixed(1)}%, API进度: ${apiBasedProgress.toFixed(1)}%, 耗时: ${elapsed.toFixed(1)}s)`)
         }
       }
     }, 1000) // 每1秒更新一次
@@ -303,7 +297,6 @@ const handleCompile = async () => {
           const progressValue = Number(progressData.progress) || 0
           if (progressValue > progressState.lastRealProgress) {
           progressState.lastRealProgress = progressValue
-            console.log(`[编译进度] API返回真实进度: ${progressValue}%`)
           }
           
           // 更新状态文本
@@ -462,23 +455,23 @@ const handleComplete = () => {
 
 .step-icon {
   font-size: 64px;
-  color: var(--el-color-primary);
+  color: var(--ui-color-primary);
   margin-bottom: 20px;
 }
 
 .success-icon {
-  color: var(--el-color-success);
+  color: var(--ui-color-success);
 }
 
 .step-description h3 {
   font-size: 24px;
   margin: 20px 0 10px;
-  color: var(--el-text-color-primary);
+  color: var(--ui-text-color-primary);
 }
 
 .step-description p {
   font-size: 14px;
-  color: var(--el-text-color-regular);
+  color: var(--ui-text-color-regular);
   line-height: 1.6;
 }
 
@@ -492,7 +485,7 @@ const handleComplete = () => {
 
 .progress-text {
   margin-top: 20px;
-  color: var(--el-text-color-regular);
+  color: var(--ui-text-color-regular);
 }
 
 .error-message {
@@ -500,7 +493,7 @@ const handleComplete = () => {
   text-align: center;
 }
 
-.error-message .el-button {
+.error-message .ui-button {
   margin-top: 10px;
 }
 
@@ -508,4 +501,3 @@ const handleComplete = () => {
   padding: 60px 20px;
 }
 </style>
-

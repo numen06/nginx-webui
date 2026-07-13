@@ -8,6 +8,8 @@ env/
 venv/
 ENV/
 build/
+test-results/
+playwright-report/
 develop-eggs/
 dist/
 downloads/

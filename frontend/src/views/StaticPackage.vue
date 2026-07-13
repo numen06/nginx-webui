@@ -1,6 +1,6 @@
 <template>
-  <div class="static-package-page">
-    <el-card>
+  <div class="static-package-page page-shell">
+    <ui-card>
       <template #header>
         <div class="card-header">
           <span>静态资源包管理</span>
@@ -8,22 +8,22 @@
       </template>
 
       <div class="version-info" v-if="selectedDirectory">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="当前 Nginx 目录">
-            <el-text type="info" size="small">{{ selectedDirectory || '-' }}</el-text>
-          </el-descriptions-item>
-          <el-descriptions-item label="当前 Nginx 版本">
+        <ui-descriptions :column="2" border size="small">
+          <ui-descriptions-item label="当前 Nginx 目录">
+            <ui-text type="info" size="small">{{ selectedDirectory || '-' }}</ui-text>
+          </ui-descriptions-item>
+          <ui-descriptions-item label="当前 Nginx 版本">
             <template v-if="formatVersionLabel(currentVersionInfo)">
-              <el-tag type="info" size="small">
+              <ui-tag type="info" size="small">
                 {{ formatVersionLabel(currentVersionInfo) }}
-              </el-tag>
+              </ui-tag>
             </template>
             <span v-else style="color: var(--text-secondary)">未知</span>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="currentVersionInfo?.running" label="运行状态">
-            <el-tag type="success" size="small">运行中</el-tag>
-          </el-descriptions-item>
-        </el-descriptions>
+          </ui-descriptions-item>
+          <ui-descriptions-item v-if="currentVersionInfo?.running" label="运行状态">
+            <ui-tag type="success" size="small">运行中</ui-tag>
+          </ui-descriptions-item>
+        </ui-descriptions>
       </div>
 
 
@@ -32,67 +32,67 @@
         <div class="section-header">
           <div class="header-left">
             <h3>资源包列表</h3>
-            <el-text type="info" size="small" class="package-count">
+            <ui-text type="info" size="small" class="package-count">
               共 {{ packages.length }} 个资源包
-            </el-text>
+            </ui-text>
           </div>
           <div class="header-right">
-            <el-button
+            <ui-button
               type="info"
               :icon="Refresh"
               @click="loadPackages"
               :loading="loadingPackages"
             >
               刷新
-            </el-button>
-            <el-button
+            </ui-button>
+            <ui-button
               type="warning"
               :icon="Download"
               @click="extractDialogVisible = true"
             >
               提取资源包
-            </el-button>
-            <el-button
+            </ui-button>
+            <ui-button
               type="cyan"
               :icon="Upload"
               @click="uploadDialogVisible = true"
             >
               上传资源包
-            </el-button>
+            </ui-button>
           </div>
         </div>
-        <el-table
+        <ui-table
           :data="packages"
           v-loading="loadingPackages"
           style="width: 100%"
           empty-text="暂无资源包，请先上传"
           stripe
         >
-          <el-table-column label="文件名" min-width="250">
+          <ui-table-column label="文件名" min-width="250">
             <template #default="{ row }">
               <div class="filename-cell">
-                <el-icon class="file-icon"><Document /></el-icon>
-                <el-text class="filename-text" :title="row.filename">
+                <ui-icon class="file-icon"><Document /></ui-icon>
+                <ui-text class="filename-text" :title="row.filename">
                   {{ row.filename }}
-                </el-text>
+                </ui-text>
               </div>
             </template>
-          </el-table-column>
-          <el-table-column label="大小" width="120" align="right">
+          </ui-table-column>
+          <ui-table-column label="大小" width="120" align="right">
             <template #default="{ row }">
-              <el-text type="info">{{ formatFileSize(row.size) }}</el-text>
+              <ui-text type="info">{{ formatFileSize(row.size) }}</ui-text>
             </template>
-          </el-table-column>
-          <el-table-column label="上传时间" width="180">
+          </ui-table-column>
+          <ui-table-column label="上传时间" width="180">
             <template #default="{ row }">
-              <el-text type="info" size="small">
+              <ui-text type="info" size="small">
                 {{ formatTime(row.uploaded_time) }}
-              </el-text>
+              </ui-text>
             </template>
-          </el-table-column>
-          <el-table-column label="操作" width="380" fixed="right" align="center">
+          </ui-table-column>
+          <ui-table-column label="操作" width="380" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button
+              <ui-button
                 type="success"
                 size="small"
                 :icon="Promotion"
@@ -100,8 +100,8 @@
                 :loading="deploying === row.filename"
               >
                 部署
-              </el-button>
-              <el-button
+              </ui-button>
+              <ui-button
                 type="primary"
                 size="small"
                 :icon="Download"
@@ -109,8 +109,8 @@
                 :loading="downloading === row.filename"
               >
                 下载
-              </el-button>
-              <el-button
+              </ui-button>
+              <ui-button
                 type="danger"
                 size="small"
                 :icon="Delete"
@@ -118,23 +118,23 @@
                 :loading="deleting === row.filename"
               >
                 删除
-              </el-button>
+              </ui-button>
             </template>
-          </el-table-column>
-        </el-table>
+          </ui-table-column>
+        </ui-table>
       </div>
-    </el-card>
+    </ui-card>
 
     <!-- 上传对话框 -->
-    <el-dialog
+    <ui-dialog
       v-model="uploadDialogVisible"
       title="上传静态资源包"
       width="600px"
       :close-on-click-modal="false"
     >
-      <el-form :model="uploadForm" label-width="140px">
-        <el-form-item label="资源包文件">
-          <el-upload
+      <ui-form :model="uploadForm" label-width="140px">
+        <ui-form-item label="资源包文件">
+          <ui-upload
             ref="uploadRef"
             :auto-upload="false"
             :limit="1"
@@ -142,60 +142,60 @@
             :before-remove="() => !uploading"
             accept=".zip,.tar.gz,.tgz,.tar"
           >
-            <el-button type="primary">
-              <el-icon><FolderOpened /></el-icon>
+            <ui-button type="primary">
+              <ui-icon><FolderOpened /></ui-icon>
               <span class="btn-label">选择文件</span>
-            </el-button>
+            </ui-button>
             <template #tip>
-              <div class="el-upload__tip">
+              <div class="ui-upload__tip">
                 支持 .zip、.tar.gz、.tgz、.tar 格式
               </div>
             </template>
-          </el-upload>
-        </el-form-item>
-      </el-form>
+          </ui-upload>
+        </ui-form-item>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="uploadDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="uploadDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             type="primary"
             :loading="uploading"
             :disabled="!selectedFile"
             @click="handleUpload"
           >
-            <el-icon><UploadFilled /></el-icon>
+            <ui-icon><UploadFilled /></ui-icon>
             <span class="btn-label">上传</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 提取资源包对话框 -->
-    <el-dialog
+    <ui-dialog
       v-model="extractDialogVisible"
       title="提取静态资源包"
       width="600px"
       :close-on-click-modal="false"
     >
-      <el-form :model="extractForm" label-width="140px">
-        <el-form-item label="选择 Nginx 目录/版本">
-          <el-select
+      <ui-form :model="extractForm" label-width="140px">
+        <ui-form-item label="选择 Nginx 目录/版本">
+          <ui-select
             v-model="extractForm.directory"
             placeholder="选择 Nginx 目录/版本"
             style="width: 100%"
           >
-            <el-option
+            <ui-option
               v-for="version in versions"
               :key="version.directory"
               :label="formatOptionLabel(version)"
               :value="version.directory"
             />
-          </el-select>
-        </el-form-item>
-        <el-alert
+          </ui-select>
+        </ui-form-item>
+        <ui-alert
           title="说明"
           type="info"
           :closable="false"
@@ -205,15 +205,15 @@
             将扫描静态文件夹（html目录）中的压缩包文件（.zip、.tar.gz、.tgz、.tar），
             并将它们提取到资源包存储目录。
           </template>
-        </el-alert>
-        <el-form-item label="提取选项">
-          <el-switch
+        </ui-alert>
+        <ui-form-item label="提取选项">
+          <ui-switch
             v-model="extractForm.deleteAfterExtract"
             active-text="提取后删除静态文件夹中的资源包"
             inactive-text="保留源文件"
           />
-        </el-form-item>
-        <el-alert
+        </ui-form-item>
+        <ui-alert
           v-if="extractForm.deleteAfterExtract"
           title="警告"
           type="warning"
@@ -223,86 +223,86 @@
           <template #default>
             提取后将删除静态文件夹（html目录）中的资源包文件，此操作不可恢复！
           </template>
-        </el-alert>
-      </el-form>
+        </ui-alert>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="extractDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="extractDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             type="warning"
             :loading="extracting"
             :disabled="!extractForm.directory"
             @click="handleExtractConfirm"
           >
-            <el-icon><Download /></el-icon>
+            <ui-icon><Download /></ui-icon>
             <span class="btn-label">确认提取</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 部署对话框 -->
-    <el-dialog
+    <ui-dialog
       v-model="deployDialogVisible"
       title="部署静态资源包"
       width="600px"
       :close-on-click-modal="false"
     >
-      <el-form :model="deployForm" label-width="140px">
-        <el-form-item label="资源包">
-          <el-text>{{ deployForm.filename }}</el-text>
-        </el-form-item>
-        <el-form-item label="选择 Nginx 目录/版本">
-          <el-select
+      <ui-form :model="deployForm" label-width="140px">
+        <ui-form-item label="资源包">
+          <ui-text>{{ deployForm.filename }}</ui-text>
+        </ui-form-item>
+        <ui-form-item label="选择 Nginx 目录/版本">
+          <ui-select
             v-model="deployForm.directory"
             placeholder="选择 Nginx 目录/版本"
             style="width: 100%"
           >
-            <el-option
+            <ui-option
               v-for="version in versions"
               :key="version.directory"
               :label="formatOptionLabel(version)"
               :value="version.directory"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="解压选项">
-          <el-radio-group v-model="deployForm.extractToSubdir">
-            <el-radio :label="false">直接解压到 html 根目录</el-radio>
-            <el-radio :label="true">解压到子目录（使用包名）</el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
+          </ui-select>
+        </ui-form-item>
+        <ui-form-item label="解压选项">
+          <ui-radio-group v-model="deployForm.extractToSubdir">
+            <ui-radio :label="false">直接解压到 html 根目录</ui-radio>
+            <ui-radio :label="true">解压到子目录（使用包名）</ui-radio>
+          </ui-radio-group>
+        </ui-form-item>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="deployDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="deployDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             type="success"
             :loading="deploying"
             :disabled="!deployForm.directory"
             @click="handleDeployConfirm"
           >
-            <el-icon><CircleCheck /></el-icon>
+            <ui-icon><CircleCheck /></ui-icon>
             <span class="btn-label">确认部署</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Upload, Document, Promotion, Delete, FolderOpened, CloseBold, UploadFilled, CircleCheck, Download } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
+import { Refresh, Upload, Document, Promotion, Delete, FolderOpened, CloseBold, UploadFilled, CircleCheck, Download } from '@/components/icons'
 import { formatDateTime } from '../utils/date'
 
 const versions = ref([])

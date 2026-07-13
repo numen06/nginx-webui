@@ -2,7 +2,7 @@
   <div ref="editorContainer" class="monaco-editor-container"></div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import loader from '@monaco-editor/loader'
 import * as monacoModule from 'monaco-editor'

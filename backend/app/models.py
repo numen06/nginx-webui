@@ -18,6 +18,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
     
     # 关联关系
     operation_logs = relationship("OperationLog", back_populates="user")
@@ -250,4 +251,3 @@ class StatisticsDaily(Base):
     
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
-

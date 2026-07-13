@@ -41,10 +41,10 @@
 - Certbot
 
 ### 前端
-- Vue 3 + Composition API
-- Vite
-- Element Plus
-- Monaco Editor
+- Vue 3.5 + TypeScript + Composition API
+- Vite 6 + Tailwind CSS 4
+- shadcn-vue + Reka UI + Lucide
+- Pinia、ECharts、Monaco Editor
 
 ## 项目结构
 
@@ -178,4 +178,3 @@ docker run -d \
 ## 许可证
 
 MIT License
-

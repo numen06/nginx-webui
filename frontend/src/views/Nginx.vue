@@ -1,7 +1,7 @@
 <template>
-  <div class="nginx-manager">
+  <div class="nginx-manager page-shell">
     <div v-if="pinnedVersion" class="pinned-card-wrapper">
-      <el-card 
+      <ui-card
         class="version-card pinned-card" 
         :class="{ 'running-version': pinnedVersion.running }"
         shadow="hover"
@@ -14,35 +14,35 @@
                 <span class="running-flag">（发布版）</span>
               </div>
               <div class="version-tags">
-                <el-tag
+                <ui-tag
                   v-if="buildingVersions.includes(pinnedVersion.directory)"
                   type="warning"
                   size="small"
                 >
                   处理中
-                </el-tag>
+                </ui-tag>
                 <template v-else>
-                  <el-tag
+                  <ui-tag
                     v-if="pinnedVersion.compiled"
                     :type="pinnedVersion.running ? 'success' : 'info'"
                     size="small"
                   >
                     {{ pinnedVersion.running ? '运行中' : '已编译' }}
-                  </el-tag>
-                  <el-tag
+                  </ui-tag>
+                  <ui-tag
                     v-else-if="pinnedVersion.has_source"
                     type="warning"
                     size="small"
                   >
                     未编译
-                  </el-tag>
-                  <el-tag
+                  </ui-tag>
+                  <ui-tag
                     v-else
                     type="danger"
                     size="small"
                   >
                     未准备
-                  </el-tag>
+                  </ui-tag>
                 </template>
               </div>
             </div>
@@ -72,19 +72,19 @@
         </div>
 
         <div class="version-actions">
-          <el-tooltip class="action-tooltip" content="查看配置" placement="top">
-            <el-button
+          <ui-tooltip class="action-tooltip" content="查看配置" placement="top">
+            <ui-button
               circle
               size="small"
               class="action-icon-btn"
               @click="viewConfig(pinnedVersion.directory)"
             >
-              <el-icon><Document /></el-icon>
-            </el-button>
-          </el-tooltip>
+              <ui-icon><Document /></ui-icon>
+            </ui-button>
+          </ui-tooltip>
           <template v-if="pinnedVersion.directory !== 'last'">
-            <el-tooltip class="action-tooltip" content="编译" placement="top">
-              <el-button
+            <ui-tooltip class="action-tooltip" content="编译" placement="top">
+              <ui-button
                 circle
                 size="small"
                 type="purple"
@@ -92,11 +92,11 @@
                 :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.has_source || pinnedVersion.running"
                 @click="compileVersion(pinnedVersion.directory)"
               >
-                <el-icon><Tools /></el-icon>
-              </el-button>
-            </el-tooltip>
-            <el-tooltip class="action-tooltip" content="发布" placement="top">
-              <el-button
+                <ui-icon><Tools /></ui-icon>
+              </ui-button>
+            </ui-tooltip>
+            <ui-tooltip class="action-tooltip" content="发布" placement="top">
+              <ui-button
                 circle
                 size="small"
                 type="primary"
@@ -104,12 +104,12 @@
                 :disabled="buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
                 @click="upgradeToProduction(pinnedVersion.directory)"
               >
-                <el-icon><Promotion /></el-icon>
-              </el-button>
-            </el-tooltip>
+                <ui-icon><Promotion /></ui-icon>
+              </ui-button>
+            </ui-tooltip>
           </template>
-          <el-tooltip class="action-tooltip" content="启动" placement="top">
-            <el-button
+          <ui-tooltip class="action-tooltip" content="启动" placement="top">
+            <ui-button
               circle
               size="small"
               type="success"
@@ -117,11 +117,11 @@
               :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory) || !pinnedVersion.compiled"
               @click="startVersion(pinnedVersion.directory)"
             >
-              <el-icon><VideoPlay /></el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-tooltip class="action-tooltip" content="停止" placement="top">
-            <el-button
+              <ui-icon><VideoPlay /></ui-icon>
+            </ui-button>
+          </ui-tooltip>
+          <ui-tooltip class="action-tooltip" content="停止" placement="top">
+            <ui-button
               circle
               size="small"
               type="warning"
@@ -129,11 +129,11 @@
               :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
               @click="stopVersion(pinnedVersion.directory)"
             >
-              <el-icon><VideoPause /></el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-tooltip class="action-tooltip" content="强制停止" placement="top">
-            <el-button
+              <ui-icon><VideoPause /></ui-icon>
+            </ui-button>
+          </ui-tooltip>
+          <ui-tooltip class="action-tooltip" content="强制停止" placement="top">
+            <ui-button
               circle
               size="small"
               type="orange"
@@ -141,11 +141,11 @@
               :disabled="!pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
               @click="forceStopVersion(pinnedVersion.directory)"
             >
-              <el-icon><Lightning /></el-icon>
-            </el-button>
-          </el-tooltip>
-          <el-tooltip class="action-tooltip" content="删除" placement="top">
-            <el-button
+              <ui-icon><Lightning /></ui-icon>
+            </ui-button>
+          </ui-tooltip>
+          <ui-tooltip class="action-tooltip" content="删除" placement="top">
+            <ui-button
               circle
               size="small"
               type="danger"
@@ -153,49 +153,49 @@
               :disabled="pinnedVersion.running || buildingVersions.includes(pinnedVersion.directory)"
               @click="deleteVersion(pinnedVersion.directory)"
             >
-              <el-icon><Delete /></el-icon>
-            </el-button>
-          </el-tooltip>
+              <ui-icon><Delete /></ui-icon>
+            </ui-button>
+          </ui-tooltip>
         </div>
-      </el-card>
+      </ui-card>
     </div>
 
-    <el-card>
+    <ui-card>
       <template #header>
         <div class="card-header">
           <span>Nginx 版本列表</span>
           <div>
-            <el-button type="primary" @click="downloadDialogVisible = true">
-              <el-icon><Download /></el-icon>
+            <ui-button type="primary" @click="downloadDialogVisible = true">
+              <ui-icon><Download /></ui-icon>
               <span class="btn-label">在线下载源码包</span>
-            </el-button>
-            <el-button type="cyan" @click="uploadDialogVisible = true">
-              <el-icon><UploadFilled /></el-icon>
+            </ui-button>
+            <ui-button type="cyan" @click="uploadDialogVisible = true">
+              <ui-icon><UploadFilled /></ui-icon>
               <span class="btn-label">上传源码包</span>
-            </el-button>
-            <el-button type="info" text @click="loadVersions">
-              <el-icon><RefreshRight /></el-icon>
+            </ui-button>
+            <ui-button type="info" text @click="loadVersions">
+              <ui-icon><RefreshRight /></ui-icon>
               <span class="btn-label">刷新</span>
-            </el-button>
-              <el-button
+            </ui-button>
+              <ui-button
                 type="danger"
                 size="small"
                 @click="forceReleaseHttpPort"
               >
-              <el-icon><Lightning /></el-icon>
+              <ui-icon><Lightning /></ui-icon>
               <span class="btn-label">强制释放Nginx端口</span>
-              </el-button>
+              </ui-button>
           </div>
         </div>
       </template>
 
-      <el-row :gutter="16">
-        <el-col
+      <ui-row :gutter="16">
+        <ui-col
           v-for="row in sortedVersions"
           :key="row.directory"
           :span="12"
         >
-          <el-card 
+          <ui-card
             class="version-card" 
             :class="{ 'running-version': row.running }"
             shadow="hover"
@@ -207,35 +207,35 @@
                     <span class="directory-text">目录：{{ row.directory }}</span>
                   </div>
                   <div class="version-tags">
-                    <el-tag
+                    <ui-tag
                       v-if="buildingVersions.includes(row.directory)"
                       type="warning"
                       size="small"
                     >
                       处理中
-                    </el-tag>
+                    </ui-tag>
                     <template v-else>
-                      <el-tag
+                      <ui-tag
                         v-if="row.compiled"
                         :type="row.running ? 'success' : 'info'"
                         size="small"
                       >
                         {{ row.running ? '运行中' : '已编译' }}
-                      </el-tag>
-                      <el-tag
+                      </ui-tag>
+                      <ui-tag
                         v-else-if="row.has_source"
                         type="warning"
                         size="small"
                       >
                         未编译
-                      </el-tag>
-                      <el-tag
+                      </ui-tag>
+                      <ui-tag
                         v-else
                         type="danger"
                         size="small"
                       >
                         未准备
-                      </el-tag>
+                      </ui-tag>
                     </template>
                   </div>
                 </div>
@@ -265,18 +265,18 @@
             </div>
 
             <div class="version-actions">
-              <el-tooltip class="action-tooltip" content="查看配置" placement="top">
-                <el-button
+              <ui-tooltip class="action-tooltip" content="查看配置" placement="top">
+                <ui-button
                   circle
                   size="small"
                   class="action-icon-btn"
                   @click="viewConfig(row.directory)"
                 >
-                  <el-icon><Document /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip class="action-tooltip" content="编译" placement="top">
-                <el-button
+                  <ui-icon><Document /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip class="action-tooltip" content="编译" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="purple"
@@ -284,11 +284,11 @@
                   :disabled="buildingVersions.includes(row.directory) || !row.has_source || row.running"
                   @click="compileVersion(row.directory)"
                 >
-                  <el-icon><Tools /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip class="action-tooltip" content="发布" placement="top">
-                <el-button
+                  <ui-icon><Tools /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip class="action-tooltip" content="发布" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="primary"
@@ -296,11 +296,11 @@
                   :disabled="buildingVersions.includes(row.directory) || !row.compiled"
                   @click="upgradeToProduction(row.directory)"
                 >
-                  <el-icon><Promotion /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip class="action-tooltip" content="启动" placement="top">
-                <el-button
+                  <ui-icon><Promotion /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip class="action-tooltip" content="启动" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="success"
@@ -308,11 +308,11 @@
                   :disabled="row.running || buildingVersions.includes(row.directory) || !row.compiled"
                   @click="startVersion(row.directory)"
                 >
-                  <el-icon><VideoPlay /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip class="action-tooltip" content="停止" placement="top">
-                <el-button
+                  <ui-icon><VideoPlay /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip class="action-tooltip" content="停止" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="warning"
@@ -320,11 +320,11 @@
                   :disabled="!row.running || buildingVersions.includes(row.directory)"
                   @click="stopVersion(row.directory)"
                 >
-                  <el-icon><VideoPause /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip class="action-tooltip" content="强制停止" placement="top">
-                <el-button
+                  <ui-icon><VideoPause /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip class="action-tooltip" content="强制停止" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="orange"
@@ -332,11 +332,11 @@
                   :disabled="!row.running || buildingVersions.includes(row.directory)"
                   @click="forceStopVersion(row.directory)"
                 >
-                  <el-icon><Lightning /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip class="action-tooltip" content="删除" placement="top">
-                <el-button
+                  <ui-icon><Lightning /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip class="action-tooltip" content="删除" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="danger"
@@ -344,27 +344,27 @@
                   :disabled="row.running || buildingVersions.includes(row.directory)"
                   @click="deleteVersion(row.directory)"
                 >
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </el-tooltip>
+                  <ui-icon><Delete /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
             </div>
-          </el-card>
-        </el-col>
-      </el-row>
-    </el-card>
+          </ui-card>
+        </ui-col>
+      </ui-row>
+    </ui-card>
 
     <!-- 在线下载并编译 弹窗 -->
-    <el-dialog
+    <ui-dialog
       v-model="downloadDialogVisible"
       title="在线下载 Nginx 源码包"
       width="600px"
       :close-on-click-modal="false"
       @close="resetDownloadForm"
     >
-      <el-form :model="downloadForm" label-width="100px">
-        <el-form-item label="版本号">
+      <ui-form :model="downloadForm" label-width="100px">
+        <ui-form-item label="版本号">
           <div style="display: flex; gap: 8px; align-items: center; width: 100%">
-            <el-select
+            <ui-select
               v-model="downloadForm.version"
               filterable
               allow-create
@@ -373,28 +373,28 @@
               style="flex: 1"
               @change="handleVersionChange"
             >
-              <el-option-group label="最新版本（来自 nginx.org）">
-                <el-option
+              <ui-option-group label="最新版本（来自 nginx.org）">
+                <ui-option
                   v-for="item in builtinVersions"
                   :key="item"
                   :label="item"
                   :value="item"
                 />
-              </el-option-group>
-            </el-select>
-            <el-button
+              </ui-option-group>
+            </ui-select>
+            <ui-button
               type="info"
               :loading="loadingLatestVersions"
               @click="loadLatestVersions"
               size="small"
             >
-              <el-icon><RefreshRight /></el-icon>
+              <ui-icon><RefreshRight /></ui-icon>
               <span class="btn-label">获取最新</span>
-            </el-button>
+            </ui-button>
           </div>
-        </el-form-item>
-        <el-form-item label="下载地址">
-          <el-input
+        </ui-form-item>
+        <ui-form-item label="下载地址">
+          <ui-input
             v-model="downloadForm.url"
             :placeholder="getDefaultUrl()"
             @blur="handleUrlBlur"
@@ -403,11 +403,11 @@
             :rows="2"
             style="width: 100%"
           />
-          <div style="margin-top: 4px; font-size: 12px; color: var(--el-text-color-secondary)">
+          <div style="margin-top: 4px; font-size: 12px; color: var(--ui-text-color-secondary)">
             默认地址: {{ getDefaultUrl() }}
           </div>
           <div v-if="isUrlCheckResultValid(urlCheckResult)" style="margin-top: 8px; font-size: 12px">
-            <el-alert
+            <ui-alert
               v-if="urlCheckResult && urlCheckResult.accessible === true"
               type="success"
               :closable="false"
@@ -419,8 +419,8 @@
                   (大小: {{ formatFileSize(urlCheckResult.content_length) }})
                 </span>
               </template>
-            </el-alert>
-            <el-alert
+            </ui-alert>
+            <ui-alert
               v-else
               type="error"
               :closable="false"
@@ -429,11 +429,11 @@
               <template #default>
                 <span>地址不可访问: {{ getUrlCheckErrorMessage(urlCheckResult) }}</span>
               </template>
-            </el-alert>
+            </ui-alert>
           </div>
-        </el-form-item>
-        <el-form-item v-if="downloadProgress.status === 'downloading'" label="下载进度">
-          <el-progress
+        </ui-form-item>
+        <ui-form-item v-if="downloadProgress.status === 'downloading'" label="下载进度">
+          <ui-progress
             :percentage="downloadProgress.percentage >= 0 ? downloadProgress.percentage : undefined"
             :status="downloadProgress.percentage >= 0 ? undefined : 'active'"
             :stroke-width="20"
@@ -442,98 +442,98 @@
               <span v-if="percentage >= 0">{{ percentage }}%</span>
               <span v-else>下载中...</span>
             </template>
-          </el-progress>
-          <div style="margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary)">
+          </ui-progress>
+          <div style="margin-top: 8px; font-size: 12px; color: var(--ui-text-color-secondary)">
             已下载: {{ formatFileSize(downloadProgress.downloaded) }}
             <span v-if="downloadProgress.total">
               / {{ formatFileSize(downloadProgress.total) }}
             </span>
           </div>
-        </el-form-item>
-      </el-form>
+        </ui-form-item>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="downloadDialogVisible = false" :disabled="downloadLoading">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="downloadDialogVisible = false" :disabled="downloadLoading">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             type="info"
             :loading="checkingUrl"
             :disabled="downloadLoading"
             @click="checkUrl"
           >
-            <el-icon><Link /></el-icon>
+            <ui-icon><Link /></ui-icon>
             <span class="btn-label">检查地址</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             type="primary"
             :loading="downloadLoading"
             :disabled="urlCheckResult && typeof urlCheckResult === 'object' && urlCheckResult.accessible === false"
             @click="handleDownload"
           >
-            <el-icon><Download /></el-icon>
+            <ui-icon><Download /></ui-icon>
             <span class="btn-label">下载源码包</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 上传源码包并编译 弹窗 -->
-    <el-dialog
+    <ui-dialog
       v-model="uploadDialogVisible"
       title="上传 Nginx 源码包"
       width="600px"
       :close-on-click-modal="false"
     >
-      <el-form label-width="100px">
-        <el-form-item label="源码包">
-          <el-upload
+      <ui-form label-width="100px">
+        <ui-form-item label="源码包">
+          <ui-upload
             ref="uploadRef"
             :auto-upload="false"
             :limit="1"
             :on-change="handleFileChange"
             :before-remove="() => !uploading"
           >
-            <el-button type="primary">
-              <el-icon><FolderOpened /></el-icon>
+            <ui-button type="primary">
+              <ui-icon><FolderOpened /></ui-icon>
               <span class="btn-label">选择文件</span>
-            </el-button>
+            </ui-button>
             <template #tip>
-              <div class="el-upload__tip">
+              <div class="ui-upload__tip">
                 仅支持 .tar.gz / .tgz 的 nginx 源码包，示例：nginx-1.28.0.tar.gz
               </div>
             </template>
-          </el-upload>
-        </el-form-item>
-        <el-form-item label="版本号">
-          <el-input
+          </ui-upload>
+        </ui-form-item>
+        <ui-form-item label="版本号">
+          <ui-input
             v-model="uploadVersion"
             placeholder="可留空，将从文件名 nginx-&lt;version&gt;.tar.gz 中推断"
           />
-        </el-form-item>
-      </el-form>
+        </ui-form-item>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="uploadDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="uploadDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             type="primary"
             :loading="uploading"
             :disabled="!selectedFile"
             @click="handleUpload"
           >
-            <el-icon><UploadFilled /></el-icon>
+            <ui-icon><UploadFilled /></ui-icon>
             <span class="btn-label">上传并编译</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 查看指定版本配置的弹窗 -->
-    <el-dialog
+    <ui-dialog
       v-model="configDialogVisible"
       :title="`配置文件 - ${getDisplayLabelByDirectory(currentConfigVersion)}`"
       width="800px"
@@ -543,7 +543,7 @@
         <span class="meta-label">配置路径：</span>
         <span class="meta-value">{{ currentConfigPath }}</span>
       </div>
-      <el-input
+      <ui-input
         v-model="currentConfigContent"
         type="textarea"
         :rows="20"
@@ -552,16 +552,16 @@
       />
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="primary" @click="configDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="primary" @click="configDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">关闭</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 编译版本弹窗 -->
-    <el-dialog
+    <ui-dialog
       v-model="compileDialogVisible"
       :title="`编译 Nginx - ${getDisplayLabelByDirectory(currentCompileVersion)}`"
       width="900px"
@@ -572,36 +572,36 @@
       destroy-on-close
       class="compile-dialog"
     >
-      <el-tabs v-model="compileActiveTab">
-        <el-tab-pane label="编译参数" name="config">
-          <el-form label-width="140px" style="margin-top: 20px">
-            <el-form-item label="默认参数">
-              <el-tag type="info" size="small" style="margin-right: 8px">--prefix (由系统自动设置)</el-tag>
-              <span style="font-size: 12px; color: var(--el-text-color-secondary)">
+      <ui-tabs v-model="compileActiveTab">
+        <ui-tab-pane label="编译参数" name="config">
+          <ui-form label-width="140px" style="margin-top: 20px">
+            <ui-form-item label="默认参数">
+              <ui-tag type="info" size="small" style="margin-right: 8px">--prefix (由系统自动设置)</ui-tag>
+              <span style="font-size: 12px; color: var(--ui-text-color-secondary)">
                 以下参数将自动添加
               </span>
-            </el-form-item>
-            <el-form-item label="默认模块">
+            </ui-form-item>
+            <ui-form-item label="默认模块">
               <div style="display: flex; flex-wrap: wrap; gap: 8px">
-                <el-tag v-for="module in defaultModules" :key="module" size="small" type="info">
+                <ui-tag v-for="module in defaultModules" :key="module" size="small" type="info">
                   {{ module }}
-                </el-tag>
+                </ui-tag>
   </div>
-            </el-form-item>
-            <el-form-item label="自定义参数">
-              <el-input
+            </ui-form-item>
+            <ui-form-item label="自定义参数">
+              <ui-input
                 v-model="customConfigureArgs"
                 type="textarea"
                 :rows="8"
                 placeholder="每行一个参数，例如：&#10;--with-http_image_filter_module&#10;--with-http_geoip_module&#10;&#10;注意：--prefix 参数由系统自动设置，不能覆盖。"
               />
-              <div style="margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary)">
+              <div style="margin-top: 8px; font-size: 12px; color: var(--ui-text-color-secondary)">
                 提示：可添加额外的模块或配置选项，每行一个参数
               </div>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-        <el-tab-pane label="编译日志" name="logs">
+            </ui-form-item>
+          </ui-form>
+        </ui-tab-pane>
+        <ui-tab-pane label="编译日志" name="logs">
           <div class="compile-log-container">
             <div ref="logContainerRef" class="compile-log-content">
               <div
@@ -616,32 +616,32 @@
               </div>
             </div>
           </div>
-        </el-tab-pane>
-      </el-tabs>
+        </ui-tab-pane>
+      </ui-tabs>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="handleCompileCancel">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="handleCompileCancel">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">{{ compiling ? '编译中...' : '关闭' }}</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             v-if="!compiling"
             type="primary"
             @click="handleStartCompile"
           >
-            <el-icon><Tools /></el-icon>
+            <ui-icon><Tools /></ui-icon>
             <span class="btn-label">开始编译</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
 import { nginxApi } from '../api/nginx'
 import {
   Tools,
@@ -657,7 +657,7 @@ import {
   Link,
   FolderOpened,
   Document
-} from '@element-plus/icons-vue'
+} from '@/components/icons'
 
 const versions = ref([])
 const pinnedVersion = computed(() => versions.value.find((item) => item.directory === 'last'))
@@ -877,7 +877,6 @@ const checkUrl = async () => {
   
   try {
     const result = await nginxApi.checkDownloadUrl(url)
-    console.log('URL 检查结果:', result, typeof result, 'isArray:', Array.isArray(result))
     
     // 处理各种可能的返回格式
     let processedResult = null
@@ -1123,7 +1122,7 @@ const handleDownload = async () => {
     let downloadCompleted = false
     let downloadError = null
     
-    await new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       startProgressPolling(targetVersion, (success) => {
         downloadCompleted = success
         resolve()
@@ -1183,7 +1182,7 @@ const handleUpload = async () => {
 
   uploading.value = true
   try {
-    await nginxApi.uploadAndBuild(formData)
+    await nginxApi.uploadAndBuild(formData, undefined)
     ElMessage.success('上传并编译任务完成')
     await loadVersions()
     // 重置选择
@@ -1494,7 +1493,7 @@ onUnmounted(() => {
 }
 
 .pid-running {
-  color: var(--el-color-success);
+  color: var(--ui-color-success);
   font-weight: 600;
 }
 
@@ -1514,7 +1513,7 @@ onUnmounted(() => {
   padding: 0;
 }
 
-.action-icon-btn .el-icon {
+.action-icon-btn .ui-icon {
   font-size: 16px;
 }
 
@@ -1523,14 +1522,13 @@ onUnmounted(() => {
 }
 
 .running-flag {
-  color: var(--el-color-primary);
+  color: var(--ui-color-primary);
 }
 
 
 .running-version {
-  border: 2px solid var(--el-color-success);
+  border: 2px solid var(--ui-color-success);
   box-shadow: 0 2px 12px 0 rgba(103, 194, 58, 0.3);
-  background: linear-gradient(to bottom, rgba(103, 194, 58, 0.05), transparent);
 }
 
 .running-version:hover {
@@ -1560,7 +1558,7 @@ onUnmounted(() => {
 .compile-log-container {
   height: 400px;
   max-height: 50vh;
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--ui-border-color);
   border-radius: 4px;
   background-color: #1e1e1e;
   padding: 12px;
@@ -1598,38 +1596,36 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-.compile-dialog :deep(.el-dialog__body) {
+.compile-dialog :deep(.ui-dialog__body) {
   max-height: calc(90vh - 120px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.compile-dialog :deep(.el-tabs) {
+.compile-dialog :deep(.ui-tabs) {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
 
-.compile-dialog :deep(.el-tabs__content) {
+.compile-dialog :deep(.ui-tabs__content) {
   flex: 1;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.compile-dialog :deep(.el-tab-pane) {
+.compile-dialog :deep(.ui-tab-pane) {
   flex: 1;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.compile-dialog :deep(.el-form) {
+.compile-dialog :deep(.ui-form) {
   overflow-y: auto;
   max-height: calc(90vh - 200px);
 }
 </style>
-
-

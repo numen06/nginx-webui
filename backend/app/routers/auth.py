@@ -140,8 +140,8 @@ async def get_current_user_info(
             "id": current_user.id,
             "username": current_user.username,
             "is_active": current_user.is_active,
+            "is_admin": current_user.is_admin,
             "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
             "is_default_password": is_default_password
         }
     }
-

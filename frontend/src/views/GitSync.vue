@@ -1,6 +1,6 @@
 <template>
-  <div class="git-sync-page">
-    <el-card v-loading="gitLoading">
+  <div class="git-sync-page page-shell">
+    <ui-card v-loading="gitLoading">
       <template #header>
         <div class="card-header">
           <div>
@@ -8,26 +8,26 @@
             <p class="card-subtitle">配置仓库信息并将当前 nginx.conf 推送到远端</p>
           </div>
           <div>
-            <el-button type="primary" @click="handleSaveGitConfig" :loading="gitSaving">
-              <el-icon><DocumentChecked /></el-icon>
+            <ui-button type="primary" @click="handleSaveGitConfig" :loading="gitSaving">
+              <ui-icon><DocumentChecked /></ui-icon>
               <span class="btn-label">保存配置</span>
-            </el-button>
-            <el-button
+            </ui-button>
+            <ui-button
               type="success"
               @click="handleSyncGit"
               :loading="gitSyncing"
               :disabled="!canSyncGit"
             >
-              <el-icon><Refresh /></el-icon>
+              <ui-icon><Refresh /></ui-icon>
               <span class="btn-label">立即同步</span>
-            </el-button>
+            </ui-button>
           </div>
         </div>
       </template>
 
-      <el-form label-width="120px" class="git-form">
-        <el-form-item label="项目名称">
-          <el-input
+      <ui-form label-width="120px" class="git-form">
+        <ui-form-item label="项目名称">
+          <ui-input
             v-model="gitConfig.project_name"
             placeholder="用于区分 data/git/<项目名称>/"
             clearable
@@ -35,22 +35,22 @@
           <p class="help-text">
             默认建议：{{ defaultProjectName || '（无）' }}；同步目录 data/git/{{ resolvedProjectName }}
           </p>
-        </el-form-item>
-        <el-form-item label="仓库地址">
-          <el-input
+        </ui-form-item>
+        <ui-form-item label="仓库地址">
+          <ui-input
             v-model="gitConfig.repo_url"
             placeholder="请输入 Git 仓库地址（HTTPS）"
             clearable
           />
-        </el-form-item>
-        <el-form-item label="分支">
-          <el-input v-model="gitConfig.branch" placeholder="默认为 main" clearable />
-        </el-form-item>
-        <el-form-item label="账号">
-          <el-input v-model="gitConfig.username" placeholder="Git 账号" clearable />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
+        </ui-form-item>
+        <ui-form-item label="分支">
+          <ui-input v-model="gitConfig.branch" placeholder="默认为 main" clearable />
+        </ui-form-item>
+        <ui-form-item label="账号">
+          <ui-input v-model="gitConfig.username" placeholder="Git 账号" clearable />
+        </ui-form-item>
+        <ui-form-item label="密码">
+          <ui-input
             type="password"
             v-model="gitPassword"
             :placeholder="passwordPlaceholder"
@@ -58,10 +58,10 @@
             clearable
             @input="handlePasswordInput"
           />
-        </el-form-item>
-      </el-form>
+        </ui-form-item>
+      </ui-form>
 
-      <el-alert
+      <ui-alert
         v-if="gitStatus.status || gitStatus.message"
         :type="syncStatusType"
         show-icon
@@ -69,25 +69,25 @@
       >
         <p class="git-status">{{ syncStatusText }}</p>
         <p v-if="gitStatus.message" class="git-status-detail">{{ gitStatus.message }}</p>
-      </el-alert>
+      </ui-alert>
       <p v-else class="git-status git-status-muted">尚未同步过 Git 仓库</p>
 
-      <el-divider />
-      <el-alert type="info" show-icon>
+      <ui-divider />
+      <ui-alert type="info" show-icon>
         <ul class="tips">
           <li>同步时将当前活跃版本的 nginx.conf 导出至 Git 仓库。</li>
           <li>凭据仅存储于后端数据库，加密传输，不会回显。</li>
           <li>仓库会被克隆到服务器 <code>data/git/{{ resolvedProjectName }}</code> 目录。</li>
         </ul>
-      </el-alert>
-    </el-card>
+      </ui-alert>
+    </ui-card>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { gitApi } from '../api/git'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/lib/feedback'
 import { formatDateTime } from '../utils/date'
 
 const gitConfig = ref({

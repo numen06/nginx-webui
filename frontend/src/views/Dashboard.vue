@@ -1,149 +1,149 @@
 <template>
-  <div class="dashboard">
+  <div class="dashboard page-shell">
     <!-- Nginx状态卡片 -->
-    <el-row :gutter="20" class="mb-20">
-      <el-col :span="24">
-        <el-card>
+    <ui-row :gutter="20" class="mb-20">
+      <ui-col :span="24">
+        <ui-card>
           <template #header>
             <div class="card-header">
               <span>Nginx 运行状态</span>
               <div class="card-actions">
-                <el-button type="info" text @click="refreshStatus">
-                  <el-icon><Refresh /></el-icon>
+                <ui-button type="info" text @click="refreshStatus">
+                  <ui-icon><Refresh /></ui-icon>
                   刷新
-                </el-button>
-                <el-button
+                </ui-button>
+                <ui-button
                   type="success"
                   text
                   :disabled="taskStatus.is_running"
                   @click="triggerIncrementalAnalyze"
                 >
-                  <el-icon style="margin-right: 4px;"><DataAnalysis /></el-icon>
+                  <ui-icon style="margin-right: 4px;"><DataAnalysis /></ui-icon>
                   增量分析
-                </el-button>
-                <el-button
+                </ui-button>
+                <ui-button
                   type="primary"
                   text
                   :disabled="taskStatus.is_running"
                   @click="triggerAnalyzeNow"
                 >
-                  <el-icon style="margin-right: 4px;"><DataAnalysis /></el-icon>
+                  <ui-icon style="margin-right: 4px;"><DataAnalysis /></ui-icon>
                   全量分析
-                </el-button>
+                </ui-button>
               </div>
             </div>
           </template>
-          <el-descriptions :column="2" border size="small" class="nginx-status-descriptions">
-            <el-descriptions-item label="运行状态">
-              <el-tag :type="nginxStatus.running ? 'success' : 'danger'" size="small">
+          <ui-descriptions :column="2" border size="small" class="nginx-status-descriptions">
+            <ui-descriptions-item label="运行状态">
+              <ui-tag :type="nginxStatus.running ? 'success' : 'danger'" size="small">
                 {{ nginxStatus.running ? '运行中' : '已停止' }}
-              </el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="进程ID">
-              <el-text type="info" size="small">{{ nginxStatus.pid || '无' }}</el-text>
-            </el-descriptions-item>
-            <el-descriptions-item label="当前 Nginx 目录">
-              <el-text type="info" size="small">{{ nginxStatus.directory || '-' }}</el-text>
-            </el-descriptions-item>
-            <el-descriptions-item label="当前 Nginx 版本">
-              <el-tag v-if="nginxStatus.version" type="info" size="small">
+              </ui-tag>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="进程ID">
+              <ui-text type="info" size="small">{{ nginxStatus.pid || '无' }}</ui-text>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="当前 Nginx 目录">
+              <ui-text type="info" size="small">{{ nginxStatus.directory || '-' }}</ui-text>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="当前 Nginx 版本">
+              <ui-tag v-if="nginxStatus.version" type="info" size="small">
                 {{ nginxStatus.version }}
-              </el-tag>
+              </ui-tag>
               <span v-else class="text-muted">未知</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="运行时间" :span="2">
-              <el-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</el-text>
-            </el-descriptions-item>
-            <el-descriptions-item label="统计分析状态">
-              <el-tag
+            </ui-descriptions-item>
+            <ui-descriptions-item label="运行时间" :span="2">
+              <ui-text type="info" size="small">{{ nginxStatus.uptime || '-' }}</ui-text>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="统计分析状态">
+              <ui-tag
                 class="analysis-status-tag"
                 :type="analysisTagType"
                 size="small"
               >
                 {{ analysisTagText }}
-              </el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="任务分析行数" :span="1">
-              <el-text type="info" size="small">
+              </ui-tag>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="任务分析行数" :span="1">
+              <ui-text type="info" size="small">
                 <span v-if="taskStatus.analyzed_lines != null && taskStatus.analyzed_lines > 0">
                   {{ formatNumber(taskStatus.analyzed_lines) }}
                 </span>
                 <span v-else class="text-muted">-</span>
-              </el-text>
-            </el-descriptions-item>
-            <el-descriptions-item label="上次分析时间" :span="1">
-              <el-text type="info" size="small">
+              </ui-text>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="上次分析时间" :span="1">
+              <ui-text type="info" size="small">
                 {{ taskStatus.last_analysis_time ? formatDateTime(taskStatus.last_analysis_time) : '-' }}
-              </el-text>
-            </el-descriptions-item>
-          </el-descriptions>
-        </el-card>
-      </el-col>
-    </el-row>
+              </ui-text>
+            </ui-descriptions-item>
+          </ui-descriptions>
+        </ui-card>
+      </ui-col>
+    </ui-row>
 
     <!-- 统计指标卡片 -->
-    <el-row :gutter="20" class="mb-20">
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+    <ui-row :gutter="20" class="mb-20">
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: var(--nginx-green);">
-              <el-icon size="24"><DataLine /></el-icon>
+              <ui-icon size="24"><DataLine /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.total_requests || 0) }}</div>
               <div class="stat-label">总请求数</div>
             </div>
           </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+        </ui-card>
+      </ui-col>
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: var(--nginx-green-light);">
-              <el-icon size="24"><SuccessFilled /></el-icon>
+              <ui-icon size="24"><SuccessFilled /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.success_requests || 0) }}</div>
               <div class="stat-label">成功请求</div>
             </div>
           </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+        </ui-card>
+      </ui-col>
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #E6A23C;">
-              <el-icon size="24"><WarningFilled /></el-icon>
+              <ui-icon size="24"><WarningFilled /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.error_requests || 0) }}</div>
               <div class="stat-label">错误请求</div>
             </div>
           </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+        </ui-card>
+      </ui-col>
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #dc2626;">
-              <el-icon size="24"><Lock /></el-icon>
+              <ui-icon size="24"><Lock /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatNumber(stats.summary?.attack_count || 0) }}</div>
               <div class="stat-label">攻击检测</div>
             </div>
           </div>
-        </el-card>
-      </el-col>
-    </el-row>
+        </ui-card>
+      </ui-col>
+    </ui-row>
 
     <!-- 系统资源卡片 -->
-    <el-row :gutter="20" class="mb-20">
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+    <ui-row :gutter="20" class="mb-20">
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #409EFF;">
-              <el-icon size="24"><Odometer /></el-icon>
+              <ui-icon size="24"><Odometer /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ systemResources.cpu?.percent || 0 }}%</div>
@@ -153,19 +153,19 @@
               </div>
             </div>
           </div>
-          <el-progress
+          <ui-progress
             :percentage="systemResources.cpu?.percent || 0"
             :color="getProgressColor(systemResources.cpu?.percent || 0)"
             :show-text="false"
             class="stat-progress"
           />
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+        </ui-card>
+      </ui-col>
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #67C23A;">
-              <el-icon size="24"><DataBoard /></el-icon>
+              <ui-icon size="24"><DataBoard /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ formatBytes(systemResources.memory?.used || 0) }}</div>
@@ -175,19 +175,19 @@
               </div>
             </div>
           </div>
-          <el-progress
+          <ui-progress
             :percentage="systemResources.memory?.percent || 0"
             :color="getProgressColor(systemResources.memory?.percent || 0)"
             :show-text="false"
             class="stat-progress"
           />
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+        </ui-card>
+      </ui-col>
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #E6A23C;">
-              <el-icon size="24"><Folder /></el-icon>
+              <ui-icon size="24"><Folder /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ systemResources.disk?.root?.percent?.toFixed(1) || 0 }}%</div>
@@ -197,19 +197,19 @@
               </div>
             </div>
           </div>
-          <el-progress
+          <ui-progress
             :percentage="systemResources.disk?.root?.percent || 0"
             :color="getProgressColor(systemResources.disk?.root?.percent || 0)"
             :show-text="false"
             class="stat-progress"
           />
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card resource-card">
+        </ui-card>
+      </ui-col>
+      <ui-col :xs="24" :sm="12" :md="6">
+        <ui-card class="stat-card resource-card">
           <div class="stat-content">
             <div class="stat-icon" style="background: #909399;">
-              <el-icon size="24"><Share /></el-icon>
+              <ui-icon size="24"><Share /></ui-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ systemResources.network?.connections || 0 }}</div>
@@ -220,23 +220,23 @@
               </div>
             </div>
           </div>
-        </el-card>
-      </el-col>
-    </el-row>
+        </ui-card>
+      </ui-col>
+    </ui-row>
 
     <!-- 图表区域 -->
-    <el-row :gutter="20" class="mb-20">
+    <ui-row :gutter="20" class="mb-20">
       <!-- 访问趋势图 -->
-      <el-col :xs="24" :md="16">
-        <el-card>
+      <ui-col :xs="24" :md="16">
+        <ui-card>
           <template #header>
             <div class="card-header">
               <span>访问趋势</span>
-              <el-radio-group v-model="timeRange" size="small" @change="loadStatistics">
-                <el-radio-button :label="1">1小时</el-radio-button>
-                <el-radio-button :label="24">24小时</el-radio-button>
-                <el-radio-button :label="168">7天</el-radio-button>
-              </el-radio-group>
+              <ui-radio-group v-model="timeRange" size="small" @change="loadStatistics">
+                <ui-radio-button :label="1">1小时</ui-radio-button>
+                <ui-radio-button :label="24">24小时</ui-radio-button>
+                <ui-radio-button :label="168">7天</ui-radio-button>
+              </ui-radio-group>
             </div>
           </template>
           <v-chart
@@ -244,12 +244,12 @@
             :option="trendChartOption"
             autoresize
           />
-        </el-card>
-      </el-col>
+        </ui-card>
+      </ui-col>
       
       <!-- 状态码分布 -->
-      <el-col :xs="24" :md="8">
-        <el-card>
+      <ui-col :xs="24" :md="8">
+        <ui-card>
           <template #header>
             <span>状态码分布</span>
           </template>
@@ -258,69 +258,69 @@
             :option="statusChartOption"
             autoresize
           />
-        </el-card>
-      </el-col>
-    </el-row>
+        </ui-card>
+      </ui-col>
+    </ui-row>
 
     <!-- 详细统计表格 -->
-    <el-row :gutter="20">
+    <ui-row :gutter="20">
       <!-- Top IP -->
-      <el-col :xs="24" :md="12">
-        <el-card>
+      <ui-col :xs="24" :md="12">
+        <ui-card>
           <template #header>
             <span>访问量 Top 10 IP</span>
           </template>
-          <el-table :data="stats.top_ips || []" stripe>
-            <el-table-column prop="ip" label="IP地址" />
-            <el-table-column prop="count" label="访问次数" width="120" align="right">
+          <ui-table :data="stats.top_ips || []" stripe>
+            <ui-table-column prop="ip" label="IP地址" />
+            <ui-table-column prop="count" label="访问次数" width="120" align="right">
               <template #default="{ row }">
                 {{ formatNumber(row.count) }}
               </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
+            </ui-table-column>
+          </ui-table>
+        </ui-card>
+      </ui-col>
 
       <!-- Top 路径 -->
-      <el-col :xs="24" :md="12">
-        <el-card>
+      <ui-col :xs="24" :md="12">
+        <ui-card>
           <template #header>
             <span>访问量 Top 10 路径</span>
           </template>
-          <el-table :data="stats.top_paths || []" stripe>
-            <el-table-column prop="path" label="路径" show-overflow-tooltip />
-            <el-table-column prop="count" label="访问次数" width="120" align="right">
+          <ui-table :data="stats.top_paths || []" stripe>
+            <ui-table-column prop="path" label="路径" show-overflow-tooltip />
+            <ui-table-column prop="count" label="访问次数" width="120" align="right">
               <template #default="{ row }">
                 {{ formatNumber(row.count) }}
               </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+            </ui-table-column>
+          </ui-table>
+        </ui-card>
+      </ui-col>
+    </ui-row>
 
     <!-- 攻击检测列表 -->
-    <el-row :gutter="20" class="mt-20" v-if="stats.attacks && stats.attacks.length > 0">
-      <el-col :span="24">
-        <el-card>
+    <ui-row :gutter="20" class="mt-20" v-if="stats.attacks && stats.attacks.length > 0">
+      <ui-col :span="24">
+        <ui-card>
           <template #header>
             <span>
-              <el-icon><Warning /></el-icon>
+              <ui-icon><Warning /></ui-icon>
               攻击检测记录（最近{{ stats.attacks.length }}条）
             </span>
           </template>
-          <el-table :data="stats.attacks" stripe>
-            <el-table-column prop="time" label="时间" width="180">
+          <ui-table :data="stats.attacks" stripe>
+            <ui-table-column prop="time" label="时间" width="180">
               <template #default="{ row }">
                 {{ row.time ? formatDateTime(row.time) : '-' }}
               </template>
-            </el-table-column>
-            <el-table-column prop="ip" label="IP地址" width="150" />
-            <el-table-column prop="path" label="路径" show-overflow-tooltip />
-            <el-table-column prop="status" label="状态码" width="100" align="center" />
-            <el-table-column prop="attacks" label="攻击类型">
+            </ui-table-column>
+            <ui-table-column prop="ip" label="IP地址" width="150" />
+            <ui-table-column prop="path" label="路径" show-overflow-tooltip />
+            <ui-table-column prop="status" label="状态码" width="100" align="center" />
+            <ui-table-column prop="attacks" label="攻击类型">
               <template #default="{ row }">
-                <el-tag
+                <ui-tag
                   v-for="(attack, index) in row.attacks"
                   :key="index"
                   type="danger"
@@ -328,25 +328,25 @@
                   class="mr-5"
                 >
                   {{ attack }}
-                </el-tag>
+                </ui-tag>
               </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+            </ui-table-column>
+          </ui-table>
+        </ui-card>
+      </ui-col>
+    </ui-row>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { configApi } from '../api/config'
 import { statisticsApi } from '../api/statistics'
 import { systemApi } from '../api/system'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from '@/lib/feedback'
 import { formatDateTime } from '../utils/date'
 
-const nginxStatus = ref({
+const nginxStatus = ref<any>({
   running: false,
   version: null,
   directory: null,
@@ -354,7 +354,7 @@ const nginxStatus = ref({
   uptime: null
 })
 
-const stats = ref({
+const stats = ref<any>({
   summary: {},
   top_ips: [],
   top_paths: [],
@@ -363,7 +363,7 @@ const stats = ref({
   attacks: []
 })
 
-const systemResources = ref({
+const systemResources = ref<any>({
   cpu: {},
   memory: {},
   disk: {},
@@ -371,13 +371,13 @@ const systemResources = ref({
   system: {}
 })
 
-const systemVersion = ref({
+const systemVersion = ref<any>({
   version: null,
   build_time_formatted: null
 })
 
 // 统计分析任务状态（从独立接口获取，不依赖时间范围）
-const taskStatus = ref({
+const taskStatus = ref<any>({
   status: 'unknown',          // 'unknown' | 'ready' | 'not_ready' | 'analyzing' | 'failed'
   is_running: false,          // 后台任务是否在执行
   last_analysis_time: null,   // 上次分析到的日志时间
@@ -573,7 +573,7 @@ const statusChartOption = computed(() => {
       else if (code >= 500) category = '5xx'
       
       return {
-        value: count,
+        value: Number(count),
         name: `HTTP ${status}`,
         itemStyle: { color: colors[category] || 'var(--text-muted)' }
       }
@@ -766,11 +766,6 @@ const loadStatisticsTrend = async () => {
     const response = await statisticsApi.getTrend(timeRange.value)
     if (response.success && response.hourly_trend) {
       stats.value.hourly_trend = response.hourly_trend
-      console.log(`[Dashboard] 趋势数据加载成功 (${timeRange.value}小时):`, {
-        hours: response.hourly_trend.hours?.length || 0,
-        counts: response.hourly_trend.counts?.length || 0,
-        firstFew: response.hourly_trend.hours?.slice(0, 3) || []
-      })
     } else {
       console.warn(`[Dashboard] 趋势数据为空 (${timeRange.value}小时):`, response.message || '未知错误')
       // 如果数据为空，设置为空对象，避免图表报错
@@ -984,7 +979,7 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-.stat-card :deep(.el-card__body) {
+.stat-card :deep(.ui-card__body) {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1058,14 +1053,14 @@ onUnmounted(() => {
   width: 100%;
 }
 
-:deep(.el-card__header) {
+:deep(.ui-card__header) {
   font-weight: 500;
   background-color: var(--bg-secondary);
   border-bottom-color: var(--border-color);
   color: var(--text-primary);
 }
 
-:deep(.el-descriptions__label) {
+:deep(.ui-descriptions__label) {
   font-weight: 500;
 }
 
@@ -1074,26 +1069,26 @@ onUnmounted(() => {
   background-color: transparent;
 }
 
-.nginx-status-descriptions :deep(.el-descriptions__table) {
+.nginx-status-descriptions :deep(.ui-descriptions__table) {
   border: none;
   background-color: transparent;
 }
 
-.nginx-status-descriptions :deep(.el-descriptions__table td),
-.nginx-status-descriptions :deep(.el-descriptions__table th) {
+.nginx-status-descriptions :deep(.ui-descriptions__table td),
+.nginx-status-descriptions :deep(.ui-descriptions__table th) {
   border: none;
   background-color: transparent;
   padding: 12px 16px;
 }
 
-.nginx-status-descriptions :deep(.el-descriptions__label) {
+.nginx-status-descriptions :deep(.ui-descriptions__label) {
   background-color: transparent !important;
   color: var(--text-secondary);
   font-weight: 500;
   padding-right: 20px;
 }
 
-.nginx-status-descriptions :deep(.el-descriptions__content) {
+.nginx-status-descriptions :deep(.ui-descriptions__content) {
   background-color: transparent !important;
   color: var(--text-primary);
 }
@@ -1115,7 +1110,7 @@ onUnmounted(() => {
   font-size: 14px;
 }
 
-.stat-icon :deep(.el-icon) {
+.stat-icon :deep(.ui-icon) {
   color: #ffffff;
 }
 </style>

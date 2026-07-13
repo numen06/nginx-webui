@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 
 from app.database import get_db
-from app.auth import get_current_user, hash_password, verify_password
+from app.auth import get_current_user, hash_password, require_admin, verify_password
 from app.models import User
 from app.utils.audit import create_audit_log, get_client_ip
 
@@ -22,6 +22,7 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
     password: str = Field(..., min_length=6, max_length=100, description="密码")
     is_active: bool = Field(default=True, description="是否激活")
+    is_admin: bool = Field(default=False, description="是否为超级管理员")
 
 
 class UserUpdate(BaseModel):
@@ -31,6 +32,7 @@ class UserUpdate(BaseModel):
         None, min_length=3, max_length=50, description="用户名"
     )
     is_active: Optional[bool] = Field(None, description="是否激活")
+    is_admin: Optional[bool] = Field(None, description="是否为超级管理员")
 
 
 class PasswordChange(BaseModel):
@@ -52,6 +54,7 @@ class UserResponse(BaseModel):
     id: int
     username: str
     is_active: bool
+    is_admin: bool
     created_at: str
 
     class Config:
@@ -62,7 +65,7 @@ class UserResponse(BaseModel):
 async def get_users(
     skip: int = 0,
     limit: int = 100,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """获取所有用户列表"""
@@ -74,6 +77,7 @@ async def get_users(
                 "id": user.id,
                 "username": user.username,
                 "is_active": user.is_active,
+                "is_admin": user.is_admin,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
             }
             for user in users
@@ -85,7 +89,7 @@ async def get_users(
 @router.get("/{user_id}", summary="获取用户详情")
 async def get_user(
     user_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """获取指定用户的详细信息"""
@@ -99,6 +103,7 @@ async def get_user(
             "id": user.id,
             "username": user.username,
             "is_active": user.is_active,
+            "is_admin": user.is_admin,
             "created_at": user.created_at.isoformat() if user.created_at else None,
         },
     }
@@ -108,7 +113,7 @@ async def get_user(
 async def create_user(
     user_data: UserCreate,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """创建新用户"""
@@ -125,6 +130,7 @@ async def create_user(
         username=user_data.username,
         password_hash=hashed_password,
         is_active=user_data.is_active,
+        is_admin=user_data.is_admin,
     )
 
     try:
@@ -150,6 +156,7 @@ async def create_user(
                 "id": new_user.id,
                 "username": new_user.username,
                 "is_active": new_user.is_active,
+                "is_admin": new_user.is_admin,
                 "created_at": (
                     new_user.created_at.isoformat() if new_user.created_at else None
                 ),
@@ -173,13 +180,36 @@ async def update_user(
     user_id: int,
     user_data: UserUpdate,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """更新用户信息"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    requested_active = (
+        user_data.is_active if user_data.is_active is not None else user.is_active
+    )
+    requested_admin = (
+        user_data.is_admin if user_data.is_admin is not None else user.is_admin
+    )
+    if user.id == current_user.id and (not requested_active or not requested_admin):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能停用自己或撤销自己的管理员权限",
+        )
+    if user.is_admin and user.is_active and (not requested_active or not requested_admin):
+        active_admins = (
+            db.query(User)
+            .filter(User.is_admin.is_(True), User.is_active.is_(True))
+            .count()
+        )
+        if active_admins <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="必须保留至少一个有效的超级管理员",
+            )
 
     # 检查用户名是否已被其他用户使用
     if user_data.username and user_data.username != user.username:
@@ -194,6 +224,8 @@ async def update_user(
 
     if user_data.is_active is not None:
         user.is_active = user_data.is_active
+    if user_data.is_admin is not None:
+        user.is_admin = user_data.is_admin
 
     try:
         db.commit()
@@ -217,6 +249,7 @@ async def update_user(
                 "id": user.id,
                 "username": user.username,
                 "is_active": user.is_active,
+                "is_admin": user.is_admin,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
             },
         }
@@ -237,7 +270,7 @@ async def update_user(
 async def delete_user(
     user_id: int,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """删除用户"""
@@ -250,6 +283,18 @@ async def delete_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    if user.is_admin and user.is_active:
+        active_admins = (
+            db.query(User)
+            .filter(User.is_admin.is_(True), User.is_active.is_(True))
+            .count()
+        )
+        if active_admins <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能删除最后一个有效的超级管理员",
+            )
 
     username = user.username
 
@@ -322,7 +367,7 @@ async def reset_password(
     user_id: int,
     password_data: PasswordReset,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """管理员重置用户密码"""
