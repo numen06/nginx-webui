@@ -564,7 +564,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 </script>
 
 <template>
-  <div class="page-shell space-y-5">
+  <div class="page-shell">
     <div class="page-heading gap-4">
       <div>
         <h2 class="page-title">配置管理</h2>
@@ -588,8 +588,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
     </div>
 
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
-      <Card>
-        <CardHeader class="border-b pb-4">
+      <Card class="gap-0 py-0">
+        <CardHeader class="border-b p-4 md:p-5">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div><CardTitle class="text-base">运行配置</CardTitle><CardDescription class="mt-1">当前版本与工作副本状态</CardDescription></div>
             <Badge :variant="configInfo.pending_changes ? 'secondary' : 'default'">
@@ -615,14 +615,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader class="border-b pb-4">
+      <Card class="gap-0 py-0">
+        <CardHeader class="border-b p-4 md:p-5">
           <div class="flex items-center justify-between gap-3">
             <div><CardTitle class="text-base">配置备份</CardTitle><CardDescription class="mt-1">最多保留最近 10 个版本</CardDescription></div>
             <Archive class="size-5 text-primary" />
           </div>
         </CardHeader>
-        <CardContent class="space-y-3 pt-4">
+        <CardContent class="space-y-3 p-4 md:p-5">
           <NativeSelect v-model="selectedBackupId" class="w-full" :disabled="backupLoading || !backupOptions.length" aria-label="选择配置备份">
             <NativeSelectOption value="">{{ backupOptions.length ? '选择备份版本' : '暂无备份' }}</NativeSelectOption>
             <NativeSelectOption v-for="item in backupOptions" :key="item.id" :value="item.id.toString()">{{ item.label }}</NativeSelectOption>

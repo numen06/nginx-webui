@@ -195,8 +195,8 @@ onMounted(loadUsers)
       </div>
     </div>
 
-    <Card>
-      <CardHeader class="border-b pb-4">
+    <Card class="gap-0 py-0">
+      <CardHeader class="border-b p-4 md:p-5">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle class="text-base">账户列表</CardTitle>
           <div class="flex flex-col gap-2 sm:flex-row">

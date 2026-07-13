@@ -68,7 +68,7 @@ onMounted(async () => {
       <div><div class="font-medium">正在使用默认密码</div><p class="mt-1 text-sm text-amber-100/75">请立即修改密码，修改后需要重新登录。</p></div>
     </div>
 
-    <div class="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+    <div class="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
       <Card>
         <CardHeader><CardTitle class="flex items-center gap-2 text-base"><UserRound class="size-4" />账户信息</CardTitle></CardHeader>
         <CardContent class="space-y-4 text-sm">

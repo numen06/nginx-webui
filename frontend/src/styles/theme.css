@@ -131,7 +131,7 @@
 
 @layer components {
   .page-shell {
-    @apply mx-auto flex w-full max-w-[1680px] flex-col gap-4 p-4 md:gap-6 md:p-6;
+    @apply mx-auto flex w-full max-w-[1680px] flex-col gap-4 p-4 md:p-6;
   }
 
   .page-heading {

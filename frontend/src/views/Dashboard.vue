@@ -299,7 +299,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page-shell space-y-5">
+  <div class="page-shell">
     <div class="page-heading gap-4">
       <div>
         <h2 class="page-title">仪表盘</h2>
@@ -326,8 +326,8 @@ onUnmounted(() => {
       <div><div class="font-medium">部分数据加载失败</div><div class="mt-1 text-red-200/80">{{ pageError }}</div></div>
     </div>
 
-    <Card>
-      <CardHeader class="border-b pb-4">
+    <Card class="gap-0 py-0">
+      <CardHeader class="border-b p-4 md:p-5">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle class="flex items-center gap-2 text-base"><Server class="size-4 text-primary" />Nginx 运行状态</CardTitle>

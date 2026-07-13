@@ -91,7 +91,7 @@ const UiCard = defineComponent({
   name: 'UiCard',
   props: { shadow: String },
   setup(_, { slots, attrs }) {
-    return () => h(Card, { ...attrs, class: cn('overflow-hidden', attrs.class as string) }, {
+    return () => h(Card, { ...attrs, class: cn('gap-0 overflow-hidden py-0', attrs.class as string) }, {
       default: () => [
         slots.header ? h(CardHeader, { class: 'border-b py-4' }, slots.header()) : null,
         h(CardContent, { class: 'p-4 md:p-5' }, slots.default?.()),
