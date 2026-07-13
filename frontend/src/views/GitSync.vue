@@ -89,6 +89,7 @@ import { ref, computed, onMounted } from 'vue'
 import { gitApi } from '../api/git'
 import { ElMessage } from '@/lib/feedback'
 import { formatDateTime } from '../utils/date'
+import { DocumentChecked, Refresh } from '@/components/icons'
 
 const gitConfig = ref({
   project_name: '',
@@ -238,15 +239,11 @@ const handleSyncGit = async () => {
 </script>
 
 <style scoped>
-.git-sync-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
 }
 
 .card-subtitle {

@@ -271,10 +271,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.audit-page {
-  padding: 20px;
-}
-
 .toolbar {
   display: flex;
   gap: 16px;

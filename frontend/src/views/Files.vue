@@ -709,10 +709,6 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.files-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;

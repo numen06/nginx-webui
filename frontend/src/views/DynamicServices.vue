@@ -475,10 +475,6 @@ onMounted(loadAll)
 </script>
 
 <style scoped>
-.dynamic-services-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   align-items: center;

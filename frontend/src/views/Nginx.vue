@@ -189,11 +189,10 @@
         </div>
       </template>
 
-      <ui-row :gutter="16">
-        <ui-col
+      <div class="version-grid">
+        <div
           v-for="row in sortedVersions"
           :key="row.directory"
-          :span="12"
         >
           <ui-card
             class="version-card" 
@@ -349,8 +348,8 @@
               </ui-tooltip>
             </div>
           </ui-card>
-        </ui-col>
-      </ui-row>
+        </div>
+      </div>
     </ui-card>
 
     <!-- 在线下载并编译 弹窗 -->
@@ -574,7 +573,7 @@
     >
       <ui-tabs v-model="compileActiveTab">
         <ui-tab-pane label="编译参数" name="config">
-          <ui-form label-width="140px" style="margin-top: 20px">
+          <ui-form label-width="140px" style="margin-top: 16px">
             <ui-form-item label="默认参数">
               <ui-tag type="info" size="small" style="margin-right: 8px">--prefix (由系统自动设置)</ui-tag>
               <span style="font-size: 12px; color: var(--ui-text-color-secondary)">
@@ -1415,22 +1414,22 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.nginx-manager {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .version-card {
-  margin-bottom: 16px;
+  height: 100%;
 }
 
-.pinned-card-wrapper {
-  margin-bottom: 16px;
+.version-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .pinned-card .version-name {
@@ -1627,5 +1626,11 @@ onUnmounted(() => {
 .compile-dialog :deep(.ui-form) {
   overflow-y: auto;
   max-height: calc(90vh - 200px);
+}
+
+@media (max-width: 900px) {
+  .version-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

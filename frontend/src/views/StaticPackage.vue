@@ -201,7 +201,7 @@
           title="说明"
           type="info"
           :closable="false"
-          style="margin-bottom: 15px"
+          style="margin-bottom: 16px"
         >
           <template #default>
             将扫描静态文件夹（html目录）中的压缩包文件（.zip、.tar.gz、.tgz、.tar），
@@ -220,7 +220,7 @@
           title="警告"
           type="warning"
           :closable="false"
-          style="margin-top: 10px"
+          style="margin-top: 12px"
         >
           <template #default>
             提取后将删除静态文件夹（html目录）中的资源包文件，此操作不可恢复！
@@ -594,10 +594,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.static-package-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -605,7 +601,7 @@ onMounted(() => {
 }
 
 .version-info {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .running-badge {
@@ -615,19 +611,19 @@ onMounted(() => {
 }
 
 .upload-section {
-  margin-top: 20px;
+  margin-top: 16px;
 }
 
 .packages-section {
-  margin-top: 30px;
+  margin-top: 16px;
 }
 
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 15px;
-  padding-bottom: 15px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -671,10 +667,6 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.upload-section {
-  margin-top: 20px;
 }
 
 .dialog-footer {

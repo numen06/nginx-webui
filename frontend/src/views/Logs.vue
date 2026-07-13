@@ -788,10 +788,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.logs-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -805,12 +801,12 @@ onMounted(() => {
 }
 
 .log-info {
-  margin-bottom: 15px;
+  margin-bottom: 16px;
 }
 
 .log-filters {
-  margin-bottom: 15px;
-  padding: 15px;
+  margin-bottom: 16px;
+  padding: 16px;
   background-color: var(--bg-tertiary);
   border-radius: 4px;
   border: 1px solid var(--border-color);
@@ -863,7 +859,7 @@ onMounted(() => {
 }
 
 .logs-tabs :deep(.ui-tabs__header) {
-  margin-bottom: 15px;
+  margin-bottom: 16px;
 }
 
 .logs-tabs :deep(.ui-tabs__nav-wrap) {
@@ -918,9 +914,9 @@ onMounted(() => {
 }
 
 .log-rotate-section {
-  margin-top: 15px;
-  margin-bottom: 15px;
-  padding: 10px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  padding: 12px;
   background-color: var(--bg-tertiary);
   border-radius: 4px;
   border: 1px solid var(--border-color);

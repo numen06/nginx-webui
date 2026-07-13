@@ -2094,10 +2094,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.certificates-page {
-  padding: 20px;
-}
-
 .cert-migrate-wizard-dialog :deep(.ui-dialog__body) {
   max-height: calc(85vh - 140px);
   overflow-y: auto;

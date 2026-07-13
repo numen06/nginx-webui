@@ -83,7 +83,7 @@ const UiButton = defineComponent({
 const UiIcon = defineComponent({
   name: 'UiIcon',
   setup(_, { slots, attrs }) {
-    return () => h('span', { ...attrs, class: cn('inline-flex size-4 shrink-0 items-center justify-center [&>svg]:size-full', attrs.class as string) }, slots.default?.())
+    return () => h('span', { ...attrs, class: cn('inline-flex size-4 shrink-0 items-center justify-center empty:hidden [&>svg]:size-full', attrs.class as string) }, slots.default?.())
   },
 })
 
@@ -438,8 +438,6 @@ const UiDivider = defineComponent({ name: 'UiDivider', props: { direction: Strin
 const UiProgress = defineComponent({ name: 'UiProgress', props: { percentage: { type: Number, default: 0 }, status: String, strokeWidth: Number, textInside: Boolean, showText: { type: Boolean, default: true }, color: String }, setup(props, { attrs }) { return () => h('div', { ...attrs, class: cn('flex items-center gap-3', attrs.class as string) }, [h(Progress, { modelValue: props.percentage, class: 'flex-1' }), props.showText ? h('span', { class: 'w-12 text-right text-xs text-muted-foreground' }, `${Math.round(props.percentage)}%`) : null]) } })
 const UiTooltip = defineComponent({ name: 'UiTooltip', props: { content: String, placement: String, disabled: Boolean }, setup(props, { slots, attrs }) { return () => h('span', { ...attrs, title: props.disabled ? undefined : props.content, class: cn('inline-flex', attrs.class as string) }, slots.default?.()) } })
 const UiScrollbar = defineComponent({ name: 'UiScrollbar', props: { height: [String, Number], maxHeight: [String, Number], always: Boolean }, setup(props, { slots, attrs }) { return () => h('div', { ...attrs, class: cn('overflow-auto', attrs.class as string), style: { height: props.height, maxHeight: props.maxHeight } }, slots.default?.()) } })
-const UiRow = defineComponent({ name: 'UiRow', props: { gutter: { type: Number, default: 0 }, justify: String, align: String }, setup(props, { slots, attrs }) { return () => h('div', { ...attrs, class: cn('grid grid-cols-12', attrs.class as string), style: { gap: `${props.gutter}px` } }, slots.default?.()) } })
-const UiCol = defineComponent({ name: 'UiCol', props: { span: { type: Number, default: 24 }, xs: [Number, Object], sm: [Number, Object], md: [Number, Object], lg: [Number, Object], xl: [Number, Object] }, setup(props, { slots, attrs }) { const width = Math.max(1, Math.round((props.span / 24) * 12)); return () => h('div', { ...attrs, class: cn('min-w-0', attrs.class as string), style: { gridColumn: `span ${width} / span ${width}` } }, slots.default?.()) } })
 const UiCollapse = defineComponent({ name: 'UiCollapse', setup(_, { slots, attrs }) { return () => h('div', { ...attrs, class: cn('divide-y rounded-md border', attrs.class as string) }, slots.default?.()) } })
 const UiCollapseItem = defineComponent({ name: 'UiCollapseItem', props: { title: String, name: valueProp() }, setup(props, { slots, attrs }) { return () => h('details', { ...attrs, class: attrs.class }, [h('summary', { class: 'cursor-pointer px-4 py-3 text-sm font-medium' }, slots.title?.() || props.title), h('div', { class: 'border-t p-4' }, slots.default?.())]) } })
 
@@ -490,7 +488,7 @@ const components: Record<string, Component> = {
   UiForm, UiFormItem, UiSwitch, UiRadioGroup, UiRadio, UiRadioButton, UiCheckbox,
   UiTable, UiTableColumn, UiDescriptions, UiDescriptionsItem, UiTabs, UiTabPane,
   UiSteps, UiStep, UiTag, UiAlert, UiText, UiLink, UiEmpty, UiDivider, UiProgress,
-  UiTooltip, UiScrollbar, UiRow, UiCol, UiCollapse, UiCollapseItem, UiDatePicker,
+  UiTooltip, UiScrollbar, UiCollapse, UiCollapseItem, UiDatePicker,
   UiUpload, UiDropdown, UiDropdownMenu, UiDropdownItem, UiPagination, UiTree,
   ...simpleContainers,
 }
