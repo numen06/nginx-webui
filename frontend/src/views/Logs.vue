@@ -138,14 +138,16 @@
                 </div>
               </ui-form-item>
               <ui-form-item>
-                <ui-button type="primary" @click="handleAccessSearch">
-                  <ui-icon><Search /></ui-icon>
-                  <span class="btn-label">搜索</span>
-                </ui-button>
-                <ui-button type="info" @click="handleAccessReset">
-                  <ui-icon><RefreshRight /></ui-icon>
-                  <span class="btn-label">重置</span>
-                </ui-button>
+                <div class="button-group">
+                  <ui-button type="primary" @click="handleAccessSearch">
+                    <ui-icon><Search /></ui-icon>
+                    <span class="btn-label">搜索</span>
+                  </ui-button>
+                  <ui-button type="info" @click="handleAccessReset">
+                    <ui-icon><RefreshRight /></ui-icon>
+                    <span class="btn-label">重置</span>
+                  </ui-button>
+                </div>
               </ui-form-item>
             </ui-form>
           </div>
@@ -309,14 +311,16 @@
                 </div>
               </ui-form-item>
               <ui-form-item>
-                <ui-button type="primary" @click="handleErrorSearch">
-                  <ui-icon><Search /></ui-icon>
-                  <span class="btn-label">搜索</span>
-                </ui-button>
-                <ui-button type="info" @click="handleErrorReset">
-                  <ui-icon><RefreshRight /></ui-icon>
-                  <span class="btn-label">重置</span>
-                </ui-button>
+                <div class="button-group">
+                  <ui-button type="primary" @click="handleErrorSearch">
+                    <ui-icon><Search /></ui-icon>
+                    <span class="btn-label">搜索</span>
+                  </ui-button>
+                  <ui-button type="info" @click="handleErrorReset">
+                    <ui-icon><RefreshRight /></ui-icon>
+                    <span class="btn-label">重置</span>
+                  </ui-button>
+                </div>
               </ui-form-item>
             </ui-form>
           </div>

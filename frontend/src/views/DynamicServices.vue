@@ -128,8 +128,10 @@
         </ui-table-column>
         <ui-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <ui-button link type="primary" @click="openEditDialog(row)">编辑</ui-button>
-            <ui-button link type="danger" @click="deleteService(row)">删除</ui-button>
+            <div class="button-group">
+              <ui-button link type="primary" @click="openEditDialog(row)">编辑</ui-button>
+              <ui-button link type="danger" @click="deleteService(row)">删除</ui-button>
+            </div>
           </template>
         </ui-table-column>
       </ui-table>

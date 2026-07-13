@@ -150,6 +150,10 @@
     @apply flex flex-wrap items-center gap-2;
   }
 
+  .button-group {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
   .data-scroll {
     @apply w-full overflow-x-auto;
   }

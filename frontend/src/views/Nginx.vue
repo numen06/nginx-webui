@@ -164,7 +164,7 @@
       <template #header>
         <div class="card-header">
           <span>Nginx 版本列表</span>
-          <div>
+          <div class="button-group">
             <ui-button type="primary" @click="downloadDialogVisible = true">
               <ui-icon><Download /></ui-icon>
               <span class="btn-label">在线下载源码包</span>

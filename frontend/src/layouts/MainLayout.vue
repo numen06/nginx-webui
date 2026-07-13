@@ -215,8 +215,11 @@ onMounted(() => {
 <template>
   <SidebarProvider>
     <Sidebar collapsible="icon">
-      <SidebarHeader class="border-b border-sidebar-border p-3">
-        <RouterLink to="/dashboard" class="flex items-center gap-3 overflow-hidden rounded-md px-1 py-1.5">
+      <SidebarHeader class="border-b border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+        <RouterLink
+          to="/dashboard"
+          class="flex items-center gap-3 overflow-hidden rounded-md px-1 py-1.5 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
+        >
           <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
             <Boxes class="size-4" />
           </span>

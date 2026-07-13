@@ -7,7 +7,7 @@
             <span class="card-title">证书管理</span>
             <span class="card-subtitle">证书以域名为标识</span>
           </div>
-          <div>
+          <div class="button-group">
             <ui-button type="primary" @click="handleRequest">
               <ui-icon><DocumentAdd /></ui-icon>
               <span class="btn-label">申请证书</span>

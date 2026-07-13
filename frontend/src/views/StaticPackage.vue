@@ -92,33 +92,35 @@
           </ui-table-column>
           <ui-table-column label="操作" width="380" fixed="right" align="center">
             <template #default="{ row }">
-              <ui-button
-                type="success"
-                size="small"
-                :icon="Promotion"
-                @click="handleDeployPackage(row.filename)"
-                :loading="deploying === row.filename"
-              >
-                部署
-              </ui-button>
-              <ui-button
-                type="primary"
-                size="small"
-                :icon="Download"
-                @click="handleDownloadPackage(row.filename)"
-                :loading="downloading === row.filename"
-              >
-                下载
-              </ui-button>
-              <ui-button
-                type="danger"
-                size="small"
-                :icon="Delete"
-                @click="handleDeletePackage(row.filename)"
-                :loading="deleting === row.filename"
-              >
-                删除
-              </ui-button>
+              <div class="button-group justify-center">
+                <ui-button
+                  type="success"
+                  size="small"
+                  :icon="Promotion"
+                  @click="handleDeployPackage(row.filename)"
+                  :loading="deploying === row.filename"
+                >
+                  部署
+                </ui-button>
+                <ui-button
+                  type="primary"
+                  size="small"
+                  :icon="Download"
+                  @click="handleDownloadPackage(row.filename)"
+                  :loading="downloading === row.filename"
+                >
+                  下载
+                </ui-button>
+                <ui-button
+                  type="danger"
+                  size="small"
+                  :icon="Delete"
+                  @click="handleDeletePackage(row.filename)"
+                  :loading="deleting === row.filename"
+                >
+                  删除
+                </ui-button>
+              </div>
             </template>
           </ui-table-column>
         </ui-table>
@@ -682,4 +684,3 @@ onMounted(() => {
   width: 100%;
 }
 </style>
-

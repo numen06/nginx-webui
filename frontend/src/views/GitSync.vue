@@ -7,7 +7,7 @@
             <span>Git 配置同步</span>
             <p class="card-subtitle">配置仓库信息并将当前 nginx.conf 推送到远端</p>
           </div>
-          <div>
+          <div class="button-group">
             <ui-button type="primary" @click="handleSaveGitConfig" :loading="gitSaving">
               <ui-icon><DocumentChecked /></ui-icon>
               <span class="btn-label">保存配置</span>
@@ -295,4 +295,3 @@ const handleSyncGit = async () => {
   color: var(--text-secondary);
 }
 </style>
-

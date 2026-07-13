@@ -35,16 +35,18 @@
               clearable
             />
           </ui-form-item>
-        <ui-form-item>
-          <ui-button type="primary" @click="handleSearch">
-            <ui-icon><Search /></ui-icon>
-            <span class="btn-label">查询</span>
-          </ui-button>
-          <ui-button @click="handleReset">
-            <ui-icon><RefreshRight /></ui-icon>
-            <span class="btn-label">重置</span>
-          </ui-button>
-        </ui-form-item>
+          <ui-form-item>
+            <div class="button-group">
+              <ui-button type="primary" @click="handleSearch">
+                <ui-icon><Search /></ui-icon>
+                <span class="btn-label">查询</span>
+              </ui-button>
+              <ui-button @click="handleReset">
+                <ui-icon><RefreshRight /></ui-icon>
+                <span class="btn-label">重置</span>
+              </ui-button>
+            </div>
+          </ui-form-item>
         </ui-form>
         <div class="action-buttons">
           <ui-button type="danger" plain @click="openCleanupDialog">清理日志</ui-button>
