@@ -66,7 +66,7 @@ ARG DNF_MAX_PARALLEL_DOWNLOADS=10
 ARG DNF_INSTALL_WEAK_DEPS=False
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 # 默认随镜像打包的 Nginx 源码版本（构建时下载 tar.gz，运行时由后端自动编译）
-ARG NGINX_DEFAULT_SOURCE_VERSION=1.29.3
+ARG NGINX_DEFAULT_SOURCE_VERSION=1.31.2
 
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime

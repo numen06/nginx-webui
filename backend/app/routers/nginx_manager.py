@@ -285,7 +285,7 @@ def _get_default_nginx_tar_path() -> Optional[Path]:
     # parents[2] -> backend 目录
     backend_dir = Path(__file__).resolve().parents[2]
     default_dir = backend_dir / "default-nginx"
-    preferred = default_dir / "nginx-1.29.3.tar.gz"
+    preferred = default_dir / "nginx-1.31.2.tar.gz"
     if preferred.exists():
         return preferred
 
@@ -3176,7 +3176,7 @@ async def check_setup_status(
     return {
         "has_compiled_nginx": has_compiled,
         "has_default_tar": has_default_tar,
-        "default_version": "1.29.3" if has_default_tar else None,
+        "default_version": "1.31.2" if has_default_tar else None,
     }
 
 
@@ -3192,7 +3192,7 @@ async def prepare_default_nginx(
     """
     将默认nginx压缩包复制到构建目录，准备编译
     """
-    default_version = "1.29.3"
+    default_version = "1.31.2"
     default_tar = _get_default_nginx_tar_path()
 
     if not default_tar or not default_tar.exists():

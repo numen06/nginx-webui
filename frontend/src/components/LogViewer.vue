@@ -2,40 +2,40 @@
   <div class="log-viewer-container" ref="containerRef">
     <div class="log-viewer-header">
       <div class="log-viewer-actions">
-        <el-button size="small" @click="selectAll">
-          <el-icon><Select /></el-icon>
+        <ui-button size="small" @click="selectAll">
+          <ui-icon><Select /></ui-icon>
           全选
-        </el-button>
-        <el-button size="small" @click="copySelected">
-          <el-icon><CopyDocument /></el-icon>
+        </ui-button>
+        <ui-button size="small" @click="copySelected">
+          <ui-icon><CopyDocument /></ui-icon>
           复制
-        </el-button>
-        <el-dropdown trigger="click" @command="handleDownload">
-          <el-button size="small" type="primary">
-            <el-icon><Download /></el-icon>
+        </ui-button>
+        <ui-dropdown trigger="click" @command="handleDownload">
+          <ui-button size="small" type="primary">
+            <ui-icon><Download /></ui-icon>
             下载
-          </el-button>
+          </ui-button>
           <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="all">
-                <el-icon><Document /></el-icon>
+            <ui-dropdown-menu>
+              <ui-dropdown-item command="all">
+                <ui-icon><Document /></ui-icon>
                 下载全部日志
-              </el-dropdown-item>
-              <el-dropdown-item command="selected" :disabled="selectedLinesCount === 0">
-                <el-icon><Select /></el-icon>
+              </ui-dropdown-item>
+              <ui-dropdown-item command="selected" :disabled="selectedLinesCount === 0">
+                <ui-icon><Select /></ui-icon>
                 下载选中日志
-              </el-dropdown-item>
-            </el-dropdown-menu>
+              </ui-dropdown-item>
+            </ui-dropdown-menu>
           </template>
-        </el-dropdown>
-        <el-button size="small" @click="scrollToTop">
-          <el-icon><ArrowUp /></el-icon>
+        </ui-dropdown>
+        <ui-button size="small" @click="scrollToTop">
+          <ui-icon><ArrowUp /></ui-icon>
           顶部
-        </el-button>
-        <el-button size="small" @click="scrollToBottom">
-          <el-icon><ArrowDown /></el-icon>
+        </ui-button>
+        <ui-button size="small" @click="scrollToBottom">
+          <ui-icon><ArrowDown /></ui-icon>
           底部
-        </el-button>
+        </ui-button>
       </div>
       <div class="log-viewer-info">
         <span v-if="totalLines > 0">共 {{ totalLines }} 行</span>
@@ -67,10 +67,10 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
-import { Select, CopyDocument, ArrowUp, ArrowDown, Download, Document } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Select, CopyDocument, ArrowUp, ArrowDown, Download, Document } from '@/components/icons'
+import { ElMessage } from '@/lib/feedback'
 
 const props = defineProps({
   logs: {
@@ -91,11 +91,11 @@ const props = defineProps({
   }
 })
 
-const containerRef = ref(null)
-const contentRef = ref(null)
-const selectedLines = ref(new Set())
+const containerRef = ref<HTMLElement | null>(null)
+const contentRef = ref<HTMLElement | null>(null)
+const selectedLines = ref<Set<number>>(new Set())
 const isSelecting = ref(false)
-const selectionStart = ref(null)
+const selectionStart = ref<number | null>(null)
 
 const totalLines = computed(() => props.logs.length)
 const selectedLinesCount = computed(() => selectedLines.value.size)

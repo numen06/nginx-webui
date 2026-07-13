@@ -1,7 +1,7 @@
 """
 数据库模型定义
 """
-from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -18,6 +18,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
     
     # 关联关系
     operation_logs = relationship("OperationLog", back_populates="user")
@@ -108,6 +109,45 @@ class GitRepository(Base):
         onupdate=datetime.now,
         nullable=False,
     )
+
+
+class DynamicService(Base):
+    """动态注册服务"""
+    __tablename__ = "dynamic_services"
+
+    id = Column(Integer, primary_key=True, index=True)
+    service_name = Column(String(100), unique=True, nullable=False, index=True)
+    route_prefix = Column(String(255), unique=True, nullable=False, index=True)
+    enabled = Column(Boolean, default=True, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+    instances = relationship(
+        "DynamicServiceInstance",
+        back_populates="service",
+        cascade="all, delete-orphan",
+    )
+
+
+class DynamicServiceInstance(Base):
+    """动态注册服务实例"""
+    __tablename__ = "dynamic_service_instances"
+    __table_args__ = (
+        UniqueConstraint("service_id", "instance_id", name="uq_dynamic_service_instance"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    service_id = Column(Integer, ForeignKey("dynamic_services.id"), nullable=False, index=True)
+    instance_id = Column(String(150), nullable=False, index=True)
+    target_url = Column(String(500), nullable=False)
+    status = Column(String(30), default="active", nullable=False, index=True)
+    last_heartbeat_at = Column(DateTime, default=datetime.now, nullable=False, index=True)
+    ttl_seconds = Column(Integer, default=180, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+    service = relationship("DynamicService", back_populates="instances")
 
 
 class StatisticsCache(Base):
@@ -211,4 +251,3 @@ class StatisticsDaily(Base):
     
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
-

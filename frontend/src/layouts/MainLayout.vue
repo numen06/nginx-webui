@@ -1,661 +1,357 @@
-<template>
-  <el-container class="layout-container">
-    <el-aside :width="isCollapsed ? '64px' : '200px'" class="sidebar" :class="{ 'is-collapsed': isCollapsed }">
-      <div class="logo">
-        <svg viewBox="0 0 120 120" class="logo-icon">
-          <circle cx="60" cy="60" r="50" fill="none" stroke="var(--nginx-green)" stroke-width="3" opacity="0.3"/>
-          <path d="M 30 60 L 60 30 L 90 60 L 60 90 Z" fill="var(--nginx-green)" opacity="0.8"/>
-          <path d="M 40 60 L 60 40 L 80 60 L 60 80 Z" fill="var(--nginx-green)"/>
-          <circle cx="60" cy="60" r="8" fill="var(--nginx-green-light)"/>
-        </svg>
-        <span v-if="!isCollapsed" class="logo-text">Nginx WebUI</span>
-      </div>
-      <el-menu
-        :default-active="activeMenu"
-        router
-        class="sidebar-menu"
-        background-color="var(--bg-secondary)"
-        text-color="var(--text-secondary)"
-        active-text-color="var(--nginx-green)"
-        :collapse="isCollapsed"
-      >
-        <el-menu-item index="/dashboard">
-          <el-icon><Odometer /></el-icon>
-          <span v-if="!isCollapsed">仪表盘</span>
-        </el-menu-item>
-        <el-menu-item index="/config">
-          <el-icon><Edit /></el-icon>
-          <span v-if="!isCollapsed">配置管理</span>
-        </el-menu-item>
-        <el-menu-item index="/logs">
-          <el-icon><Document /></el-icon>
-          <span v-if="!isCollapsed">日志查看</span>
-        </el-menu-item>
-        <el-menu-item index="/files">
-          <el-icon><Folder /></el-icon>
-          <span v-if="!isCollapsed">文件管理</span>
-        </el-menu-item>
-        <el-menu-item index="/static-package">
-          <el-icon><Box /></el-icon>
-          <span v-if="!isCollapsed">静态资源包</span>
-        </el-menu-item>
-        <el-menu-item index="/certificates">
-          <el-icon><Lock /></el-icon>
-          <span v-if="!isCollapsed">证书管理</span>
-        </el-menu-item>
-        <el-menu-item index="/audit">
-          <el-icon><View /></el-icon>
-          <span v-if="!isCollapsed">操作日志</span>
-        </el-menu-item>
-        <el-menu-item index="/nginx">
-          <el-icon><Odometer /></el-icon>
-          <span v-if="!isCollapsed">Nginx 管理</span>
-        </el-menu-item>
-        <el-menu-item index="/git-sync">
-          <el-icon><Share /></el-icon>
-          <span v-if="!isCollapsed">Git 配置同步</span>
-        </el-menu-item>
-      </el-menu>
-      <div class="sidebar-footer">
-        <el-button
-          class="collapse-btn"
-          text
-          circle
-          :icon="isCollapsed ? Expand : Fold"
-          @click="toggleCollapse"
-        />
-        <el-tooltip
-          v-if="isCollapsed"
-          content="版本与更新"
-          placement="right"
-        >
-          <el-button
-            class="version-info-btn"
-            text
-            circle
-            :icon="InfoFilled"
-            @click="openVersionDialog"
-          />
-        </el-tooltip>
-        <div
-          v-else-if="systemVersion.version"
-          class="sidebar-version sidebar-version--clickable"
-          role="button"
-          tabindex="0"
-          @click="openVersionDialog"
-          @keydown.enter.prevent="openVersionDialog"
-          @keydown.space.prevent="openVersionDialog"
-        >
-          <span class="version-label">系统版本</span>
-          <span class="version-value">{{ systemVersion.version }}</span>
-          <span
-            v-if="updateStatus.hasUpdate"
-            class="version-update-dot"
-            title="发现新版本"
-          ></span>
-        </div>
-      </div>
-    </el-aside>
-    <el-container class="content-container">
-      <el-header class="header">
-        <div class="header-left">
-          <span>Nginx WebUI 管理系统</span>
-        </div>
-        <div class="header-right">
-          <el-dropdown @command="handleUserCommand" trigger="click">
-            <span class="user-dropdown">
-              <el-icon><User /></el-icon>
-              <span class="username">{{ authStore.username }}</span>
-              <el-icon class="dropdown-icon"><ArrowDown /></el-icon>
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="profile">
-                  <el-icon><User /></el-icon>
-                  <span>用户中心</span>
-                </el-dropdown-item>
-                <el-dropdown-item divided command="logout">
-                  <el-icon><SwitchButton /></el-icon>
-                  <span>退出登录</span>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </el-header>
-      <el-main class="main-content">
-        <router-view />
-      </el-main>
-      
-      <!-- Nginx 初始设置向导 -->
-      <NginxSetupWizard
-        v-model="showSetupWizard"
-        @complete="handleSetupComplete"
-      />
-      
-      <!-- 遮罩层，在设置完成前阻止其他操作 -->
-      <div v-if="showSetupWizard" class="setup-overlay"></div>
-      <el-footer class="footer" height="auto">
-        <span>Power by numen06 · 项目地址：</span>
-        <a
-          href="https://gitee.com/numen06"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          https://gitee.com/numen06
-        </a>
-      </el-footer>
-    </el-container>
-  </el-container>
-
-  <el-dialog
-      v-model="versionDialogVisible"
-      title="版本与更新"
-      width="520px"
-      class="version-dialog"
-      append-to-body
-      destroy-on-close
-    >
-      <div v-loading="checkLoading" class="version-dialog-body">
-        <el-descriptions :column="1" border size="small" class="version-desc">
-          <el-descriptions-item label="当前运行版本">
-            {{ displayCurrentVersion }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Gitee 最新版本">
-            {{ updateStatus.latestVersion || '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item
-            v-if="updateStatus.releaseName"
-            label="Release 名称"
-          >
-            {{ updateStatus.releaseName }}
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-alert
-          v-if="!updateStatus.checkSuccess"
-          type="error"
-          :closable="false"
-          show-icon
-          class="version-alert"
-        >
-          {{ updateStatus.checkMessage || '检查更新失败' }}
-        </el-alert>
-        <el-alert
-          v-else-if="updateStatus.hasUpdate"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="发现新版本"
-          description="请前往 Gitee Release 下载镜像或按项目说明升级。"
-          class="version-alert"
-        />
-        <el-alert
-          v-else-if="updateStatus.latestVersion"
-          type="success"
-          :closable="false"
-          show-icon
-          title="已是最新版本"
-          class="version-alert"
-        />
-
-        <template v-if="updateStatus.checkSuccess && updateStatus.releaseBody">
-          <div class="version-body-label">发行说明（与 Gitee 一致）</div>
-          <div class="version-release-body">{{ updateStatus.releaseBody }}</div>
-        </template>
-        <div
-          v-else-if="
-            updateStatus.checkSuccess &&
-            updateStatus.latestVersion &&
-            !updateStatus.releaseBody
-          "
-          class="version-body-empty"
-        >
-          本 Release 暂无正文说明，可点击「在 Gitee 查看」打开页面。
-        </div>
-
-        <div class="version-dialog-links">
-          <a
-            href="https://gitee.com/numen06/nginx-webui/releases"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            全部发行版
-          </a>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="versionDialogVisible = false">关闭</el-button>
-        <el-button :loading="checkLoading" @click="refreshVersionCheck">
-          重新检查
-        </el-button>
-        <el-button
-          type="primary"
-          :disabled="!updateStatus.releaseUrl"
-          @click="openReleaseUrl"
-        >
-          在 Gitee 查看
-        </el-button>
-      </template>
-    </el-dialog>
-</template>
-
-<script setup>
-import { computed, ref, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { useAuthStore } from '../store/auth'
-import { useSetupStore } from '../store/setup'
-import { ElMessage, ElNotification } from 'element-plus'
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
-  SwitchButton,
+  Activity,
+  BadgeCheck,
+  Boxes,
+  ChevronDown,
+  FileArchive,
+  FileCode2,
+  FileText,
+  FolderTree,
+  Gauge,
+  GitBranch,
+  Info,
+  LogOut,
+  Network,
+  RefreshCw,
+  ScrollText,
+  Settings2,
+  ShieldCheck,
   User,
-  ArrowDown,
-  Fold,
-  Expand,
-  InfoFilled
-} from '@element-plus/icons-vue'
-import { systemApi } from '../api/system'
-import NginxSetupWizard from '../components/NginxSetupWizard.vue'
+  Users,
+} from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+} from '@/components/ui/sidebar'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import { ElMessage } from '@/lib/feedback'
+import { useAuthStore } from '@/store/auth'
+import { useSetupStore } from '@/store/setup'
+import { systemApi } from '@/api/system'
+import NginxSetupWizard from '@/components/NginxSetupWizard.vue'
 
-const router = useRouter()
+interface NavigationItem {
+  label: string
+  path: string
+  icon: typeof Gauge
+  admin?: boolean
+}
+
+interface NavigationGroup {
+  label: string
+  items: NavigationItem[]
+}
+
+interface UpdateStatus {
+  hasUpdate: boolean
+  latestVersion: string | null
+  releaseUrl: string | null
+  releaseName: string | null
+  currentVersion: string | null
+  releaseBody: string | null
+  checkSuccess: boolean
+  checkMessage: string
+}
+
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const setupStore = useSetupStore()
-
-const activeMenu = computed(() => route.path)
-
-// 侧边栏折叠状态
-const isCollapsed = ref(false)
-
-// 系统版本信息（用于侧边栏底部展示）
-const systemVersion = ref({
-  version: null
-})
-
-const updateStatus = ref({
+const versionDialogVisible = ref(false)
+const checkLoading = ref(false)
+const systemVersion = ref<string | null>(null)
+const updateStatus = ref<UpdateStatus>({
   hasUpdate: false,
   latestVersion: null,
   releaseUrl: null,
   releaseName: null,
-  releaseBodySummary: null,
   currentVersion: null,
   releaseBody: null,
   checkSuccess: true,
-  checkMessage: ''
+  checkMessage: '',
 })
 
-const versionDialogVisible = ref(false)
-const checkLoading = ref(false)
+const navigation: NavigationGroup[] = [
+  { label: '概览', items: [{ label: '仪表盘', path: '/dashboard', icon: Gauge }] },
+  {
+    label: '配置',
+    items: [
+      { label: '配置管理', path: '/config', icon: FileCode2 },
+      { label: '动态服务', path: '/dynamic-services', icon: Network },
+      { label: 'Git 配置同步', path: '/git-sync', icon: GitBranch },
+    ],
+  },
+  {
+    label: '运维',
+    items: [
+      { label: 'Nginx 管理', path: '/nginx', icon: Settings2 },
+      { label: '证书管理', path: '/certificates', icon: ShieldCheck },
+      { label: '文件管理', path: '/files', icon: FolderTree },
+      { label: '静态资源包', path: '/static-package', icon: FileArchive },
+    ],
+  },
+  {
+    label: '可观测性',
+    items: [
+      { label: '日志查看', path: '/logs', icon: FileText },
+      { label: '操作日志', path: '/audit', icon: ScrollText },
+    ],
+  },
+  {
+    label: '系统',
+    items: [{ label: '用户管理', path: '/users', icon: Users, admin: true }],
+  },
+]
 
-const displayCurrentVersion = computed(() => {
-  return (
-    updateStatus.value.currentVersion ||
-    systemVersion.value.version ||
-    '—'
-  )
-})
+const visibleNavigation = computed(() => navigation
+  .map(group => ({
+    ...group,
+    items: group.items.filter(item => !item.admin || authStore.isAdmin),
+  }))
+  .filter(group => group.items.length))
 
-// 使用store中的状态
+const currentTitle = computed(() => String(route.meta.title || 'Nginx WebUI'))
+const userInitial = computed(() => (authStore.username || 'U').slice(0, 1).toUpperCase())
+const displayCurrentVersion = computed(() => updateStatus.value.currentVersion || systemVersion.value || '—')
 const showSetupWizard = computed({
   get: () => setupStore.showSetupWizard,
-  set: (value) => setupStore.setShowSetupWizard(value)
+  set: value => setupStore.setShowSetupWizard(value),
 })
 
-const handleSetupComplete = () => {
-  setupStore.setShowSetupWizard(false)
-  ElMessage.success('Nginx 设置完成，系统已就绪')
-}
-
-const handleUserCommand = (command) => {
-  if (command === 'profile') {
-    router.push('/profile')
-  } else if (command === 'logout') {
-    handleLogout()
-  }
-}
-
-const handleLogout = () => {
+function handleLogout() {
   authStore.logout()
   ElMessage.success('已退出登录')
-  router.push('/login')
+  void router.replace('/login')
 }
 
-const toggleCollapse = () => {
-  isCollapsed.value = !isCollapsed.value
-}
-
-const loadSystemVersion = async () => {
+async function loadSystemVersion() {
   try {
-    const res = await systemApi.getVersion()
-    if (res.success && res.version) {
-      systemVersion.value.version = res.version
-    }
-  } catch (e) {
-    // 版本信息非关键，不弹错误
-    console.error('获取系统版本失败:', e)
+    const response = await systemApi.getVersion()
+    systemVersion.value = response.version || null
+  } catch {
+    systemVersion.value = null
   }
 }
 
-const loadUpdateStatus = async (options = { showLoading: false }) => {
-  if (options.showLoading) {
-    checkLoading.value = true
-  }
+async function loadUpdateStatus(showLoading = false) {
+  if (showLoading) checkLoading.value = true
   try {
-    const res = await systemApi.checkUpdate()
+    const response = await systemApi.checkUpdate()
     updateStatus.value = {
-      hasUpdate: !!res.has_update,
-      latestVersion: res.latest_version || null,
-      releaseUrl: res.release_url || null,
-      releaseName: res.release_name || null,
-      releaseBodySummary: res.release_body_summary || null,
-      currentVersion: res.current_version || null,
-      releaseBody: res.release_body || null,
-      checkSuccess: !!res.success,
-      checkMessage: res.message || ''
+      hasUpdate: Boolean(response.has_update),
+      latestVersion: response.latest_version || null,
+      releaseUrl: response.release_url || null,
+      releaseName: response.release_name || null,
+      currentVersion: response.current_version || null,
+      releaseBody: response.release_body || null,
+      checkSuccess: Boolean(response.success),
+      checkMessage: response.message || '',
     }
-
-    if (res.success && res.has_update) {
-      const noticeKey = `update-notified-${res.latest_version || 'unknown'}`
-      if (!sessionStorage.getItem(noticeKey)) {
-        const summary = res.release_body_summary
-          ? `\n${res.release_body_summary}`
-          : ''
-        ElNotification({
-          title: '发现新版本',
-          message: `当前版本 ${res.current_version || '-'}，最新版本 ${res.latest_version || '-'}${summary}`,
-          type: 'info',
-          duration: 8000,
-          onClick: () => {
-            if (res.release_url) {
-              window.open(res.release_url, '_blank', 'noopener,noreferrer')
-            }
-          }
-        })
-        sessionStorage.setItem(noticeKey, '1')
-      }
-    }
-  } catch (e) {
-    console.error('检查系统更新失败:', e)
-    const detail =
-      e?.response?.data?.detail ||
-      e?.message ||
-      '网络错误，检查更新失败'
-    updateStatus.value = {
-      ...updateStatus.value,
-      checkSuccess: false,
-      checkMessage: typeof detail === 'string' ? detail : '检查更新失败'
-    }
+  } catch (error) {
+    updateStatus.value.checkSuccess = false
+    updateStatus.value.checkMessage = error instanceof Error ? error.message : '检查更新失败'
   } finally {
-    if (options.showLoading) {
-      checkLoading.value = false
-    }
+    checkLoading.value = false
   }
 }
 
-const openVersionDialog = async () => {
+async function openVersionDialog() {
   versionDialogVisible.value = true
-  await loadUpdateStatus({ showLoading: true })
+  await loadUpdateStatus(true)
 }
 
-const refreshVersionCheck = () => loadUpdateStatus({ showLoading: true })
-
-const openReleaseUrl = () => {
+function openReleasePage() {
   if (updateStatus.value.releaseUrl) {
     window.open(updateStatus.value.releaseUrl, '_blank', 'noopener,noreferrer')
   }
 }
 
+function handleSetupComplete() {
+  setupStore.setShowSetupWizard(false)
+  ElMessage.success('Nginx 设置完成，系统已就绪')
+}
+
 onMounted(() => {
-  loadSystemVersion()
-  loadUpdateStatus()
+  void authStore.ensureUser()
+  void setupStore.checkSetupStatus()
+  void loadSystemVersion()
+  void loadUpdateStatus()
 })
 </script>
 
-<style scoped>
-.layout-container {
-  height: 100vh;
-  background-color: var(--bg-primary);
-}
+<template>
+  <SidebarProvider>
+    <Sidebar collapsible="icon">
+      <SidebarHeader class="border-b border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+        <RouterLink
+          to="/dashboard"
+          class="flex items-center gap-3 overflow-hidden rounded-md px-1 py-1.5 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
+        >
+          <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
+            <Boxes class="size-4" />
+          </span>
+          <div class="min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+            <div class="truncate text-sm font-semibold">Nginx WebUI</div>
+            <div class="truncate text-xs text-muted-foreground">管理控制台</div>
+          </div>
+        </RouterLink>
+      </SidebarHeader>
 
-.content-container {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
+      <SidebarContent>
+        <SidebarGroup v-for="group in visibleNavigation" :key="group.label">
+          <SidebarGroupLabel>{{ group.label }}</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem v-for="item in group.items" :key="item.path">
+                <SidebarMenuButton
+                  as-child
+                  :is-active="route.path === item.path"
+                  :tooltip="item.label"
+                >
+                  <RouterLink :to="item.path">
+                    <component :is="item.icon" />
+                    <span>{{ item.label }}</span>
+                  </RouterLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
 
-.sidebar {
-  background-color: var(--bg-secondary);
-  color: var(--text-primary);
-  border-right: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-}
+      <SidebarFooter class="border-t border-sidebar-border p-2">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton tooltip="版本与更新" @click="openVersionDialog">
+              <Info />
+              <span class="truncate">版本 {{ systemVersion || '—' }}</span>
+              <span v-if="updateStatus.hasUpdate" class="ml-auto size-2 rounded-full bg-amber-400" />
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <a
+          href="https://gitee.com/numen06/nginx-webui"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="px-2 pb-1 text-[11px] text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
+        >
+          Power by numen06
+        </a>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
 
-.logo {
-  height: 60px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--border-color);
-  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
-  padding: 10px;
-}
+    <SidebarInset class="min-w-0 bg-background">
+      <header class="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <SidebarTrigger />
+        <Separator orientation="vertical" class="h-5" />
+        <h1 class="truncate text-sm font-medium md:text-base">{{ currentTitle }}</h1>
+        <div class="ml-auto flex items-center gap-2">
+          <Badge v-if="authStore.isAdmin" variant="secondary" class="hidden md:inline-flex">
+            <BadgeCheck class="mr-1 size-3" />超级管理员
+          </Badge>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button variant="ghost" class="h-10 gap-2 px-2 sm:px-3">
+                <span class="grid size-7 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                  {{ userInitial }}
+                </span>
+                <span class="hidden max-w-32 truncate text-sm sm:inline">{{ authStore.username || '用户' }}</span>
+                <ChevronDown class="hidden size-3.5 text-muted-foreground sm:block" />
+                <span class="sr-only">打开用户菜单</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" class="w-56">
+              <DropdownMenuLabel>
+                <div>{{ authStore.username }}</div>
+                <div class="text-xs font-normal text-muted-foreground">
+                  {{ authStore.isAdmin ? '超级管理员' : '普通用户' }}
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem @click="router.push('/profile')">
+                <User class="size-4" /> 用户中心
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="handleLogout">
+                <LogOut class="size-4" /> 退出登录
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+      <main class="min-w-0 flex-1 overflow-x-hidden">
+        <RouterView />
+      </main>
+    </SidebarInset>
+  </SidebarProvider>
 
-.logo-icon {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  animation: logoRotate 8s linear infinite;
-}
+  <NginxSetupWizard v-model="showSetupWizard" @complete="handleSetupComplete" />
 
-@keyframes logoRotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.logo-text {
-  font-size: 16px;
-  font-weight: 600;
-  background: linear-gradient(135deg, var(--nginx-green) 0%, var(--nginx-green-light) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-}
-
-.sidebar-menu {
-  border-right: none;
-  flex: 1;
-  overflow-y: auto;
-  background-color: var(--bg-secondary);
-}
-
-.sidebar-footer {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.sidebar-version {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.sidebar-version--clickable {
-  cursor: pointer;
-  border-radius: 4px;
-  padding: 2px 4px;
-  margin: -2px -4px;
-  transition: background-color 0.2s;
-}
-
-.sidebar-version--clickable:hover {
-  background-color: var(--bg-tertiary);
-}
-
-.version-info-btn {
-  color: var(--nginx-green-light);
-  padding: 4px;
-}
-
-.version-label {
-  opacity: 0.7;
-}
-
-.version-value {
-  font-weight: 500;
-  color: var(--nginx-green-light);
-}
-
-.version-update-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: #f56c6c;
-  display: inline-block;
-  box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.15);
-}
-
-.collapse-btn {
-  color: var(--text-secondary);
-  padding: 4px;
-}
-
-.header {
-  background-color: var(--bg-card);
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  box-shadow: var(--shadow-sm);
-}
-
-.header-left {
-  font-size: 16px;
-  font-weight: bold;
-  color: var(--text-primary);
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-}
-
-.user-dropdown {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 8px 12px;
-  border-radius: 4px;
-  transition: background-color 0.3s;
-  color: var(--text-secondary);
-}
-
-.user-dropdown:hover {
-  background-color: var(--bg-tertiary);
-}
-
-.username {
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.dropdown-icon {
-  font-size: 12px;
-  transition: transform 0.3s;
-}
-
-.main-content {
-  background-color: var(--bg-primary);
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.footer {
-  background-color: var(--bg-card);
-  border-top: 1px solid var(--border-color);
-  text-align: center;
-  padding: 4px 12px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.2;
-}
-
-.setup-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  z-index: 2000;
-  pointer-events: auto;
-}
-
-.version-dialog-body {
-  min-height: 80px;
-}
-
-.version-desc {
-  margin-bottom: 12px;
-}
-
-.version-alert {
-  margin-bottom: 12px;
-}
-
-.version-body-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.version-release-body {
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 280px;
-  overflow-y: auto;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-}
-
-.version-body-empty {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-}
-
-.version-dialog-links {
-  margin-top: 12px;
-  font-size: 12px;
-}
-
-.version-dialog-links a {
-  color: var(--nginx-green-light);
-}
-</style>
-
+  <Dialog v-model:open="versionDialogVisible">
+    <DialogContent class="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+      <DialogHeader>
+        <DialogTitle>版本与更新</DialogTitle>
+        <DialogDescription>查看当前运行版本和最新发行版。</DialogDescription>
+      </DialogHeader>
+      <div class="grid gap-3 rounded-lg border p-4 text-sm sm:grid-cols-[9rem_1fr]">
+        <span class="text-muted-foreground">当前运行版本</span><span>{{ displayCurrentVersion }}</span>
+        <span class="text-muted-foreground">Gitee 最新版本</span><span>{{ updateStatus.latestVersion || '—' }}</span>
+        <span v-if="updateStatus.releaseName" class="text-muted-foreground">Release 名称</span><span v-if="updateStatus.releaseName">{{ updateStatus.releaseName }}</span>
+      </div>
+      <div v-if="!updateStatus.checkSuccess" class="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-red-200">
+        {{ updateStatus.checkMessage || '检查更新失败' }}
+      </div>
+      <div v-else-if="updateStatus.hasUpdate" class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
+        发现新版本，请按项目说明升级。
+      </div>
+      <div v-if="updateStatus.releaseBody" class="space-y-2">
+        <h3 class="text-sm font-medium">发行说明</h3>
+        <pre class="max-h-72 whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs text-muted-foreground">{{ updateStatus.releaseBody }}</pre>
+      </div>
+      <DialogFooter>
+        <Button variant="secondary" :disabled="checkLoading" @click="loadUpdateStatus(true)">
+          <RefreshCw :class="['size-4', { 'animate-spin': checkLoading }]" />重新检查
+        </Button>
+        <Button
+          :disabled="!updateStatus.releaseUrl"
+          @click="openReleasePage"
+        >
+          在 Gitee 查看
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+</template>

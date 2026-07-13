@@ -139,6 +139,16 @@ def get_current_user(
     return user
 
 
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Require an active administrator for privileged management APIs."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要超级管理员权限",
+        )
+    return current_user
+
+
 def get_user_by_token(token: str, db: Session) -> Optional[User]:
     """通过 token 获取用户对象"""
     payload = verify_token(token)

@@ -3,6 +3,7 @@
 """
 
 import shutil
+import zipfile
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -10,7 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.config import get_config
 from app.models import ConfigBackup
-from app.utils.nginx import get_config_path, get_working_config_path
+from app.utils.nginx import (
+    get_config_path,
+    get_config_dir,
+    get_working_config_dir,
+    get_working_config_path,
+    _should_skip_config_item,
+)
 
 
 def create_backup(
@@ -20,7 +27,7 @@ def create_backup(
     source_path: Optional[Path] = None,
 ) -> ConfigBackup:
     """
-    创建配置文件备份（始终备份当前实际生效的线上 nginx.conf）
+    创建配置目录备份（始终备份当前实际生效的线上 conf/）
 
     Args:
         db: 数据库会话
@@ -31,11 +38,10 @@ def create_backup(
     Returns:
         ConfigBackup: 备份记录
     """
-    # 备份当前实际使用的 Nginx 配置文件，而不是固定的 config.yaml 路径
-    # 这样在多版本 Nginx 管理启用时，备份/恢复都严格基于"活动版本"的 nginx.conf（线上配置）。
+    # 备份当前实际使用的 Nginx 配置目录，而不是固定的 config.yaml 路径。
     config = get_config()
     if source_path is None:
-        config_path = get_config_path()
+        config_path = get_config_dir()
     else:
         config_path = source_path
     backup_dir = Path(config.backup.backup_dir)
@@ -46,11 +52,17 @@ def create_backup(
 
     # 生成备份文件名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_filename = f"nginx.conf.backup.{timestamp}"
+    backup_filename = f"nginx-conf.backup.{timestamp}.zip"
     backup_path = backup_dir / backup_filename
 
-    # 复制配置文件
-    shutil.copy2(config_path, backup_path)
+    # 压缩配置目录；如果传入旧式单文件路径，则兼容压缩为 nginx.conf。
+    with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        if config_path.is_dir():
+            for item in sorted(config_path.rglob("*")):
+                if item.is_file() and not _should_skip_config_item(item):
+                    archive.write(item, item.relative_to(config_path))
+        else:
+            archive.write(config_path, "nginx.conf")
 
     # 如果标记为最后版本，先取消其他备份的最后版本标记
     if is_last_version:
@@ -162,11 +174,30 @@ def restore_backup(db: Session, backup_id: int) -> bool:
         db.commit()
         return False
 
-    # 回滚到「临时配置/工作副本」，而不直接修改实际运行的 nginx.conf。
-    # 这样用户在“配置”页面看到的是回滚后的内容，但只有在“重新装载”时才会真正覆盖线上配置。
-    working_path = get_working_config_path()
-    working_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(backup_path, working_path)
+    # 回滚到「临时配置/工作副本」，而不直接修改实际运行的 conf/。
+    if zipfile.is_zipfile(backup_path):
+        working_dir = get_working_config_dir()
+        if working_dir.exists():
+            shutil.rmtree(working_dir)
+        working_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(backup_path, "r") as archive:
+            for member in archive.infolist():
+                target = (working_dir / member.filename).resolve()
+                try:
+                    target.relative_to(working_dir.resolve())
+                except ValueError:
+                    continue
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, open(target, "wb") as dest:
+                    shutil.copyfileobj(source, dest)
+    else:
+        # 兼容旧单文件备份：只恢复到工作副本 nginx.conf。
+        working_path = get_working_config_path()
+        working_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup_path, working_path)
 
     return True
 
@@ -193,7 +224,10 @@ def cleanup_old_backups(db: Session):
             backup_path = Path(backup.file_path)
             if backup_path.exists():
                 try:
-                    backup_path.unlink()
+                    if backup_path.is_dir():
+                        shutil.rmtree(backup_path, ignore_errors=True)
+                    else:
+                        backup_path.unlink()
                 except Exception:
                     pass
 
@@ -222,7 +256,10 @@ def delete_backup(db: Session, backup_id: int) -> bool:
     backup_path = Path(backup.file_path)
     if backup_path.exists():
         try:
-            backup_path.unlink()
+            if backup_path.is_dir():
+                shutil.rmtree(backup_path, ignore_errors=True)
+            else:
+                backup_path.unlink()
         except Exception:
             pass
 

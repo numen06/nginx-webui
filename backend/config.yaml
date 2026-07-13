@@ -38,3 +38,21 @@ logrotate:
   # 轮转时间，格式 HH:MM（默认每天凌晨 00:00）
   rotate_time: "00:00"
 
+dynamic_registry:
+  # 可选：显式注册白名单，支持逗号分隔的 IP/CIDR。留空时自动允许本机宿主机网段和容器网络同网段。
+  # 来源 IP 不在白名单内时，注册/心跳/下线接口需要提供登录后的 Authorization: Bearer token
+  # 或 Authorization: Basic base64(username:password)。
+  ip_whitelist:
+  # 可选：动态服务假域名后缀。留空时服务名本身就是 Host，例如 order-service。
+  # 设置为 apps.local 时，同时支持 order-service 和 order-service.apps.local。
+  domain_suffix:
+  # 实例默认心跳超时时间（秒）
+  default_ttl_seconds: 600
+  # 过期实例清理间隔（秒）
+  cleanup_interval_seconds: 30
+  # 离线/过期实例保留时间（秒），超过后删除实例；服务无实例时同步删除服务
+  offline_retention_seconds: 86400
+  # 是否由本程序主动探测目标服务，探测可达时自动刷新心跳时间
+  health_check_enabled: true
+  # 主动探测目标服务的连接超时时间（秒）
+  health_check_timeout_seconds: 3

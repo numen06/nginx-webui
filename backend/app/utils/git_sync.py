@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.models import GitRepository
-from app.utils.nginx import get_config_path
+from app.utils.nginx import get_config_path, get_config_dir
 
 
 class GitSyncError(Exception):
@@ -124,15 +124,29 @@ def _export_nginx_config(workspace: Path, project_name: str) -> Dict[str, Any]:
     project_dir.mkdir(parents=True, exist_ok=True)
 
     config_path = get_config_path()
+    config_dir = get_config_dir()
     if not config_path.exists():
         raise GitSyncError(f"未找到 Nginx 配置文件：{config_path}")
+    if not config_dir.exists():
+        raise GitSyncError(f"未找到 Nginx 配置目录：{config_dir}")
 
+    conf_target = project_dir / "conf"
+    if conf_target.exists():
+        shutil.rmtree(conf_target)
+    shutil.copytree(
+        config_dir,
+        conf_target,
+        ignore=shutil.ignore_patterns("*.webui.pending", "*.tmp", ".DS_Store"),
+    )
+
+    # 兼容旧同步结果：根目录仍保留一份 nginx.conf。
     target_path = project_dir / "nginx.conf"
     shutil.copy2(config_path, target_path)
 
     metadata = {
         "project_name": project_name,
         "source_config": str(config_path),
+        "source_config_dir": str(config_dir),
         "synced_at": datetime.now().isoformat(),
     }
     metadata_path = project_dir / "metadata.json"
@@ -140,6 +154,7 @@ def _export_nginx_config(workspace: Path, project_name: str) -> Dict[str, Any]:
 
     return {
         "project_dir": str(project_dir),
+        "config_dir": str(conf_target),
         "config_file": str(target_path),
         "metadata_file": str(metadata_path),
     }

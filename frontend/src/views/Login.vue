@@ -1,383 +1,127 @@
-<template>
-  <div class="login-container">
-    <div class="login-background">
-      <div class="bg-decoration"></div>
-    </div>
-    <div class="login-content">
-    <div class="login-box">
-        <div class="login-header">
-          <div class="login-logo">
-            <svg viewBox="0 0 120 120" class="logo-icon">
-              <circle cx="60" cy="60" r="50" fill="none" stroke="var(--nginx-green)" stroke-width="3" opacity="0.3"/>
-              <path d="M 30 60 L 60 30 L 90 60 L 60 90 Z" fill="var(--nginx-green)" opacity="0.8"/>
-              <path d="M 40 60 L 60 40 L 80 60 L 60 80 Z" fill="var(--nginx-green)"/>
-              <circle cx="60" cy="60" r="8" fill="var(--nginx-green-light)"/>
-            </svg>
-          </div>
-          <p class="login-subtitle">Nginx WebUI · 可视化 Nginx 配置管理系统</p>
-        </div>
-      <el-form
-        ref="loginFormRef"
-        :model="loginForm"
-        :rules="loginRules"
-        class="login-form"
-      >
-        <el-form-item prop="username">
-          <el-input
-            v-model="loginForm.username"
-              placeholder="请输入用户名"
-            size="large"
-            prefix-icon="User"
-              clearable
-          />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input
-            v-model="loginForm.password"
-            type="password"
-              placeholder="请输入密码"
-            size="large"
-            prefix-icon="Lock"
-              show-password
-            @keyup.enter="handleLogin"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            size="large"
-            class="login-button"
-            :loading="loading"
-            @click="handleLogin"
-          >
-              <span v-if="!loading">登录</span>
-              <span v-else>登录中...</span>
-          </el-button>
-        </el-form-item>
-      </el-form>
-        <div class="login-tips">
-          <el-alert
-            :closable="false"
-            type="info"
-            show-icon
-            class="tips-alert"
-          >
-            <template #title>
-              <span class="tips-text">提示：请使用管理员账号登录系统</span>
-            </template>
-          </el-alert>
-        </div>
-        <div class="login-footer">
-          <span>Power by numen06 · 项目地址：</span>
-          <a
-            href="https://gitee.com/numen06"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            https://gitee.com/numen06
-          </a>
-        </div>
-      </div>
-    </div>
-  </div>
-</template>
-
-<script setup>
-import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
-import { useAuthStore } from '../store/auth'
-import { ElMessage } from 'element-plus'
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { toTypedSchema } from '@vee-validate/zod'
+import { useForm } from 'vee-validate'
+import { z } from 'zod'
+import { Boxes, LockKeyhole, User } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ElMessage } from '@/lib/feedback'
+import { useAuthStore } from '@/store/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
-
-const loginFormRef = ref(null)
 const loading = ref(false)
 
-const loginForm = reactive({
-  username: '',
-  password: ''
-})
+const schema = toTypedSchema(z.object({
+  username: z.string().trim().min(1, '请输入用户名'),
+  password: z.string().min(1, '请输入密码'),
+}))
+const { defineField, errors, handleSubmit } = useForm({ validationSchema: schema })
+const [username, usernameAttrs] = defineField('username')
+const [password, passwordAttrs] = defineField('password')
+const redirectTarget = computed(() => typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard')
 
-const loginRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' }
-  ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' }
-  ]
-}
-
-const handleLogin = async () => {
-  if (!loginFormRef.value) return
-  
-  await loginFormRef.value.validate(async (valid) => {
-    if (!valid) return
-    
-    loading.value = true
-    try {
-      const result = await authStore.login(loginForm.username, loginForm.password)
-      if (result.success) {
-        ElMessage.success('登录成功')
-        // 如果是默认密码，跳转到用户中心页面
-        if (result.isDefaultPassword) {
-          ElMessage.warning('检测到您使用的是默认密码，请立即修改密码以确保系统安全')
-          router.push('/profile')
-        } else {
-          router.push('/')
-        }
-      } else {
-        console.error('登录失败:', result)
-        ElMessage.error(result.message || '登录失败，请检查用户名和密码')
-      }
-    } catch (error) {
-      console.error('登录异常:', error)
-      ElMessage.error(error?.detail || error?.message || '登录失败，请检查网络连接')
-    } finally {
-      loading.value = false
+const submit = handleSubmit(async (values) => {
+  loading.value = true
+  try {
+    const result = await authStore.login(values.username, values.password)
+    if (!result.success) {
+      ElMessage.error(result.message || '登录失败，请检查用户名和密码')
+      return
     }
-  })
-}
+    ElMessage.success('登录成功')
+    if (result.isDefaultPassword) {
+      ElMessage.warning('检测到默认密码，请立即修改密码')
+      await router.replace('/profile')
+    } else {
+      await router.replace(redirectTarget.value)
+    }
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
-<style scoped>
-.login-container {
-  width: 100%;
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-primary);
-  position: relative;
-  overflow: hidden;
-}
+<template>
+  <main class="grid min-h-svh place-items-center bg-background px-4 py-10">
+    <div class="w-full max-w-md space-y-6">
+      <div class="flex items-center justify-center gap-3">
+        <span class="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground">
+          <Boxes class="size-5" />
+        </span>
+        <div>
+          <div class="text-lg font-semibold">Nginx WebUI</div>
+          <div class="text-xs text-muted-foreground">Nginx 管理控制台</div>
+        </div>
+      </div>
 
-.login-background {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  overflow: hidden;
-}
+      <Card>
+        <CardHeader>
+          <CardTitle>登录</CardTitle>
+          <CardDescription>使用系统账户继续访问管理控制台。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form class="space-y-4" @submit="submit">
+            <div class="space-y-2">
+              <Label for="username">用户名</Label>
+              <div class="relative">
+                <User class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="username"
+                  v-model="username"
+                  v-bind="usernameAttrs"
+                  autocomplete="username"
+                  class="pl-9"
+                  placeholder="请输入用户名"
+                  autofocus
+                />
+              </div>
+              <p v-if="errors.username" class="text-sm text-destructive">{{ errors.username }}</p>
+            </div>
 
-.bg-decoration {
-  position: absolute;
-  width: 200%;
-  height: 200%;
-  top: -50%;
-  left: -50%;
-  background: radial-gradient(
-    circle at 30% 50%,
-    rgba(8, 196, 97, 0.08) 0%,
-    transparent 50%
-  ),
-  radial-gradient(
-    circle at 70% 50%,
-    rgba(59, 130, 246, 0.06) 0%,
-    transparent 50%
-  );
-  animation: rotate 20s linear infinite;
-}
+            <div class="space-y-2">
+              <Label for="password">密码</Label>
+              <div class="relative">
+                <LockKeyhole class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="password"
+                  v-model="password"
+                  v-bind="passwordAttrs"
+                  type="password"
+                  autocomplete="current-password"
+                  class="pl-9"
+                  placeholder="请输入密码"
+                />
+              </div>
+              <p v-if="errors.password" class="text-sm text-destructive">{{ errors.password }}</p>
+            </div>
 
-@keyframes rotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+            <Button type="submit" class="w-full" :disabled="loading">
+              {{ loading ? '登录中…' : '登录' }}
+            </Button>
+          </form>
+        </CardContent>
+        <CardFooter class="border-t pt-5 text-xs text-muted-foreground">
+          首次登录请使用默认管理员账户，并立即修改默认密码。
+        </CardFooter>
+      </Card>
 
-.login-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 1;
-  padding: 20px;
-  width: 100%;
-  height: 100%;
-}
-
-.login-box {
-  width: 100%;
-  max-width: 440px;
-  padding: 48px 40px;
-  background: var(--bg-card);
-  border-radius: 16px;
-  box-shadow: 
-    0 8px 32px rgba(0, 0, 0, 0.4),
-    0 0 0 1px var(--border-color),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-color);
-  backdrop-filter: blur(10px);
-  animation: fadeInUp 0.6s ease-out;
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.login-header {
-  text-align: center;
-  margin-bottom: 36px;
-}
-
-.login-logo {
-  margin-bottom: 20px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 100%;
-  animation: logoFloat 3s ease-in-out infinite;
-}
-
-.logo-icon {
-  width: 80px;
-  height: 80px;
-  animation: logoRotate 8s linear infinite;
-}
-
-@keyframes logoRotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes logoFloat {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-8px);
-  }
-}
-
-.login-subtitle {
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin: 0;
-  font-weight: 400;
-  letter-spacing: 0.3px;
-}
-
-.login-form {
-  margin-top: 8px;
-}
-
-.login-form :deep(.el-form-item) {
-  margin-bottom: 24px;
-}
-
-.login-form :deep(.el-input__wrapper) {
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  box-shadow: none;
-  transition: all 0.3s ease;
-}
-
-.login-form :deep(.el-input__wrapper:hover) {
-  border-color: var(--nginx-green);
-  box-shadow: 0 0 0 2px rgba(8, 196, 97, 0.1);
-}
-
-.login-form :deep(.el-input__wrapper.is-focus) {
-  border-color: var(--nginx-green);
-  box-shadow: 0 0 0 2px rgba(8, 196, 97, 0.2);
-}
-
-.login-form :deep(.el-input__inner) {
-  color: var(--text-primary);
-}
-
-.login-form :deep(.el-input__inner::placeholder) {
-  color: var(--text-muted);
-}
-
-.login-button {
-  width: 100%;
-  height: 44px;
-  background: var(--gradient-nginx);
-  border: none;
-  font-weight: 600;
-  letter-spacing: 1px;
-  font-size: 15px;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(8, 196, 97, 0.3);
-}
-
-.login-button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(8, 196, 97, 0.4);
-}
-
-.login-button:active {
-  transform: translateY(0);
-}
-
-.login-tips {
-  margin-top: 24px;
-}
-
-.tips-alert {
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-}
-
-.tips-alert :deep(.el-alert__content) {
-  padding: 0;
-}
-
-.tips-text {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-.login-footer {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border-color);
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.login-footer a {
-  color: var(--nginx-green);
-  text-decoration: none;
-  transition: all 0.2s;
-  font-weight: 500;
-}
-
-.login-footer a:hover {
-  opacity: 0.8;
-  text-decoration: underline;
-}
-
-/* 响应式设计 */
-@media (max-width: 480px) {
-  .login-box {
-    padding: 36px 24px;
-    border-radius: 12px;
-  }
-
-  .login-subtitle {
-    font-size: 13px;
-  }
-}
-</style>
-
+      <p class="text-center text-xs text-muted-foreground">
+        Power by numen06 ·
+        <a class="hover:text-foreground hover:underline" href="https://gitee.com/numen06/nginx-webui" target="_blank" rel="noopener noreferrer">项目地址</a>
+      </p>
+    </div>
+  </main>
+</template>

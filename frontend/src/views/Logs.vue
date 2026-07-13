@@ -1,13 +1,13 @@
 <template>
-  <div class="logs-page">
-    <el-tabs v-model="activeTab" class="logs-tabs" stretch>
-      <el-tab-pane label="访问日志" name="access">
-        <el-card>
+  <div class="logs-page page-shell">
+    <ui-tabs v-model="activeTab" class="logs-tabs" stretch>
+      <ui-tab-pane label="访问日志" name="access">
+        <ui-card>
           <template #header>
             <div class="card-header">
               <span>访问日志</span>
               <div class="header-actions">
-                <el-button 
+                <ui-button
                   type="warning"
                   size="small" 
                   @click="handleRotateLogs"
@@ -15,8 +15,8 @@
                   :icon="Switch"
                 >
                   立即分片
-                </el-button>
-                <el-button 
+                </ui-button>
+                <ui-button
                   :icon="Refresh" 
                   circle 
                   size="small" 
@@ -27,61 +27,61 @@
             </div>
           </template>
           <div class="log-info">
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item v-if="accessLogInfo.install_path" label="当前 Nginx 目录">
-                <el-text type="info" size="small">{{ accessLogInfo.install_path }}</el-text>
-              </el-descriptions-item>
-              <el-descriptions-item label="当前 Nginx 版本">
-                <el-tooltip
+            <ui-descriptions :column="2" border size="small">
+              <ui-descriptions-item v-if="accessLogInfo.install_path" label="当前 Nginx 目录">
+                <ui-text type="info" size="small">{{ accessLogInfo.install_path }}</ui-text>
+              </ui-descriptions-item>
+              <ui-descriptions-item label="当前 Nginx 版本">
+                <ui-tooltip
                   v-if="accessLogInfo.nginx_version"
                   :content="accessLogInfo.nginx_version"
                   placement="top"
                 >
-                  <el-tag type="info" size="small" class="version-tag">
+                  <ui-tag type="info" size="small" class="version-tag">
                     {{ formatShortVersion(accessLogInfo.nginx_version) }}
-                  </el-tag>
-                </el-tooltip>
+                  </ui-tag>
+                </ui-tooltip>
                 <span v-else class="text-muted">未知</span>
-              </el-descriptions-item>
-              <el-descriptions-item label="日志文件路径" :span="2">
+              </ui-descriptions-item>
+              <ui-descriptions-item label="日志文件路径" :span="2">
                 <div v-if="currentAccessRotateFile" class="rotate-file-indicator">
-                  <el-tag type="warning" size="small" style="margin-right: 8px;">
+                  <ui-tag type="warning" size="small" style="margin-right: 8px;">
                     分片文件
-                  </el-tag>
-                  <el-text class="log-path" size="small">
+                  </ui-tag>
+                  <ui-text class="log-path" size="small">
                     {{ currentAccessRotateFile }}
-                  </el-text>
-                  <el-button
+                  </ui-text>
+                  <ui-button
                     type="text"
                     size="small"
                     @click="selectAccessRotateFile({ filename: currentAccessRotateFile })"
                     style="margin-left: 8px; padding: 0 4px;"
                   >
                     返回当前日志
-                  </el-button>
+                  </ui-button>
                 </div>
-                <el-text v-else-if="accessLogInfo.log_path" class="log-path" size="small">
+                <ui-text v-else-if="accessLogInfo.log_path" class="log-path" size="small">
                   {{ accessLogInfo.log_path }}
-                </el-text>
+                </ui-text>
                 <span v-else class="text-muted">未知</span>
-              </el-descriptions-item>
-              <el-descriptions-item label="日志文件大小">
-                <el-text v-if="accessLogInfo.log_size_bytes != null" type="info" size="small">
+              </ui-descriptions-item>
+              <ui-descriptions-item label="日志文件大小">
+                <ui-text v-if="accessLogInfo.log_size_bytes != null" type="info" size="small">
                   {{ formatFileSize(accessLogInfo.log_size_bytes) }}
-                </el-text>
+                </ui-text>
                 <span v-else class="text-muted">未知</span>
-              </el-descriptions-item>
-              <el-descriptions-item v-if="accessLogInfo.nginx_version_detail" label="版本详情" :span="2">
-                <el-text type="info" size="small">{{ accessLogInfo.nginx_version_detail }}</el-text>
-              </el-descriptions-item>
-            </el-descriptions>
+              </ui-descriptions-item>
+              <ui-descriptions-item v-if="accessLogInfo.nginx_version_detail" label="版本详情" :span="2">
+                <ui-text type="info" size="small">{{ accessLogInfo.nginx_version_detail }}</ui-text>
+              </ui-descriptions-item>
+            </ui-descriptions>
           </div>
           <div class="log-rotate-section" v-if="accessRotateFiles.length > 0">
             <div class="rotate-files-header">
               <span class="rotate-files-title">访问日志分片 ({{ accessRotateFiles.length }})</span>
             </div>
             <div class="rotate-files-list">
-              <el-tag
+              <ui-tag
                 v-for="file in accessRotateFiles"
                 :key="file.filename"
                 size="small"
@@ -94,13 +94,13 @@
                 style="cursor: pointer;"
               >
                 {{ file.date }}
-              </el-tag>
+              </ui-tag>
             </div>
           </div>
           <div class="log-filters">
-            <el-form :inline="true" class="filter-form">
-              <el-form-item label="关键词搜索">
-                <el-input
+            <ui-form :inline="true" class="filter-form">
+              <ui-form-item label="关键词搜索">
+                <ui-input
                   v-model="accessFilters.keyword"
                   placeholder="输入关键词搜索日志"
                   clearable
@@ -109,12 +109,12 @@
                   @keyup.enter="handleAccessSearch"
                 >
                   <template #prefix>
-                    <el-icon><Search /></el-icon>
+                    <ui-icon><Search /></ui-icon>
                   </template>
-                </el-input>
-              </el-form-item>
-              <el-form-item label="日期范围">
-                <el-date-picker
+                </ui-input>
+              </ui-form-item>
+              <ui-form-item label="日期范围">
+                <ui-date-picker
                   v-model="accessFilters.dateRange"
                   type="datetimerange"
                   range-separator="至"
@@ -124,34 +124,36 @@
                   value-format="YYYY-MM-DD HH:mm:ss"
                   @change="handleAccessSearch"
                 />
-              </el-form-item>
-              <el-form-item label="快捷选择">
+              </ui-form-item>
+              <ui-form-item label="快捷选择">
                 <div class="quick-time-buttons">
-                  <el-button size="small" @click="setAccessQuickTime(15)">15分钟</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(30)">30分钟</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(60)">1小时</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(60 * 3)">3小时</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(60 * 6)">6小时</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(60 * 12)">12小时</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(60 * 24)">1天</el-button>
-                  <el-button size="small" @click="setAccessQuickTime(60 * 24 * 7)">7天</el-button>
+                  <ui-button size="small" @click="setAccessQuickTime(15)">15分钟</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(30)">30分钟</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(60)">1小时</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(60 * 3)">3小时</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(60 * 6)">6小时</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(60 * 12)">12小时</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(60 * 24)">1天</ui-button>
+                  <ui-button size="small" @click="setAccessQuickTime(60 * 24 * 7)">7天</ui-button>
                 </div>
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" @click="handleAccessSearch">
-                  <el-icon><Search /></el-icon>
-                  <span class="btn-label">搜索</span>
-                </el-button>
-                <el-button type="info" @click="handleAccessReset">
-                  <el-icon><RefreshRight /></el-icon>
-                  <span class="btn-label">重置</span>
-                </el-button>
-              </el-form-item>
-            </el-form>
+              </ui-form-item>
+              <ui-form-item>
+                <div class="button-group">
+                  <ui-button type="primary" @click="handleAccessSearch">
+                    <ui-icon><Search /></ui-icon>
+                    <span class="btn-label">搜索</span>
+                  </ui-button>
+                  <ui-button type="info" @click="handleAccessReset">
+                    <ui-icon><RefreshRight /></ui-icon>
+                    <span class="btn-label">重置</span>
+                  </ui-button>
+                </div>
+              </ui-form-item>
+            </ui-form>
           </div>
           <div v-loading="loading" class="log-content">
             <div v-if="!loading && (!accessLogs || accessLogs.length === 0)" class="empty-log">
-              <el-empty description="暂无访问日志" />
+              <ui-empty description="暂无访问日志" />
             </div>
             <LogViewer
               v-else
@@ -165,20 +167,20 @@
               v-if="accessHasMore && !loading && accessLogs && accessLogs.length > 0"
               class="load-more-wrapper"
             >
-              <el-button size="small" type="info" @click="loadMoreAccess">
+              <ui-button size="small" type="info" @click="loadMoreAccess">
                 加载更早的 100 行
-              </el-button>
+              </ui-button>
             </div>
           </div>
-        </el-card>
-      </el-tab-pane>
-      <el-tab-pane label="错误日志" name="error">
-        <el-card>
+        </ui-card>
+      </ui-tab-pane>
+      <ui-tab-pane label="错误日志" name="error">
+        <ui-card>
           <template #header>
             <div class="card-header">
               <span>错误日志</span>
               <div class="header-actions">
-                <el-button 
+                <ui-button
                   type="warning"
                   size="small" 
                   @click="handleRotateLogs"
@@ -186,8 +188,8 @@
                   :icon="Switch"
                 >
                   立即分片
-                </el-button>
-                <el-button 
+                </ui-button>
+                <ui-button
                   :icon="Refresh" 
                   circle 
                   size="small" 
@@ -198,61 +200,61 @@
             </div>
           </template>
           <div class="log-info">
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item v-if="errorLogInfo.install_path" label="当前 Nginx 目录">
-                <el-text type="info" size="small">{{ errorLogInfo.install_path }}</el-text>
-              </el-descriptions-item>
-              <el-descriptions-item label="当前 Nginx 版本">
-                <el-tooltip
+            <ui-descriptions :column="2" border size="small">
+              <ui-descriptions-item v-if="errorLogInfo.install_path" label="当前 Nginx 目录">
+                <ui-text type="info" size="small">{{ errorLogInfo.install_path }}</ui-text>
+              </ui-descriptions-item>
+              <ui-descriptions-item label="当前 Nginx 版本">
+                <ui-tooltip
                   v-if="errorLogInfo.nginx_version"
                   :content="errorLogInfo.nginx_version"
                   placement="top"
                 >
-                  <el-tag type="info" size="small" class="version-tag">
+                  <ui-tag type="info" size="small" class="version-tag">
                     {{ formatShortVersion(errorLogInfo.nginx_version) }}
-                  </el-tag>
-                </el-tooltip>
+                  </ui-tag>
+                </ui-tooltip>
                 <span v-else class="text-muted">未知</span>
-              </el-descriptions-item>
-              <el-descriptions-item label="日志文件路径" :span="2">
+              </ui-descriptions-item>
+              <ui-descriptions-item label="日志文件路径" :span="2">
                 <div v-if="currentErrorRotateFile" class="rotate-file-indicator">
-                  <el-tag type="warning" size="small" style="margin-right: 8px;">
+                  <ui-tag type="warning" size="small" style="margin-right: 8px;">
                     分片文件
-                  </el-tag>
-                  <el-text class="log-path" size="small">
+                  </ui-tag>
+                  <ui-text class="log-path" size="small">
                     {{ currentErrorRotateFile }}
-                  </el-text>
-                  <el-button
+                  </ui-text>
+                  <ui-button
                     type="text"
                     size="small"
                     @click="selectErrorRotateFile({ filename: currentErrorRotateFile })"
                     style="margin-left: 8px; padding: 0 4px;"
                   >
                     返回当前日志
-                  </el-button>
+                  </ui-button>
                 </div>
-                <el-text v-else-if="errorLogInfo.log_path" class="log-path" size="small">
+                <ui-text v-else-if="errorLogInfo.log_path" class="log-path" size="small">
                   {{ errorLogInfo.log_path }}
-                </el-text>
+                </ui-text>
                 <span v-else class="text-muted">未知</span>
-              </el-descriptions-item>
-              <el-descriptions-item label="日志文件大小">
-                <el-text v-if="errorLogInfo.log_size_bytes != null" type="info" size="small">
+              </ui-descriptions-item>
+              <ui-descriptions-item label="日志文件大小">
+                <ui-text v-if="errorLogInfo.log_size_bytes != null" type="info" size="small">
                   {{ formatFileSize(errorLogInfo.log_size_bytes) }}
-                </el-text>
+                </ui-text>
                 <span v-else class="text-muted">未知</span>
-              </el-descriptions-item>
-              <el-descriptions-item v-if="errorLogInfo.nginx_version_detail" label="版本详情" :span="2">
-                <el-text type="info" size="small">{{ errorLogInfo.nginx_version_detail }}</el-text>
-              </el-descriptions-item>
-            </el-descriptions>
+              </ui-descriptions-item>
+              <ui-descriptions-item v-if="errorLogInfo.nginx_version_detail" label="版本详情" :span="2">
+                <ui-text type="info" size="small">{{ errorLogInfo.nginx_version_detail }}</ui-text>
+              </ui-descriptions-item>
+            </ui-descriptions>
           </div>
           <div class="log-rotate-section" v-if="errorRotateFiles.length > 0">
             <div class="rotate-files-header">
               <span class="rotate-files-title">错误日志分片 ({{ errorRotateFiles.length }})</span>
             </div>
             <div class="rotate-files-list">
-              <el-tag
+              <ui-tag
                 v-for="file in errorRotateFiles"
                 :key="file.filename"
                 size="small"
@@ -265,13 +267,13 @@
                 style="cursor: pointer;"
               >
                 {{ file.date }}
-              </el-tag>
+              </ui-tag>
             </div>
           </div>
           <div class="log-filters">
-            <el-form :inline="true" class="filter-form">
-              <el-form-item label="关键词搜索">
-                <el-input
+            <ui-form :inline="true" class="filter-form">
+              <ui-form-item label="关键词搜索">
+                <ui-input
                   v-model="errorFilters.keyword"
                   placeholder="输入关键词搜索日志"
                   clearable
@@ -280,12 +282,12 @@
                   @keyup.enter="handleErrorSearch"
                 >
                   <template #prefix>
-                    <el-icon><Search /></el-icon>
+                    <ui-icon><Search /></ui-icon>
                   </template>
-                </el-input>
-              </el-form-item>
-              <el-form-item label="日期范围">
-                <el-date-picker
+                </ui-input>
+              </ui-form-item>
+              <ui-form-item label="日期范围">
+                <ui-date-picker
                   v-model="errorFilters.dateRange"
                   type="datetimerange"
                   range-separator="至"
@@ -295,34 +297,36 @@
                   value-format="YYYY-MM-DD HH:mm:ss"
                   @change="handleErrorSearch"
                 />
-              </el-form-item>
-              <el-form-item label="快捷选择">
+              </ui-form-item>
+              <ui-form-item label="快捷选择">
                 <div class="quick-time-buttons">
-                  <el-button size="small" @click="setErrorQuickTime(15)">15分钟</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(30)">30分钟</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(60)">1小时</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(60 * 3)">3小时</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(60 * 6)">6小时</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(60 * 12)">12小时</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(60 * 24)">1天</el-button>
-                  <el-button size="small" @click="setErrorQuickTime(60 * 24 * 7)">7天</el-button>
+                  <ui-button size="small" @click="setErrorQuickTime(15)">15分钟</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(30)">30分钟</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(60)">1小时</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(60 * 3)">3小时</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(60 * 6)">6小时</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(60 * 12)">12小时</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(60 * 24)">1天</ui-button>
+                  <ui-button size="small" @click="setErrorQuickTime(60 * 24 * 7)">7天</ui-button>
                 </div>
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" @click="handleErrorSearch">
-                  <el-icon><Search /></el-icon>
-                  <span class="btn-label">搜索</span>
-                </el-button>
-                <el-button type="info" @click="handleErrorReset">
-                  <el-icon><RefreshRight /></el-icon>
-                  <span class="btn-label">重置</span>
-                </el-button>
-              </el-form-item>
-            </el-form>
+              </ui-form-item>
+              <ui-form-item>
+                <div class="button-group">
+                  <ui-button type="primary" @click="handleErrorSearch">
+                    <ui-icon><Search /></ui-icon>
+                    <span class="btn-label">搜索</span>
+                  </ui-button>
+                  <ui-button type="info" @click="handleErrorReset">
+                    <ui-icon><RefreshRight /></ui-icon>
+                    <span class="btn-label">重置</span>
+                  </ui-button>
+                </div>
+              </ui-form-item>
+            </ui-form>
           </div>
           <div v-loading="loading" class="log-content">
             <div v-if="!loading && (!errorLogs || errorLogs.length === 0)" class="empty-log">
-              <el-empty description="暂无错误日志" />
+              <ui-empty description="暂无错误日志" />
             </div>
             <LogViewer
               v-else
@@ -336,22 +340,22 @@
               v-if="errorHasMore && !loading && errorLogs && errorLogs.length > 0"
               class="load-more-wrapper"
             >
-              <el-button size="small" type="info" @click="loadMoreError">
+              <ui-button size="small" type="info" @click="loadMoreError">
                 加载更早的 100 行
-              </el-button>
+              </ui-button>
             </div>
           </div>
-        </el-card>
-      </el-tab-pane>
-    </el-tabs>
+        </ui-card>
+      </ui-tab-pane>
+    </ui-tabs>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { logsApi } from '../api/logs'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Search, RefreshRight, Switch } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
+import { Refresh, Search, RefreshRight, Switch } from '@/components/icons'
 import LogViewer from '../components/LogViewer.vue'
 import { formatDateTime } from '../utils/date'
 
@@ -432,7 +436,6 @@ const loadLogs = async () => {
       const endDate = accessFilters.value.dateRange?.[1] || null
       const rotateFile = accessFilters.value.selectedRotateFile || null
       const response = await logsApi.getAccessLogs(accessPage.value, ACCESS_PAGE_SIZE, keyword, startDate, endDate, rotateFile)
-      console.log('访问日志响应:', response)
       if (response && response.success !== false) {
         accessLogs.value = Array.isArray(response.logs) ? response.logs : []
         // 更新日志信息
@@ -465,7 +468,6 @@ const loadLogs = async () => {
       const endDate = errorFilters.value.dateRange?.[1] || null
       const rotateFile = errorFilters.value.selectedRotateFile || null
       const response = await logsApi.getErrorLogs(errorPage.value, ERROR_PAGE_SIZE, keyword, startDate, endDate, rotateFile)
-      console.log('错误日志响应:', response)
       if (response && response.success !== false) {
         errorLogs.value = Array.isArray(response.logs) ? response.logs : []
         // 更新日志信息
@@ -516,7 +518,6 @@ const loadMoreAccess = async () => {
     const endDate = accessFilters.value.dateRange?.[1] || null
     const rotateFile = accessFilters.value.selectedRotateFile || null
     const response = await logsApi.getAccessLogs(accessPage.value, ACCESS_PAGE_SIZE, keyword, startDate, endDate, rotateFile)
-    console.log('访问日志（加载更多）响应:', response)
     if (response && response.success !== false) {
       const newLogs = Array.isArray(response.logs) ? response.logs : []
       // 更早的日志追加到当前列表顶部
@@ -551,7 +552,6 @@ const loadMoreError = async () => {
     const endDate = errorFilters.value.dateRange?.[1] || null
     const rotateFile = errorFilters.value.selectedRotateFile || null
     const response = await logsApi.getErrorLogs(errorPage.value, ERROR_PAGE_SIZE, keyword, startDate, endDate, rotateFile)
-    console.log('错误日志（加载更多）响应:', response)
     if (response && response.success !== false) {
       const newLogs = Array.isArray(response.logs) ? response.logs : []
       errorLogs.value = [...newLogs, ...errorLogs.value]
@@ -788,10 +788,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.logs-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -805,12 +801,12 @@ onMounted(() => {
 }
 
 .log-info {
-  margin-bottom: 15px;
+  margin-bottom: 16px;
 }
 
 .log-filters {
-  margin-bottom: 15px;
-  padding: 15px;
+  margin-bottom: 16px;
+  padding: 16px;
   background-color: var(--bg-tertiary);
   border-radius: 4px;
   border: 1px solid var(--border-color);
@@ -820,7 +816,7 @@ onMounted(() => {
   margin: 0;
 }
 
-.filter-form .el-form-item {
+.filter-form .ui-form-item {
   margin-bottom: 10px;
 }
 
@@ -830,7 +826,7 @@ onMounted(() => {
   gap: 5px;
 }
 
-.quick-time-buttons .el-button {
+.quick-time-buttons .ui-button {
   margin: 0;
 }
 
@@ -862,21 +858,21 @@ onMounted(() => {
   border-radius: 4px;
 }
 
-.logs-tabs :deep(.el-tabs__header) {
-  margin-bottom: 15px;
+.logs-tabs :deep(.ui-tabs__header) {
+  margin-bottom: 16px;
 }
 
-.logs-tabs :deep(.el-tabs__nav-wrap) {
+.logs-tabs :deep(.ui-tabs__nav-wrap) {
   padding: 0;
 }
 
-.logs-tabs :deep(.el-tabs__nav) {
+.logs-tabs :deep(.ui-tabs__nav) {
   display: flex;
   gap: 12px;
   width: 100%;
 }
 
-.logs-tabs :deep(.el-tabs__item) {
+.logs-tabs :deep(.ui-tabs__item) {
   flex: 1;
   text-align: center;
   border: 1px solid var(--border-color);
@@ -885,7 +881,7 @@ onMounted(() => {
   transition: all 0.2s ease;
 }
 
-.logs-tabs :deep(.el-tabs__item.is-active) {
+.logs-tabs :deep(.ui-tabs__item.is-active) {
   background-color: var(--nginx-green);
   color: var(--text-white) !important;
   border-color: var(--nginx-green);
@@ -893,12 +889,12 @@ onMounted(() => {
   box-shadow: 0 4px 12px rgba(0, 150, 57, 0.35);
 }
 
-.logs-tabs :deep(.el-tabs__item:not(.is-active):hover) {
+.logs-tabs :deep(.ui-tabs__item:not(.is-active):hover) {
   border-color: var(--nginx-green);
   color: var(--nginx-green) !important;
 }
 
-.logs-tabs :deep(.el-tabs__active-bar) {
+.logs-tabs :deep(.ui-tabs__active-bar) {
   display: none;
 }
 
@@ -918,9 +914,9 @@ onMounted(() => {
 }
 
 .log-rotate-section {
-  margin-top: 15px;
-  margin-bottom: 15px;
-  padding: 10px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  padding: 12px;
   background-color: var(--bg-tertiary);
   border-radius: 4px;
   border: 1px solid var(--border-color);
@@ -948,7 +944,7 @@ onMounted(() => {
   margin-bottom: 6px;
 }
 
-.rotate-file-tag :deep(.el-tag__close) {
+.rotate-file-tag :deep(.ui-tag__close) {
   margin-left: 4px;
 }
 
@@ -959,5 +955,3 @@ onMounted(() => {
 }
 
 </style>
-
-

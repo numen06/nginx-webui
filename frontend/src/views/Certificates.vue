@@ -1,64 +1,64 @@
 <template>
-  <div class="certificates-page">
-    <el-card>
+  <div class="certificates-page page-shell">
+    <ui-card>
       <template #header>
         <div class="card-header">
           <div>
             <span class="card-title">证书管理</span>
             <span class="card-subtitle">证书以域名为标识</span>
           </div>
-          <div>
-            <el-button type="primary" @click="handleRequest">
-              <el-icon><DocumentAdd /></el-icon>
+          <div class="button-group">
+            <ui-button type="primary" @click="handleRequest">
+              <ui-icon><DocumentAdd /></ui-icon>
               <span class="btn-label">申请证书</span>
-            </el-button>
-            <el-button type="cyan" @click="handleUpload">
-              <el-icon><UploadFilled /></el-icon>
+            </ui-button>
+            <ui-button type="cyan" @click="handleUpload">
+              <ui-icon><UploadFilled /></ui-icon>
               <span class="btn-label">上传证书</span>
-            </el-button>
-            <el-tooltip content="从原环境导出证书后在此导入，并引导在本机申请 Let’s Encrypt 以启用自动续签" placement="bottom">
-              <el-button type="success" plain @click="openMigrateWizard">
-                <el-icon><Promotion /></el-icon>
+            </ui-button>
+            <ui-tooltip content="从原环境导出证书后在此导入，并引导在本机申请 Let’s Encrypt 以启用自动续签" placement="bottom">
+              <ui-button type="success" plain @click="openMigrateWizard">
+                <ui-icon><Promotion /></ui-icon>
                 <span class="btn-label">迁移与自动续签</span>
-              </el-button>
-            </el-tooltip>
-            <el-tooltip
+              </ui-button>
+            </ui-tooltip>
+            <ui-tooltip
               content="执行 certbot 模拟续签（dry-run），检测本机是否具备自动续签条件，不会改动真实证书"
               placement="bottom"
             >
-              <el-button
+              <ui-button
                 type="info"
                 plain
                 :loading="testingAutoRenewEnv"
                 @click="handleTestAutoRenewEnv"
               >
-                <el-icon><Operation /></el-icon>
+                <ui-icon><Operation /></ui-icon>
                 <span class="btn-label">测试自动续签环境</span>
-              </el-button>
-            </el-tooltip>
-            <el-tooltip
+              </ui-button>
+            </ui-tooltip>
+            <ui-tooltip
               content="取消当前挂起的 DNS 验证会话，释放 Certbot 占用"
               placement="bottom"
             >
-              <el-button
+              <ui-button
                 type="warning"
                 plain
                 :loading="clearingCertbotSessions"
                 @click="handleClearCertbotSessions"
               >
-                <el-icon><CloseBold /></el-icon>
+                <ui-icon><CloseBold /></ui-icon>
                 <span class="btn-label">清理卡住任务</span>
-              </el-button>
-            </el-tooltip>
+              </ui-button>
+            </ui-tooltip>
           </div>
         </div>
       </template>
 
-      <el-collapse v-model="migrationGuideOpen" class="cert-migration-collapse">
-        <el-collapse-item name="guide">
+      <ui-collapse v-model="migrationGuideOpen" class="cert-migration-collapse">
+        <ui-collapse-item name="guide">
           <template #title>
             <span class="migration-guide-title">导出证书 → 在本系统导入（与自动续签说明）</span>
-            <el-tag size="small" type="info" class="migration-guide-tag">常见流程</el-tag>
+            <ui-tag size="small" type="info" class="migration-guide-tag">常见流程</ui-tag>
           </template>
           <div class="migration-guide-body">
             <p class="migration-guide-lead">
@@ -78,38 +78,38 @@
                 <strong>环境自检</strong>：「<strong>测试自动续签环境</strong>」检查本机 <code>certbot renew</code> 是否正常（不改动真实证书）。
               </li>
             </ol>
-            <el-alert type="info" :closable="false" show-icon class="migration-guide-alert">
+            <ui-alert type="info" :closable="false" show-icon class="migration-guide-alert">
               <template #title>
                 <span class="migration-alert-title">与「仅上传」的关系</span>
               </template>
               <p class="migration-alert-text">
                 导出再导入与手动上传是同一类操作：都能立刻用起来；<strong>自动续签</strong>依赖本机 Certbot 已签发该域名，通常要在本系统<strong>申请证书</strong>一次，而不是只靠导入文件。
               </p>
-            </el-alert>
+            </ui-alert>
             <p class="migration-guide-foot">
               需要分步引导时，可直接使用上方「<strong>迁移与自动续签</strong>」按钮打开向导。可复制给客户的一段话与更多说明见
               <code>docs/cert-migration.md</code>。
             </p>
           </div>
-        </el-collapse-item>
-      </el-collapse>
+        </ui-collapse-item>
+      </ui-collapse>
 
-      <el-table :data="certificateList" style="width: 100%">
-        <el-table-column prop="domain" label="证书名称（域名）" width="200" fixed="left">
+      <ui-table :data="certificateList" style="width: 100%">
+        <ui-table-column prop="domain" label="证书名称（域名）" width="200" fixed="left">
           <template #default="scope">
             <div class="domain-cell">
-              <el-tag type="primary" size="small">{{ scope.row.domain }}</el-tag>
-              <el-tag
+              <ui-tag type="primary" size="small">{{ scope.row.domain }}</ui-tag>
+              <ui-tag
                 v-if="!isIssuedCert(scope.row)"
                 :type="certStatusType(scope.row.status)"
                 size="small"
               >
                 {{ certStatusLabel(scope.row.status) }}
-              </el-tag>
+              </ui-tag>
             </div>
           </template>
-        </el-table-column>
-        <el-table-column label="证书路径 / 私钥路径" min-width="600">
+        </ui-table-column>
+        <ui-table-column label="证书路径 / 私钥路径" min-width="600">
           <template #default="scope">
             <div v-if="isIssuedCert(scope.row)" class="paths-cell">
               <div class="path-item">
@@ -117,30 +117,30 @@
                 <span class="path-text" :title="scope.row.cert_path || '-'">
                   {{ scope.row.cert_path || '-' }}
                 </span>
-                <el-tooltip content="复制证书路径" :show-after="200">
-                  <el-button
+                <ui-tooltip content="复制证书路径" :show-after="200">
+                  <ui-button
                     size="small"
                     text
                     :icon="CopyDocument"
                     :disabled="!scope.row.cert_path"
                     @click="handleCopy(scope.row.cert_path)"
                   />
-                </el-tooltip>
+                </ui-tooltip>
               </div>
               <div class="path-item">
                 <span class="path-label">私钥：</span>
                 <span class="path-text" :title="scope.row.key_path || '-'">
                   {{ scope.row.key_path || '-' }}
                 </span>
-                <el-tooltip content="复制私钥路径" :show-after="200">
-                  <el-button
+                <ui-tooltip content="复制私钥路径" :show-after="200">
+                  <ui-button
                     size="small"
                     text
                     :icon="CopyDocument"
                     :disabled="!scope.row.key_path"
                     @click="handleCopy(scope.row.key_path)"
                   />
-                </el-tooltip>
+                </ui-tooltip>
               </div>
               <div class="path-item">
                 <span class="path-label">PEM：</span>
@@ -150,15 +150,15 @@
                 >
                   {{ scope.row.pem_path || '-' }}
                 </span>
-                <el-tooltip content="复制证书链 PEM 路径（与 .crt 同内容，常用作 ssl_certificate）" :show-after="200">
-                  <el-button
+                <ui-tooltip content="复制证书链 PEM 路径（与 .crt 同内容，常用作 ssl_certificate）" :show-after="200">
+                  <ui-button
                     size="small"
                     text
                     :icon="CopyDocument"
                     :disabled="!scope.row.pem_path"
                     @click="handleCopy(scope.row.pem_path)"
                   />
-                </el-tooltip>
+                </ui-tooltip>
               </div>
             </div>
             <div v-else class="paths-cell">
@@ -167,30 +167,30 @@
                 <span class="path-text" :title="scope.row.dns_record_name || '-'">
                   {{ scope.row.dns_record_name || '-' }}
                 </span>
-                <el-tooltip content="复制 TXT 记录名" :show-after="200">
-                  <el-button
+                <ui-tooltip content="复制 TXT 记录名" :show-after="200">
+                  <ui-button
                     size="small"
                     text
                     :icon="CopyDocument"
                     :disabled="!scope.row.dns_record_name"
                     @click="handleCopy(scope.row.dns_record_name)"
                   />
-                </el-tooltip>
+                </ui-tooltip>
               </div>
               <div class="path-item">
                 <span class="path-label">TXT：</span>
                 <span class="path-text" :title="scope.row.dns_record_value || '-'">
                   {{ scope.row.dns_record_value || '-' }}
                 </span>
-                <el-tooltip content="复制 TXT 记录值" :show-after="200">
-                  <el-button
+                <ui-tooltip content="复制 TXT 记录值" :show-after="200">
+                  <ui-button
                     size="small"
                     text
                     :icon="CopyDocument"
                     :disabled="!scope.row.dns_record_value"
                     @click="handleCopy(scope.row.dns_record_value)"
                   />
-                </el-tooltip>
+                </ui-tooltip>
               </div>
               <div v-if="scope.row.issue_error || scope.row.issue_output" class="path-item">
                 <span class="path-label">进度：</span>
@@ -200,15 +200,15 @@
               </div>
             </div>
           </template>
-        </el-table-column>
-        <el-table-column label="状态" width="120" align="center">
+        </ui-table-column>
+        <ui-table-column label="状态" width="120" align="center">
           <template #default="scope">
-            <el-tag :type="certStatusType(scope.row.status)" size="small">
+            <ui-tag :type="certStatusType(scope.row.status)" size="small">
               {{ certStatusLabel(scope.row.status) }}
-            </el-tag>
+            </ui-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="valid_to" label="过期时间" width="180" align="center">
+        </ui-table-column>
+        <ui-table-column prop="valid_to" label="过期时间" width="180" align="center">
           <template #default="scope">
             <div class="expiry-cell">
               <span :class="{ 'expiring-soon': scope.row.days_until_expiry !== null && scope.row.days_until_expiry <= 30 && scope.row.days_until_expiry > 0, 'expired': scope.row.days_until_expiry !== null && scope.row.days_until_expiry <= 0 }">
@@ -219,10 +219,10 @@
               </span>
             </div>
           </template>
-        </el-table-column>
-        <el-table-column label="自动续期" width="100" align="center">
+        </ui-table-column>
+        <ui-table-column label="自动续期" width="100" align="center">
           <template #default="scope">
-            <el-switch
+            <ui-switch
               v-model="scope.row.auto_renew"
               @change="handleToggleAutoRenew(scope.row)"
               :loading="scope.row._toggling"
@@ -230,12 +230,12 @@
               size="small"
             />
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="280" align="center">
+        </ui-table-column>
+        <ui-table-column label="操作" width="280" align="center">
           <template #default="scope">
             <div class="action-buttons">
-              <el-tooltip content="下载证书包（ZIP）" placement="top">
-                <el-button
+              <ui-tooltip content="下载证书包（ZIP）" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="info"
@@ -244,11 +244,11 @@
                   :disabled="!isIssuedCert(scope.row)"
                   @click="handleDownload(scope.row)"
                 >
-                  <el-icon><Download /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="重新上传" placement="top">
-                <el-button
+                  <ui-icon><Download /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip content="重新上传" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="primary"
@@ -256,11 +256,11 @@
                   :disabled="!isIssuedCert(scope.row)"
                   @click="handleReupload(scope.row)"
                 >
-                  <el-icon><UploadFilled /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="续期" placement="top">
-                <el-button
+                  <ui-icon><UploadFilled /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip content="续期" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="warning"
@@ -268,11 +268,11 @@
                   :disabled="!isIssuedCert(scope.row)"
                   @click="handleRenew(scope.row)"
                 >
-                  <el-icon><RefreshRight /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="验证证书" placement="top">
-                <el-button
+                  <ui-icon><RefreshRight /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip content="验证证书" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="success"
@@ -281,28 +281,28 @@
                   :disabled="!isIssuedCert(scope.row)"
                   @click="handleVerifyCert(scope.row)"
                 >
-                  <el-icon><CircleCheck /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="删除" placement="top">
-                <el-button
+                  <ui-icon><CircleCheck /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip content="删除" placement="top">
+                <ui-button
                   circle
                   size="small"
                   type="danger"
                   class="action-icon-btn"
                   @click="handleDelete(scope.row)"
                 >
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </el-tooltip>
+                  <ui-icon><Delete /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
             </div>
           </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        </ui-table-column>
+      </ui-table>
+    </ui-card>
 
     <!-- 申请证书对话框 -->
-    <el-dialog
+    <ui-dialog
       v-model="requestDialogVisible"
       title="申请 Let's Encrypt 免费证书"
       width="620px"
@@ -311,25 +311,25 @@
       class="cert-request-dialog"
       @closed="resetRequestWizard"
     >
-      <el-steps
+      <ui-steps
         v-if="requestForm.validation_method === 'dns'"
         :active="dnsWizardStep"
         finish-status="success"
         align-center
         class="cert-request-steps"
       >
-        <el-step title="填写信息" />
-        <el-step title="配置 DNS 并验证" />
-      </el-steps>
+        <ui-step title="填写信息" />
+        <ui-step title="配置 DNS 并验证" />
+      </ui-steps>
 
       <!-- DNS 步骤 1：配置 TXT -->
       <div v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1" class="dns-wizard-panel">
-        <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
+        <ui-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px;">
           <template #title>
             <span class="dns-alert-title">请在域名 DNS 控制台新增 1 条 TXT 记录（把下面字段一字不差填进去）。同一未完成会话内记录值固定；刷新后点「恢复未完成」或再次「下一步」均可复用。</span>
           </template>
-        </el-alert>
-        <el-card shadow="never" class="dns-guide-card">
+        </ui-alert>
+        <ui-card shadow="never" class="dns-guide-card">
           <template #header>
             <span class="dns-guide-title">第 1 步：进入域名 DNS 管理</span>
           </template>
@@ -338,62 +338,62 @@
             <li>找到域名 <span class="mono-text">{{ requestForm.domain || '-' }}</span> 的 DNS 解析页面</li>
             <li>点击“新增记录”或“添加解析”</li>
           </ol>
-        </el-card>
+        </ui-card>
 
-        <el-card shadow="never" class="dns-guide-card">
+        <ui-card shadow="never" class="dns-guide-card">
           <template #header>
             <span class="dns-guide-title">第 2 步：按下表填写记录</span>
           </template>
-          <el-descriptions :column="1" border size="small" class="dns-rec-desc">
-            <el-descriptions-item label="记录类型">TXT</el-descriptions-item>
-            <el-descriptions-item label="主机记录 / Name">
+          <ui-descriptions :column="1" border size="small" class="dns-rec-desc">
+            <ui-descriptions-item label="记录类型">TXT</ui-descriptions-item>
+            <ui-descriptions-item label="主机记录 / Name">
               <span class="mono-text">{{ dnsHostRecord || dnsRecordName || '-' }}</span>
-              <el-button size="small" text type="primary" :disabled="!dnsHostRecord && !dnsRecordName" @click="handleCopy(dnsHostRecord || dnsRecordName)">复制</el-button>
+              <ui-button size="small" text type="primary" :disabled="!dnsHostRecord && !dnsRecordName" @click="handleCopy(dnsHostRecord || dnsRecordName)">复制</ui-button>
               <div class="form-tip">如果平台要求填写完整主机名，也可填：{{ dnsRecordName || '-' }}</div>
-            </el-descriptions-item>
-            <el-descriptions-item label="记录值 / Value">
+            </ui-descriptions-item>
+            <ui-descriptions-item label="记录值 / Value">
               <span class="mono-text dns-value">{{ dnsRecordValue || '-' }}</span>
-              <el-button size="small" text type="primary" :disabled="!dnsRecordValue" @click="handleCopy(dnsRecordValue)">复制</el-button>
-            </el-descriptions-item>
-            <el-descriptions-item label="TTL">默认即可（建议 600 秒或 Auto）</el-descriptions-item>
-          </el-descriptions>
-          <el-alert type="info" :closable="false" class="dns-field-tip" show-icon>
+              <ui-button size="small" text type="primary" :disabled="!dnsRecordValue" @click="handleCopy(dnsRecordValue)">复制</ui-button>
+            </ui-descriptions-item>
+            <ui-descriptions-item label="TTL">默认即可（建议 600 秒或 Auto）</ui-descriptions-item>
+          </ui-descriptions>
+          <ui-alert type="info" :closable="false" class="dns-field-tip" show-icon>
             <template #title>
               不同平台字段名可能叫：主机记录/记录名/Name、记录值/Value/内容，含义相同。
             </template>
-          </el-alert>
-        </el-card>
+          </ui-alert>
+        </ui-card>
 
-        <el-card shadow="never" class="dns-guide-card">
+        <ui-card shadow="never" class="dns-guide-card">
           <template #header>
             <span class="dns-guide-title">第 3 步：保存并检测是否生效</span>
           </template>
           <p class="form-tip">保存后通常 1-10 分钟生效，最长可能更久。系统已保存为“待 DNS 生效”，会在后台自动检测并签发；你也可以留在这里手动检测。</p>
           <div class="dns-verify-row">
-            <el-checkbox v-model="dnsAutoPoll">每 5 秒自动检测一次</el-checkbox>
-            <el-tag v-if="dnsVerified" type="success" size="small">TXT 已匹配，可点击“完成申请”</el-tag>
-            <el-tag v-else-if="dnsLastCheckMsg" type="info" size="small">{{ dnsLastCheckMsg }}</el-tag>
+            <ui-checkbox v-model="dnsAutoPoll">每 5 秒自动检测一次</ui-checkbox>
+            <ui-tag v-if="dnsVerified" type="success" size="small">TXT 已匹配，可点击“完成申请”</ui-tag>
+            <ui-tag v-else-if="dnsLastCheckMsg" type="info" size="small">{{ dnsLastCheckMsg }}</ui-tag>
           </div>
-          <el-button type="primary" plain size="small" :loading="dnsChecking" @click="runDnsVerifyOnce">
+          <ui-button type="primary" plain size="small" :loading="dnsChecking" @click="runDnsVerifyOnce">
             立即检测 DNS
-          </el-button>
-          <el-alert type="error" :closable="false" class="dns-troubleshoot" show-icon>
+          </ui-button>
+          <ui-alert type="error" :closable="false" class="dns-troubleshoot" show-icon>
             <template #title>
               检测失败时请依次检查：1) 记录类型是否为 TXT；2) 主机记录是否填错（建议先用上方复制值）；3) 记录值是否有多余空格/换行；4) 是否改到了错误的域名。
             </template>
-          </el-alert>
-        </el-card>
+          </ui-alert>
+        </ui-card>
 
         <div class="dns-help-links">
           <span class="form-tip">常见 DNS 控制台教程：</span>
-          <el-link type="primary" href="https://docs.dnspod.cn/dns/console/manage/" target="_blank" :underline="false">腾讯云 DNSPod</el-link>
-          <el-link type="primary" href="https://help.aliyun.com/document_detail/29725.html" target="_blank" :underline="false">阿里云</el-link>
-          <el-link type="primary" href="https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/" target="_blank" :underline="false">Cloudflare</el-link>
+          <ui-link type="primary" href="https://docs.dnspod.cn/dns/console/manage/" target="_blank" :underline="false">腾讯云 DNSPod</ui-link>
+          <ui-link type="primary" href="https://help.aliyun.com/document_detail/29725.html" target="_blank" :underline="false">阿里云</ui-link>
+          <ui-link type="primary" href="https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/" target="_blank" :underline="false">Cloudflare</ui-link>
         </div>
       </div>
 
       <!-- 表单：HTTP 或 DNS 步骤 0 -->
-      <el-form
+      <ui-form
         v-if="requestForm.validation_method !== 'dns' || dnsWizardStep === 0"
         :model="requestForm"
         :rules="requestRules"
@@ -401,8 +401,8 @@
         label-width="100px"
         class="compact-form"
       >
-        <el-form-item label="域名" prop="domain">
-          <el-input
+        <ui-form-item label="域名" prop="domain">
+          <ui-input
             v-model="requestForm.domain"
             :placeholder="requestForm.validation_method === 'dns' ? '例如：example.com 或 *.example.com' : '例如：example.com'"
           />
@@ -410,37 +410,37 @@
             主域名，将用于证书申请和 Nginx 配置；
             DNS 验证支持通配符（如 *.example.com），HTTP 验证不支持通配符
           </div>
-        </el-form-item>
+        </ui-form-item>
 
-        <el-form-item label="邮箱地址" prop="email">
-          <el-input
+        <ui-form-item label="邮箱地址" prop="email">
+          <ui-input
             v-model="requestForm.email"
             placeholder="例如：admin@example.com"
           />
           <div class="form-tip">Let's Encrypt 会通过此邮箱发送证书到期通知</div>
-        </el-form-item>
+        </ui-form-item>
 
-        <el-form-item label="验证方式" prop="validation_method">
-          <el-radio-group v-model="requestForm.validation_method" @change="onValidationMethodChange">
-            <el-radio value="http">
+        <ui-form-item label="验证方式" prop="validation_method">
+          <ui-radio-group v-model="requestForm.validation_method" @change="onValidationMethodChange">
+            <ui-radio value="http">
               <span>HTTP 验证</span>
               <div class="radio-desc">需要域名已解析到本服务器且 Nginx 正在运行，80 端口可访问</div>
-            </el-radio>
-            <el-radio value="dns">
+            </ui-radio>
+            <ui-radio value="dns">
               <span>DNS 验证</span>
               <div class="radio-desc">在域名 DNS 中添加 TXT 记录；适合无法开放 80 端口的场景</div>
-            </el-radio>
-          </el-radio-group>
-        </el-form-item>
+            </ui-radio>
+          </ui-radio-group>
+        </ui-form-item>
 
-        <el-form-item v-if="requestForm.validation_method === 'dns'" label=" ">
-          <el-button type="primary" link @click="tryRestoreDnsSession">
+        <ui-form-item v-if="requestForm.validation_method === 'dns'" label=" ">
+          <ui-button type="primary" link @click="tryRestoreDnsSession">
             恢复未完成的 DNS 验证（刷新页面后记录值不变）
-          </el-button>
+          </ui-button>
           <div class="form-tip">同一域名在服务端会话未结束前会复用同一组 TXT；请勿反复点「下一步」以免启动新验证。</div>
-        </el-form-item>
+        </ui-form-item>
 
-        <el-alert
+        <ui-alert
           type="info"
           :closable="false"
           show-icon
@@ -451,64 +451,64 @@
               申请成功后将自动完成：1) 证书文件持久化存储  2) 自动修改 Nginx 配置添加 SSL  3) 开启自动续期
             </span>
           </template>
-        </el-alert>
-      </el-form>
+        </ui-alert>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="requestDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="requestDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
             @click="dnsWizardBack"
           >
             上一步
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 0"
             type="primary"
             :loading="requesting"
             :disabled="isRequestDisabled"
             @click="handleDnsWizardNext"
           >
-            <el-icon><Check /></el-icon>
+            <ui-icon><Check /></ui-icon>
             <span class="btn-label">下一步：获取 DNS 要求</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
             type="success"
             plain
             @click="saveDnsPendingAndClose"
           >
             保存并后台自动签发
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             v-if="requestForm.validation_method === 'dns' && dnsWizardStep === 1"
             type="primary"
             :loading="requesting"
             :disabled="!dnsVerified"
             @click="handleDnsCompleteIssue"
           >
-            <el-icon><Check /></el-icon>
+            <ui-icon><Check /></ui-icon>
             <span class="btn-label">完成申请（签发证书）</span>
-          </el-button>
-          <el-button
+          </ui-button>
+          <ui-button
             v-if="requestForm.validation_method === 'http'"
             type="primary"
             :loading="requesting"
             :disabled="isRequestDisabled"
             @click="handleRequestSubmitHttp"
           >
-            <el-icon><Check /></el-icon>
+            <ui-icon><Check /></ui-icon>
             <span class="btn-label">申请证书</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 上传证书对话框 -->
-    <el-dialog
+    <ui-dialog
       v-model="uploadDialogVisible"
       :title="uploadForm.certId ? '重新上传证书' : '上传证书'"
       width="600px"
@@ -516,9 +516,9 @@
       :close-on-click-modal="false"
       class="cert-upload-dialog"
     >
-      <el-form :model="uploadForm" :rules="uploadRules" ref="uploadFormRef" label-width="90px" class="compact-form">
-        <el-form-item label="域名" prop="domain">
-          <el-input 
+      <ui-form :model="uploadForm" :rules="uploadRules" ref="uploadFormRef" label-width="90px" class="compact-form">
+        <ui-form-item label="域名" prop="domain">
+          <ui-input
             v-model="uploadForm.domain" 
             :placeholder="uploadForm.certId ? '重新上传将替换现有证书' : '例如：example.com'"
             :disabled="!!uploadForm.certId"
@@ -526,19 +526,19 @@
           <div v-if="uploadForm.certId" class="form-tip">
             将替换域名 {{ uploadForm.domain }} 的现有证书和私钥
           </div>
-        </el-form-item>
+        </ui-form-item>
         
-        <el-form-item label="上传方式">
-          <el-radio-group v-model="uploadForm.mode" size="small">
-            <el-radio-button label="files">文件上传</el-radio-button>
-            <el-radio-button label="archive">压缩包</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
+        <ui-form-item label="上传方式">
+          <ui-radio-group v-model="uploadForm.mode" size="small">
+            <ui-radio-button label="files">文件上传</ui-radio-button>
+            <ui-radio-button label="archive">压缩包</ui-radio-button>
+          </ui-radio-group>
+        </ui-form-item>
 
         <!-- 文件上传模式 -->
         <template v-if="uploadForm.mode === 'files'">
-          <el-form-item label="证书文件" required>
-            <el-upload
+          <ui-form-item label="证书文件" required>
+            <ui-upload
               ref="certUploadRef"
               :auto-upload="false"
               :limit="1"
@@ -547,21 +547,21 @@
               accept=".crt,.pem,.cer"
               :show-file-list="false"
             >
-              <el-button size="small" type="primary">
-                <el-icon><FolderOpened /></el-icon>
+              <ui-button size="small" type="primary">
+                <ui-icon><FolderOpened /></ui-icon>
                 选择证书
-              </el-button>
-            </el-upload>
+              </ui-button>
+            </ui-upload>
             <div v-if="uploadForm.certFile" class="file-selected-compact">
               <span class="file-name-text">{{ uploadForm.certFile?.name || uploadForm.certFile?.raw?.name || '未知文件' }}</span>
-              <el-button size="small" text type="danger" @click="handleCertFileRemove">×</el-button>
+              <ui-button size="small" text type="danger" @click="handleCertFileRemove">×</ui-button>
             </div>
             <div v-if="uploadForm.domain && uploadForm.certFile && !checkFileNameMatch(uploadForm.certFile?.name || uploadForm.certFile?.raw?.name, uploadForm.domain)" class="file-warning-compact">
               ⚠️ 文件名与域名不匹配
             </div>
-          </el-form-item>
-          <el-form-item label="私钥文件" required>
-            <el-upload
+          </ui-form-item>
+          <ui-form-item label="私钥文件" required>
+            <ui-upload
               ref="keyUploadRef"
               :auto-upload="false"
               :limit="1"
@@ -570,25 +570,25 @@
               accept=".key,.pem"
               :show-file-list="false"
             >
-              <el-button size="small" type="primary">
-                <el-icon><FolderOpened /></el-icon>
+              <ui-button size="small" type="primary">
+                <ui-icon><FolderOpened /></ui-icon>
                 选择私钥
-              </el-button>
-            </el-upload>
+              </ui-button>
+            </ui-upload>
             <div v-if="uploadForm.keyFile" class="file-selected-compact">
               <span class="file-name-text">{{ uploadForm.keyFile?.name || uploadForm.keyFile?.raw?.name || '未知文件' }}</span>
-              <el-button size="small" text type="danger" @click="handleKeyFileRemove">×</el-button>
+              <ui-button size="small" text type="danger" @click="handleKeyFileRemove">×</ui-button>
             </div>
             <div v-if="uploadForm.domain && uploadForm.keyFile && !checkFileNameMatch(uploadForm.keyFile?.name || uploadForm.keyFile?.raw?.name, uploadForm.domain)" class="file-warning-compact">
               ⚠️ 文件名与域名不匹配
             </div>
-          </el-form-item>
+          </ui-form-item>
         </template>
 
         <!-- 压缩包模式 -->
         <template v-else>
-          <el-form-item label="压缩包" required>
-            <el-upload
+          <ui-form-item label="压缩包" required>
+            <ui-upload
               ref="archiveUploadRef"
               :auto-upload="false"
               :limit="1"
@@ -597,48 +597,48 @@
               accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2"
               :show-file-list="false"
             >
-              <el-button size="small" type="primary">
-                <el-icon><FolderOpened /></el-icon>
+              <ui-button size="small" type="primary">
+                <ui-icon><FolderOpened /></ui-icon>
                 选择压缩包
-              </el-button>
-            </el-upload>
+              </ui-button>
+            </ui-upload>
             <div v-if="uploadForm.archiveFile" class="file-selected-compact">
               <span class="file-name-text">{{ uploadForm.archiveFile.name }}</span>
-              <el-button size="small" text type="danger" @click="handleArchiveFileRemove">×</el-button>
+              <ui-button size="small" text type="danger" @click="handleArchiveFileRemove">×</ui-button>
             </div>
             <div class="upload-tip-small">支持 zip、tar.gz、tar.bz2 格式，自动识别证书与私钥</div>
-          </el-form-item>
+          </ui-form-item>
         </template>
-      </el-form>
+      </ui-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="info" @click="uploadDialogVisible = false">
-            <el-icon><CloseBold /></el-icon>
+          <ui-button type="info" @click="uploadDialogVisible = false">
+            <ui-icon><CloseBold /></ui-icon>
             <span class="btn-label">取消</span>
-          </el-button>
-            <el-button
+          </ui-button>
+            <ui-button
               type="primary"
               :loading="uploading"
               :disabled="isUploadDisabled"
               @click="handleUploadSubmit"
             >
-              <el-icon><Check /></el-icon>
+              <ui-icon><Check /></ui-icon>
               <span class="btn-label">{{ uploadForm.certId ? '更新' : '上传' }}</span>
-            </el-button>
+            </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 手动复制对话框 -->
-    <el-dialog
+    <ui-dialog
       v-model="copyTextDialogVisible"
       title="手动复制"
       width="600px"
     >
-      <div style="margin-bottom: 12px; color: var(--el-text-color-regular);">
+      <div style="margin-bottom: 12px; color: var(--ui-text-color-regular);">
         复制失败，请手动选择并复制以下内容：
       </div>
-      <el-input
+      <ui-input
         v-model="copyTextContent"
         type="textarea"
         :rows="4"
@@ -647,16 +647,16 @@
       />
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="primary" @click="copyTextDialogVisible = false">
-            <el-icon><Check /></el-icon>
+          <ui-button type="primary" @click="copyTextDialogVisible = false">
+            <ui-icon><Check /></ui-icon>
             <span class="btn-label">已复制</span>
-          </el-button>
+          </ui-button>
         </span>
       </template>
-    </el-dialog>
+    </ui-dialog>
 
     <!-- 迁移与自动续签向导 -->
-    <el-dialog
+    <ui-dialog
       v-model="migrateWizardVisible"
       title="迁移与自动续签"
       width="620px"
@@ -665,11 +665,11 @@
       class="cert-migrate-wizard-dialog"
       @closed="resetMigrateWizard"
     >
-      <el-steps :active="migrateStep" finish-status="success" align-center class="migrate-steps">
-        <el-step title="导出" description="在原环境保存证书" />
-        <el-step title="导入" description="上传到本系统" />
-        <el-step title="自动续签" description="申请 Let’s Encrypt" />
-      </el-steps>
+      <ui-steps :active="migrateStep" finish-status="success" align-center class="migrate-steps">
+        <ui-step title="导出" description="在原环境保存证书" />
+        <ui-step title="导入" description="上传到本系统" />
+        <ui-step title="自动续签" description="申请 Let’s Encrypt" />
+      </ui-steps>
 
       <!-- 步骤 0：导出说明 -->
       <div v-show="migrateStep === 0" class="migrate-panel">
@@ -681,9 +681,9 @@
           <li>妥善保管私钥，不要泄露。</li>
           <li>无需整包迁移 Certbot 目录，导出文件即可。</li>
         </ul>
-        <el-button size="small" type="primary" plain @click="handleCopyMigrateExportHint">
+        <ui-button size="small" type="primary" plain @click="handleCopyMigrateExportHint">
           复制说明（发给同事）
-        </el-button>
+        </ui-button>
 
         <div class="migrate-le-export-block">
           <p class="migrate-le-export-title">本机已有 Certbot？一键导出（固定目录）</p>
@@ -699,7 +699,7 @@
               （共 {{ letsencryptLiveDomains.length }} 本，默认取字母序第一本）
             </template>
           </p>
-          <el-button
+          <ui-button
             type="primary"
             class="migrate-le-oneclick-btn"
             :loading="letsencryptExporting"
@@ -709,45 +709,45 @@
             "
             @click="handleExportLetsencryptLiveAuto"
           >
-            <el-icon><Download /></el-icon>
+            <ui-icon><Download /></ui-icon>
             一键导出 Let's Encrypt 证书（ZIP）
-          </el-button>
+          </ui-button>
           <p v-if="letsencryptLiveHint" class="migrate-le-hint">{{ letsencryptLiveHint }}</p>
         </div>
 
-        <el-alert type="info" :closable="false" show-icon class="migrate-inline-alert">
+        <ui-alert type="info" :closable="false" show-icon class="migrate-inline-alert">
           <template #title>
             <span class="migrate-alert-inline">没有旧证书？可直接在本系统申请证书，签发后默认开启自动续期。</span>
           </template>
-        </el-alert>
+        </ui-alert>
       </div>
 
       <!-- 步骤 1：导入 -->
       <div v-show="migrateStep === 1" class="migrate-panel">
-        <el-form
+        <ui-form
           :model="migrateForm"
           :rules="migrateUploadRules"
           ref="migrateFormRef"
           label-width="90px"
           class="compact-form"
         >
-          <el-form-item label="域名" prop="domain">
-            <el-input
+          <ui-form-item label="域名" prop="domain">
+            <ui-input
               v-model="migrateForm.domain"
               placeholder="例如：example.com"
               :disabled="!!migrateForm.certId"
             />
             <div v-if="migrateForm.certId" class="form-tip">已从向导导入，修改文件请直接点「完成导入」更新</div>
-          </el-form-item>
-          <el-form-item label="上传方式">
-            <el-radio-group v-model="migrateForm.mode" size="small">
-              <el-radio-button label="files">文件</el-radio-button>
-              <el-radio-button label="archive">压缩包</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
+          </ui-form-item>
+          <ui-form-item label="上传方式">
+            <ui-radio-group v-model="migrateForm.mode" size="small">
+              <ui-radio-button label="files">文件</ui-radio-button>
+              <ui-radio-button label="archive">压缩包</ui-radio-button>
+            </ui-radio-group>
+          </ui-form-item>
           <template v-if="migrateForm.mode === 'files'">
-            <el-form-item label="证书" required>
-              <el-upload
+            <ui-form-item label="证书" required>
+              <ui-upload
                 ref="migrateCertUploadRef"
                 :auto-upload="false"
                 :limit="1"
@@ -756,18 +756,18 @@
                 accept=".crt,.pem,.cer"
                 :show-file-list="false"
               >
-                <el-button size="small" type="primary">
-                  <el-icon><FolderOpened /></el-icon>
+                <ui-button size="small" type="primary">
+                  <ui-icon><FolderOpened /></ui-icon>
                   选择证书
-                </el-button>
-              </el-upload>
+                </ui-button>
+              </ui-upload>
               <div v-if="migrateForm.certFile" class="file-selected-compact">
                 <span class="file-name-text">{{ migrateForm.certFile?.name || migrateForm.certFile?.raw?.name }}</span>
-                <el-button size="small" text type="danger" @click="handleMigrateCertFileRemove">×</el-button>
+                <ui-button size="small" text type="danger" @click="handleMigrateCertFileRemove">×</ui-button>
               </div>
-            </el-form-item>
-            <el-form-item label="私钥" required>
-              <el-upload
+            </ui-form-item>
+            <ui-form-item label="私钥" required>
+              <ui-upload
                 ref="migrateKeyUploadRef"
                 :auto-upload="false"
                 :limit="1"
@@ -776,20 +776,20 @@
                 accept=".key,.pem"
                 :show-file-list="false"
               >
-                <el-button size="small" type="primary">
-                  <el-icon><FolderOpened /></el-icon>
+                <ui-button size="small" type="primary">
+                  <ui-icon><FolderOpened /></ui-icon>
                   选择私钥
-                </el-button>
-              </el-upload>
+                </ui-button>
+              </ui-upload>
               <div v-if="migrateForm.keyFile" class="file-selected-compact">
                 <span class="file-name-text">{{ migrateForm.keyFile?.name || migrateForm.keyFile?.raw?.name }}</span>
-                <el-button size="small" text type="danger" @click="handleMigrateKeyFileRemove">×</el-button>
+                <ui-button size="small" text type="danger" @click="handleMigrateKeyFileRemove">×</ui-button>
               </div>
-            </el-form-item>
+            </ui-form-item>
           </template>
           <template v-else>
-            <el-form-item label="压缩包" required>
-              <el-upload
+            <ui-form-item label="压缩包" required>
+              <ui-upload
                 ref="migrateArchiveUploadRef"
                 :auto-upload="false"
                 :limit="1"
@@ -798,19 +798,19 @@
                 accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2"
                 :show-file-list="false"
               >
-                <el-button size="small" type="primary">
-                  <el-icon><FolderOpened /></el-icon>
+                <ui-button size="small" type="primary">
+                  <ui-icon><FolderOpened /></ui-icon>
                   选择压缩包
-                </el-button>
-              </el-upload>
+                </ui-button>
+              </ui-upload>
               <div v-if="migrateForm.archiveFile" class="file-selected-compact">
                 <span class="file-name-text">{{ migrateForm.archiveFile.name }}</span>
-                <el-button size="small" text type="danger" @click="handleMigrateArchiveFileRemove">×</el-button>
+                <ui-button size="small" text type="danger" @click="handleMigrateArchiveFileRemove">×</ui-button>
               </div>
               <div class="upload-tip-small">支持 zip、tar.gz 等；可自动识别域名</div>
-            </el-form-item>
+            </ui-form-item>
           </template>
-        </el-form>
+        </ui-form>
       </div>
 
       <!-- 步骤 2：自动续签 -->
@@ -818,11 +818,11 @@
         <p class="migrate-panel-text">
           导入的证书<strong>不会</strong>被本机 Certbot 自动续签。若希望由本系统<strong>定时自动续签</strong>，请使用 Let’s Encrypt 在本机<strong>重新申请</strong>同名域名证书（签发成功后会开启自动续期）。
         </p>
-        <el-alert v-if="migrateForm.certId" type="warning" :closable="false" show-icon class="migrate-inline-alert">
+        <ui-alert v-if="migrateForm.certId" type="warning" :closable="false" show-icon class="migrate-inline-alert">
           <template #title>
             <span class="migrate-alert-inline">已导入一条记录。点击下方「申请证书」时，将先删除该导入记录，再打开申请向导（避免域名重复）。</span>
           </template>
-        </el-alert>
+        </ui-alert>
         <p class="migrate-panel-text muted">
           若无需自动续签，可关闭向导，继续使用已导入证书，到期前再导出替换即可。
         </p>
@@ -831,42 +831,42 @@
       <template #footer>
         <div class="migrate-wizard-footer">
           <template v-if="migrateStep === 0">
-            <el-button type="info" @click="migrateWizardVisible = false">取消</el-button>
-            <el-button type="primary" @click="migrateGoStep(1)">
+            <ui-button type="info" @click="migrateWizardVisible = false">取消</ui-button>
+            <ui-button type="primary" @click="migrateGoStep(1)">
               下一步：导入证书
-            </el-button>
-            <el-button type="success" link @click="openRequestFromMigrateShortcut">
+            </ui-button>
+            <ui-button type="success" link @click="openRequestFromMigrateShortcut">
               无旧证书，直接申请（推荐自动续签）
-            </el-button>
+            </ui-button>
           </template>
           <template v-else-if="migrateStep === 1">
-            <el-button @click="migrateGoStep(0)">上一步</el-button>
-            <el-button type="primary" :loading="migrateUploading" :disabled="isMigrateUploadDisabled" @click="handleMigrateUploadSubmit">
-              <el-icon><Check /></el-icon>
+            <ui-button @click="migrateGoStep(0)">上一步</ui-button>
+            <ui-button type="primary" :loading="migrateUploading" :disabled="isMigrateUploadDisabled" @click="handleMigrateUploadSubmit">
+              <ui-icon><Check /></ui-icon>
               完成导入
-            </el-button>
+            </ui-button>
           </template>
           <template v-else>
-            <el-button @click="migrateGoStep(1)">上一步</el-button>
-            <el-button type="info" plain :loading="testingAutoRenewEnv" @click="handleTestAutoRenewEnv">
+            <ui-button @click="migrateGoStep(1)">上一步</ui-button>
+            <ui-button type="info" plain :loading="testingAutoRenewEnv" @click="handleTestAutoRenewEnv">
               测试自动续签环境
-            </el-button>
-            <el-button type="primary" @click="goToRequestCertFromMigrate">
+            </ui-button>
+            <ui-button type="primary" @click="goToRequestCertFromMigrate">
               申请证书并启用自动续签
-            </el-button>
-            <el-button type="success" plain @click="finishMigrateWizard">完成</el-button>
+            </ui-button>
+            <ui-button type="success" plain @click="finishMigrateWizard">完成</ui-button>
           </template>
         </div>
       </template>
-    </el-dialog>
+    </ui-dialog>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, computed, watch, onBeforeUnmount } from 'vue'
 import { certificatesApi } from '../api/certificates'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck, Download, Operation, Promotion } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
+import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck, Download, Operation, Promotion } from '@/components/icons'
 import { formatDateTime } from '../utils/date'
 
 const certificateList = ref([])
@@ -1760,6 +1760,17 @@ const handleTestAutoRenewEnv = async () => {
     const jobsHtml = activeJobs.length
       ? `<p style="margin-top:12px;font-weight:600">当前挂起的 DNS 验证会话</p><ul style="margin:4px 0;padding-left:18px;text-align:left">${activeJobs.map((j) => `<li>${escapeHtml(j.domain || '-')}，已等待 ${escapeHtml(j.age_seconds ?? '-')} 秒，job_id: ${escapeHtml(j.job_id || '-')}</li>`).join('')}</ul>`
       : ''
+    const diagnostics = res.busy_diagnostics || {}
+    const lockFile = diagnostics.lock_file || {}
+    const processes = Array.isArray(diagnostics.processes) ? diagnostics.processes : []
+    const diagLines = [
+      diagnostics.app_lock_locked ? '应用内 Certbot 锁仍被占用：通常需要重启后端/容器释放旧线程锁' : null,
+      lockFile.exists ? `Certbot 文件锁：${lockFile.path || '-'}，pid=${lockFile.pid ?? '-'}，存活=${lockFile.pid_alive ?? '-'}，age=${lockFile.age_seconds ?? '-'}s` : null,
+      processes.length ? `系统 Certbot 进程：${processes.map((p) => `pid=${p.pid} ${p.etime} ${p.args}`).join('；')}` : null
+    ].filter(Boolean)
+    const diagHtml = diagLines.length
+      ? `<p style="margin-top:12px;font-weight:600">Certbot 占用诊断</p><ul style="margin:4px 0;padding-left:18px;text-align:left">${diagLines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+      : ''
     const out = res.dry_run_output
       ? `<details style="margin-top:12px;text-align:left"><summary style="cursor:pointer">certbot dry-run 输出</summary><pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:240px;overflow:auto;margin-top:8px">${escapeHtml(res.dry_run_output)}</pre></details>`
       : ''
@@ -1769,7 +1780,7 @@ const handleTestAutoRenewEnv = async () => {
       `<div style="text-align:left;max-width:520px">
         <p style="font-weight:600;margin-bottom:8px">${escapeHtml(res.summary || (res.environment_ready ? '检测完成' : '检测未通过'))}</p>
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">${checkRows}</table>
-        ${code}${jobsHtml}${sug}${out}${hint}
+        ${code}${jobsHtml}${diagHtml}${sug}${out}${hint}
       </div>`,
       '自动续签环境检测',
       {
@@ -1799,7 +1810,12 @@ const handleClearCertbotSessions = async () => {
   clearingCertbotSessions.value = true
   try {
     const res = await certificatesApi.cancelAllDnsChallenges()
-    ElMessage.success(res.message || '已清理挂起任务')
+    const after = res.stale_cleanup?.after || {}
+    if (after.app_lock_locked) {
+      ElMessage.warning('已尝试清理，但应用内 Certbot 锁仍被占用，请重启后端/容器')
+    } else {
+      ElMessage.success(res.message || '已清理挂起任务')
+    }
     loadCertificates()
   } catch (e) {
     ElMessage.error(e?.detail || e?.message || '清理失败')
@@ -2078,11 +2094,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.certificates-page {
-  padding: 20px;
-}
-
-.cert-migrate-wizard-dialog :deep(.el-dialog__body) {
+.cert-migrate-wizard-dialog :deep(.ui-dialog__body) {
   max-height: calc(85vh - 140px);
   overflow-y: auto;
   padding-top: 12px;
@@ -2100,12 +2112,12 @@ onMounted(() => {
   margin: 0 0 12px;
   font-size: 13px;
   line-height: 1.65;
-  color: var(--el-text-color-regular);
+  color: var(--ui-text-color-regular);
 }
 
 .migrate-panel-text.muted {
   margin-top: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
   font-size: 12px;
 }
 
@@ -2113,7 +2125,7 @@ onMounted(() => {
   font-size: 12px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--el-fill-color-light);
+  background: var(--ui-fill-color-light);
 }
 
 .migrate-panel-list {
@@ -2121,7 +2133,7 @@ onMounted(() => {
   padding-left: 20px;
   font-size: 13px;
   line-height: 1.7;
-  color: var(--el-text-color-regular);
+  color: var(--ui-text-color-regular);
 }
 
 .migrate-inline-alert {
@@ -2132,15 +2144,15 @@ onMounted(() => {
   margin-top: 20px;
   padding: 14px 16px;
   border-radius: 8px;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-blank);
+  border: 1px solid var(--ui-border-color-lighter);
+  background: var(--ui-fill-color-blank);
 }
 
 .migrate-le-export-title {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--ui-text-color-primary);
 }
 
 .migrate-le-export-desc {
@@ -2153,14 +2165,14 @@ onMounted(() => {
   margin: 0 0 12px;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--el-text-color-regular);
+  color: var(--ui-text-color-regular);
 }
 
 .migrate-le-default-line code {
   font-size: 12px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--el-fill-color-light);
+  background: var(--ui-fill-color-light);
 }
 
 .migrate-le-oneclick-btn {
@@ -2172,7 +2184,7 @@ onMounted(() => {
   margin: 10px 0 0;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
 }
 
 .migrate-le-scanning {
@@ -2195,29 +2207,29 @@ onMounted(() => {
 
 .cert-migration-collapse {
   margin-bottom: 16px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ui-border-color-lighter);
   border-radius: 8px;
   overflow: hidden;
 }
 
-.cert-migration-collapse :deep(.el-collapse-item__header) {
+.cert-migration-collapse :deep(.ui-collapse-item__header) {
   padding: 12px 16px;
   font-weight: 500;
   align-items: center;
   gap: 8px;
 }
 
-.cert-migration-collapse :deep(.el-collapse-item__wrap) {
-  border-top: 1px solid var(--el-border-color-lighter);
+.cert-migration-collapse :deep(.ui-collapse-item__wrap) {
+  border-top: 1px solid var(--ui-border-color-lighter);
 }
 
-.cert-migration-collapse :deep(.el-collapse-item__content) {
+.cert-migration-collapse :deep(.ui-collapse-item__content) {
   padding-bottom: 16px;
 }
 
 .migration-guide-title {
   font-size: 14px;
-  color: var(--el-text-color-primary);
+  color: var(--ui-text-color-primary);
 }
 
 .migration-guide-tag {
@@ -2228,7 +2240,7 @@ onMounted(() => {
 .migration-guide-body {
   font-size: 13px;
   line-height: 1.65;
-  color: var(--el-text-color-regular);
+  color: var(--ui-text-color-regular);
   padding: 0 4px;
 }
 
@@ -2249,7 +2261,7 @@ onMounted(() => {
   font-size: 12px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--el-fill-color-light);
+  background: var(--ui-fill-color-light);
 }
 
 .migration-guide-alert {
@@ -2269,7 +2281,7 @@ onMounted(() => {
 .migration-guide-foot {
   margin: 0;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
 }
 
 .migration-guide-foot code {
@@ -2300,7 +2312,7 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.el-upload__tip {
+.ui-upload__tip {
   color: #909399;
   font-size: 12px;
   margin-top: 8px;
@@ -2342,16 +2354,16 @@ onMounted(() => {
   gap: 6px;
 }
 
-.domain-cell :deep(.el-tag) {
+.domain-cell :deep(.ui-tag) {
   font-weight: 500;
   font-size: 13px;
 }
 
-.compact-form :deep(.el-form-item) {
+.compact-form :deep(.ui-form-item) {
   margin-bottom: 14px;
 }
 
-.compact-form :deep(.el-form-item__label) {
+.compact-form :deep(.ui-form-item__label) {
   font-size: 13px;
   padding-bottom: 4px;
 }
@@ -2359,7 +2371,7 @@ onMounted(() => {
 .form-tip {
   margin-top: 4px;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
   line-height: 1.4;
 }
 
@@ -2368,9 +2380,9 @@ onMounted(() => {
 .file-selected-compact {
   margin-top: 6px;
   padding: 6px 10px;
-  background-color: var(--el-fill-color-lighter);
+  background-color: var(--ui-fill-color-lighter);
   border-radius: 4px;
-  border: 1px solid var(--el-border-color-light);
+  border: 1px solid var(--ui-border-color-light);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -2380,7 +2392,7 @@ onMounted(() => {
 .file-name-text {
   flex: 1;
   font-size: 12px;
-  color: var(--el-text-color-primary);
+  color: var(--ui-text-color-primary);
   word-break: break-all;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
   line-height: 1.4;
@@ -2389,14 +2401,14 @@ onMounted(() => {
 .file-warning-compact {
   margin-top: 4px;
   font-size: 11px;
-  color: var(--el-color-warning);
+  color: var(--ui-color-warning);
   line-height: 1.3;
 }
 
 .upload-tip-small {
   margin-top: 4px;
   font-size: 11px;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
   line-height: 1.3;
 }
 
@@ -2411,17 +2423,17 @@ onMounted(() => {
   margin: 0;
 }
 
-.cert-upload-dialog :deep(.el-dialog__body) {
+.cert-upload-dialog :deep(.ui-dialog__body) {
   max-height: calc(85vh - 120px);
   overflow-y: auto;
   padding: 20px;
 }
 
-.cert-upload-dialog :deep(.el-upload) {
+.cert-upload-dialog :deep(.ui-upload) {
   width: 100%;
 }
 
-.cert-upload-dialog :deep(.el-upload .el-button) {
+.cert-upload-dialog :deep(.ui-upload .ui-button) {
   width: 100%;
 }
 
@@ -2434,40 +2446,40 @@ onMounted(() => {
 
 .expiry-days {
   font-size: 11px;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
 }
 
 .expiry-days.expiring-soon {
-  color: var(--el-color-warning);
+  color: var(--ui-color-warning);
 }
 
 .expiry-days.expired {
-  color: var(--el-color-danger);
+  color: var(--ui-color-danger);
 }
 
 .expiring-soon {
-  color: var(--el-color-warning) !important;
+  color: var(--ui-color-warning) !important;
 }
 
 .expired {
-  color: var(--el-color-danger) !important;
+  color: var(--ui-color-danger) !important;
 }
 
 .radio-desc {
   font-size: 11px;
-  color: var(--el-text-color-secondary);
+  color: var(--ui-text-color-secondary);
   margin-top: 2px;
   line-height: 1.3;
 }
 
-.cert-request-dialog :deep(.el-radio) {
+.cert-request-dialog :deep(.ui-radio) {
   height: auto;
   margin-right: 0;
   margin-bottom: 8px;
   align-items: flex-start;
 }
 
-.cert-request-dialog :deep(.el-radio__label) {
+.cert-request-dialog :deep(.ui-radio__label) {
   white-space: normal;
 }
 
@@ -2486,7 +2498,7 @@ onMounted(() => {
 
 .dns-guide-card {
   margin-bottom: 12px;
-  border: 1px solid var(--el-border-color-light);
+  border: 1px solid var(--ui-border-color-light);
 }
 
 .dns-guide-title {
@@ -2540,4 +2552,3 @@ onMounted(() => {
   margin: 10px 0;
 }
 </style>
-

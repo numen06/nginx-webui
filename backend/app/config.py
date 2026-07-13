@@ -4,9 +4,10 @@
 """
 
 import os
+import re
 import yaml
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 from functools import lru_cache
 
@@ -104,6 +105,18 @@ class LogrotateConfig(BaseModel):
     rotate_time: str = "00:00"  # 格式: HH:MM
 
 
+class DynamicRegistryConfig(BaseModel):
+    """动态服务注册配置"""
+
+    ip_whitelist: Optional[str] = None
+    domain_suffix: Optional[str] = None
+    default_ttl_seconds: int = 600
+    cleanup_interval_seconds: int = 30
+    offline_retention_seconds: int = 86400
+    health_check_enabled: bool = True
+    health_check_timeout_seconds: int = 3
+
+
 class Config(BaseModel):
     """全局配置"""
 
@@ -111,6 +124,7 @@ class Config(BaseModel):
     app: AppConfig = Field(default_factory=AppConfig)
     backup: BackupConfig = Field(default_factory=BackupConfig)
     logrotate: LogrotateConfig = Field(default_factory=LogrotateConfig)
+    dynamic_registry: DynamicRegistryConfig = Field(default_factory=DynamicRegistryConfig)
 
 
 class ConfigManager:
@@ -145,6 +159,7 @@ class ConfigManager:
         nginx_config = config_data.get("nginx", {})
         app_config = config_data.get("app", {})
         backup_config = config_data.get("backup", {})
+        dynamic_registry_config = config_data.get("dynamic_registry", {})
         
         # 环境变量覆盖
         data_root = os.getenv("DATA_ROOT", "/app/data").rstrip("/")
@@ -230,12 +245,50 @@ class ConfigManager:
         logrotate_config["rotate_time"] = os.getenv(
             "LOGROTATE_ROTATE_TIME", logrotate_config.get("rotate_time", "00:00")
         )
+
+        dynamic_registry_config["ip_whitelist"] = os.getenv(
+            "DYNAMIC_REGISTRY_IP_WHITELIST",
+            dynamic_registry_config.get("ip_whitelist"),
+        )
+        dynamic_registry_config["domain_suffix"] = os.getenv(
+            "DYNAMIC_REGISTRY_DOMAIN_SUFFIX",
+            dynamic_registry_config.get("domain_suffix"),
+        )
+        dynamic_registry_config["default_ttl_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_DEFAULT_TTL_SECONDS",
+                dynamic_registry_config.get("default_ttl_seconds", 600),
+            )
+        )
+        dynamic_registry_config["cleanup_interval_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_CLEANUP_INTERVAL_SECONDS",
+                dynamic_registry_config.get("cleanup_interval_seconds", 30),
+            )
+        )
+        dynamic_registry_config["offline_retention_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_OFFLINE_RETENTION_SECONDS",
+                dynamic_registry_config.get("offline_retention_seconds", 86400),
+            )
+        )
+        dynamic_registry_config["health_check_enabled"] = os.getenv(
+            "DYNAMIC_REGISTRY_HEALTH_CHECK_ENABLED",
+            str(dynamic_registry_config.get("health_check_enabled", "true")),
+        ).lower() in ("true", "1", "yes")
+        dynamic_registry_config["health_check_timeout_seconds"] = int(
+            os.getenv(
+                "DYNAMIC_REGISTRY_HEALTH_CHECK_TIMEOUT_SECONDS",
+                dynamic_registry_config.get("health_check_timeout_seconds", 3),
+            )
+        )
         
         self._config = Config(
             nginx=NginxConfig(**nginx_config),
             app=AppConfig(**app_config),
             backup=BackupConfig(**backup_config),
             logrotate=LogrotateConfig(**logrotate_config),
+            dynamic_registry=DynamicRegistryConfig(**dynamic_registry_config),
         )
         
         # 确保备份目录存在（安全处理，避免挂载点冲突）
@@ -260,18 +313,97 @@ class ConfigManager:
 _config_manager: Optional[ConfigManager] = None
 
 
-@lru_cache()
-def get_config() -> Config:
-    """获取配置实例（单例模式）"""
+def _ensure_config_manager() -> ConfigManager:
     global _config_manager
     if _config_manager is None:
         _config_manager = ConfigManager()
-    return _config_manager.config
+    return _config_manager
+
+
+def _format_yaml_scalar(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _replace_yaml_section_mapping(text: str, section: str, updates: Dict[str, Any]) -> str:
+    lines = text.splitlines()
+    has_trailing_newline = text.endswith("\n")
+    section_pattern = re.compile(rf"^{re.escape(section)}\s*:\s*$")
+    next_section_pattern = re.compile(r"^[A-Za-z0-9_-]+\s*:")
+
+    start = None
+    for index, line in enumerate(lines):
+        if section_pattern.match(line):
+            start = index
+            break
+
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"{section}:")
+        for key, value in updates.items():
+            lines.append(f"  {key}: {_format_yaml_scalar(value)}".rstrip())
+        return "\n".join(lines) + "\n"
+
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.strip() and not line.startswith((" ", "\t", "#")) and next_section_pattern.match(line):
+            end = index
+            break
+
+    indent = "  "
+    for line in lines[start + 1 : end]:
+        match = re.match(r"^(\s+)[A-Za-z0-9_-]+\s*:", line)
+        if match:
+            indent = match.group(1)
+            break
+
+    seen = set()
+    for index in range(start + 1, end):
+        for key, value in updates.items():
+            if re.match(rf"^\s*{re.escape(key)}\s*:", lines[index]):
+                lines[index] = f"{indent}{key}: {_format_yaml_scalar(value)}".rstrip()
+                seen.add(key)
+                break
+
+    insert_at = end
+    for key, value in updates.items():
+        if key not in seen:
+            lines.insert(insert_at, f"{indent}{key}: {_format_yaml_scalar(value)}".rstrip())
+            insert_at += 1
+
+    return "\n".join(lines) + ("\n" if has_trailing_newline else "")
+
+
+def save_dynamic_registry_config(updates: Dict[str, Any]) -> Config:
+    """保存动态注册配置到 config.yaml，并重新加载运行时配置。"""
+    manager = _ensure_config_manager()
+    path = manager.config_path
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    data = yaml.safe_load(text) or {}
+    current = data.get("dynamic_registry") or {}
+    merged = {**current, **updates}
+    DynamicRegistryConfig(**merged)
+
+    updated_text = _replace_yaml_section_mapping(text, "dynamic_registry", updates)
+    yaml.safe_load(updated_text)
+    path.write_text(updated_text, encoding="utf-8")
+    get_config.cache_clear()
+    return manager.reload()
+
+
+@lru_cache()
+def get_config() -> Config:
+    """获取配置实例（单例模式）"""
+    return _ensure_config_manager().config
 
 
 def reload_config() -> Config:
     """重新加载配置"""
-    global _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-    return _config_manager.reload()
+    manager = _ensure_config_manager()
+    get_config.cache_clear()
+    return manager.reload()

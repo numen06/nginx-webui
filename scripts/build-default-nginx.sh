@@ -4,7 +4,7 @@ set -euo pipefail
 # 构建时预编译默认 Nginx，避免运行时再编译。
 # 可通过环境变量覆盖默认值，便于后续维护。
 
-NGINX_VERSION="${NGINX_VERSION:-1.29.3}"
+NGINX_VERSION="${NGINX_VERSION:-1.31.2}"
 SOURCE_TAR="${SOURCE_TAR:-/app/backend/default-nginx/nginx-${NGINX_VERSION}.tar.gz}"
 BUILD_DIR="${BUILD_DIR:-/tmp/nginx-build}"
 INSTALL_DIR="${INSTALL_DIR:-/app/data/nginx/versions/${NGINX_VERSION}}"

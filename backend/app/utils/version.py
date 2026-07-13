@@ -16,7 +16,7 @@ from urllib.error import URLError, HTTPError
 from app.config import get_config
 
 # 当前程序版本号（系统版本）：以 get_config().app.version 为准（由 VERSION 文件或 YAML 注入）；仅当皆无有效值时用默认值
-DEFAULT_VERSION = "1.0.3"
+DEFAULT_VERSION = "1.1.1"
 GITEE_OWNER = "numen06"
 GITEE_REPO = "nginx-webui"
 # Gitee 返回的 Release 列表按创建时间正序（旧在前），不能只取第一条；拉一页后在本地按语义版本取最大
@@ -71,7 +71,7 @@ def get_version() -> str:
     值来自 ConfigManager：优先 backend/VERSION，其次 config.yaml 中遗留的 app.version，最后 DEFAULT_VERSION。
 
     Returns:
-        版本号字符串，例如：1.0.3
+        版本号字符串，例如：1.1.1
     """
     try:
         config = get_config()

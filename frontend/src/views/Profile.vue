@@ -1,284 +1,95 @@
-<template>
-  <div class="profile-page">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>用户中心</span>
-        </div>
-      </template>
-
-      <!-- 默认密码提示 -->
-      <el-alert
-        v-if="isDefaultPassword"
-        title="安全提示"
-        type="warning"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 20px"
-      >
-        <template #default>
-          <div>
-            <p>您当前使用的是默认账号密码（admin/admin），为了系统安全，请立即修改密码。</p>
-          </div>
-        </template>
-      </el-alert>
-
-      <!-- 用户信息 -->
-      <el-descriptions title="用户信息" :column="2" border>
-        <el-descriptions-item label="用户名">
-          {{ userInfo.username }}
-        </el-descriptions-item>
-        <el-descriptions-item label="用户ID">
-          {{ userInfo.id }}
-        </el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="userInfo.is_active ? 'success' : 'danger'">
-            {{ userInfo.is_active ? '激活' : '禁用' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="创建时间">
-          {{ formatDateTime(userInfo.created_at) }}
-        </el-descriptions-item>
-      </el-descriptions>
-
-      <!-- 修改密码 -->
-      <el-divider content-position="left">
-        <span style="font-size: 16px; font-weight: 600">修改密码</span>
-      </el-divider>
-
-      <el-form
-        :model="passwordForm"
-        :rules="passwordRules"
-        ref="passwordFormRef"
-        label-width="120px"
-        style="max-width: 500px"
-      >
-        <el-form-item label="旧密码" prop="old_password">
-          <el-input
-            v-model="passwordForm.old_password"
-            type="password"
-            show-password
-            placeholder="请输入当前密码"
-          />
-        </el-form-item>
-        <el-form-item label="新密码" prop="new_password">
-          <el-input
-            v-model="passwordForm.new_password"
-            type="password"
-            show-password
-            placeholder="请输入新密码（至少6位）"
-          />
-        </el-form-item>
-        <el-form-item label="确认密码" prop="confirm_password">
-          <el-input
-            v-model="passwordForm.confirm_password"
-            type="password"
-            show-password
-            placeholder="请再次输入新密码"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="handleChangePassword" :loading="changingPassword">
-            <el-icon><Check /></el-icon>
-            <span class="btn-label">修改密码</span>
-          </el-button>
-          <el-button @click="handleReset">
-            <el-icon><Refresh /></el-icon>
-            <span class="btn-label">重置</span>
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
-  </div>
-</template>
-
-<script setup>
-import { ref, onMounted, computed, watch, nextTick } from 'vue'
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '../store/auth'
-import { authApi } from '../api/auth'
-import { usersApi } from '../api/users'
-import { ElMessage } from 'element-plus'
-import { Check, Refresh } from '@element-plus/icons-vue'
-import { formatDateTime } from '../utils/date'
+import { toTypedSchema } from '@vee-validate/zod'
+import { useForm } from 'vee-validate'
+import { z } from 'zod'
+import { KeyRound, ShieldAlert, ShieldCheck, UserRound } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ElMessage } from '@/lib/feedback'
+import { apiErrorMessage } from '@/api'
+import { usersApi } from '@/api/users'
+import { useAuthStore } from '@/store/auth'
+import { formatDateTime } from '@/utils/date'
 
 const router = useRouter()
-
 const authStore = useAuthStore()
-const userInfo = ref({
-  id: null,
-  username: '',
-  is_active: true,
-  created_at: null,
-  is_default_password: false
-})
-const passwordForm = ref({
-  old_password: '',
-  new_password: '',
-  confirm_password: ''
-})
-const passwordFormRef = ref(null)
-const changingPassword = ref(false)
+const loading = ref(false)
+const oldPasswordInput = ref<{ $el?: HTMLInputElement }>()
+const user = computed(() => authStore.user)
+const isDefaultPassword = computed(() => Boolean(user.value?.is_default_password))
 
-const isDefaultPassword = computed(() => {
-  return userInfo.value.is_default_password === true
-})
+const schema = toTypedSchema(z.object({
+  oldPassword: z.string().min(1, '请输入旧密码'),
+  newPassword: z.string().min(6, '新密码至少 6 个字符').max(100, '新密码最多 100 个字符'),
+  confirmPassword: z.string().min(1, '请再次输入新密码'),
+}).refine(values => values.newPassword === values.confirmPassword, {
+  message: '两次输入的新密码不一致',
+  path: ['confirmPassword'],
+}))
+const { defineField, errors, handleSubmit, resetForm } = useForm({ validationSchema: schema })
+const [oldPassword, oldPasswordAttrs] = defineField('oldPassword')
+const [newPassword, newPasswordAttrs] = defineField('newPassword')
+const [confirmPassword, confirmPasswordAttrs] = defineField('confirmPassword')
 
-// 验证确认密码
-const validateConfirmPassword = (rule, value, callback) => {
-  if (value !== passwordForm.value.new_password) {
-    callback(new Error('两次输入的密码不一致'))
-  } else {
-    callback()
-  }
-}
-
-const passwordRules = {
-  old_password: [
-    { required: true, message: '请输入旧密码', trigger: 'blur' }
-  ],
-  new_password: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, max: 100, message: '密码长度在 6 到 100 个字符', trigger: 'blur' }
-  ],
-  confirm_password: [
-    { required: true, message: '请确认密码', trigger: 'blur' },
-    { validator: validateConfirmPassword, trigger: 'blur' }
-  ]
-}
-
-const loadUserInfo = async () => {
+const submit = handleSubmit(async (values) => {
+  loading.value = true
   try {
-    const response = await authApi.getCurrentUser()
-    userInfo.value = response.user
-    // 如果是默认密码，自动聚焦到旧密码输入框
-    if (response.user?.is_default_password === true) {
-      await nextTick()
-      // 自动聚焦到旧密码输入框，提示用户修改密码
-      const oldPasswordInput = document.querySelector('input[type="password"]')
-      if (oldPasswordInput) {
-        oldPasswordInput.focus()
-      }
-    }
+    await usersApi.changePassword(values.oldPassword, values.newPassword)
+    ElMessage.success('密码修改成功，请重新登录')
+    authStore.logout()
+    await router.replace('/login')
   } catch (error) {
-    ElMessage.error('获取用户信息失败')
-  }
-}
-
-// 监听默认密码状态变化
-watch(isDefaultPassword, (newVal) => {
-  if (newVal) {
-    nextTick(() => {
-      const oldPasswordInput = document.querySelector('input[type="password"]')
-      if (oldPasswordInput) {
-        oldPasswordInput.focus()
-      }
-    })
+    ElMessage.error(apiErrorMessage(error, '修改密码失败'))
+  } finally {
+    loading.value = false
   }
 })
 
-const handleChangePassword = async () => {
-  if (!passwordFormRef.value) return
-
-  await passwordFormRef.value.validate(async (valid) => {
-    if (!valid) return
-
-    changingPassword.value = true
-    try {
-      // 确保数据格式正确
-      const oldPassword = String(passwordForm.value.old_password || '').trim()
-      const newPassword = String(passwordForm.value.new_password || '').trim()
-      
-      if (!oldPassword) {
-        ElMessage.error('请输入旧密码')
-        changingPassword.value = false
-        return
-      }
-      
-      if (!newPassword || newPassword.length < 6) {
-        ElMessage.error('新密码长度至少为 6 个字符')
-        changingPassword.value = false
-        return
-      }
-      
-      await usersApi.changePassword(oldPassword, newPassword)
-      ElMessage.success('密码修改成功，请重新登录')
-      
-      // 更新用户信息，清除默认密码标志
-      if (userInfo.value) {
-        userInfo.value.is_default_password = false
-        authStore.setUser({ ...userInfo.value })
-      }
-      
-      // 立即退出登录并跳转，避免页面卡死
-      authStore.logout()
-      // 使用 router.push 而不是 window.location.href，避免页面卡死
-      router.push('/login')
-    } catch (error) {
-      console.error('修改密码错误:', error)
-      let errorMessage = '密码修改失败'
-      
-      // 处理 422 验证错误
-      if (error.response?.status === 422) {
-        const validationErrors = error.response.data?.detail || []
-        if (Array.isArray(validationErrors) && validationErrors.length > 0) {
-          // 提取所有验证错误信息
-          const errorMessages = validationErrors.map(err => {
-            const field = err.loc?.join('.') || '字段'
-            return `${field}: ${err.msg}`
-          }).join('; ')
-          errorMessage = `验证失败: ${errorMessages}`
-        } else if (typeof validationErrors === 'string') {
-          errorMessage = validationErrors
-        } else {
-          errorMessage = '请求参数验证失败，请检查输入是否正确'
-        }
-      } else if (error.detail) {
-        errorMessage = error.detail
-      } else if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail
-      } else if (error.message) {
-        errorMessage = error.message
-      }
-      
-      ElMessage.error(errorMessage)
-    } finally {
-      changingPassword.value = false
-    }
-  })
-}
-
-const handleReset = () => {
-  passwordForm.value = {
-    old_password: '',
-    new_password: '',
-    confirm_password: ''
-  }
-  if (passwordFormRef.value) {
-    passwordFormRef.value.clearValidate()
-  }
-}
-
-onMounted(() => {
-  loadUserInfo()
+onMounted(async () => {
+  await authStore.ensureUser(true)
+  if (isDefaultPassword.value) await nextTick(() => oldPasswordInput.value?.$el?.focus())
 })
 </script>
 
-<style scoped>
-.profile-page {
-  padding: 20px;
-}
+<template>
+  <div class="page-shell max-w-5xl">
+    <div>
+      <h2 class="page-title">用户中心</h2>
+      <p class="page-description">查看当前账户信息并更新登录密码。</p>
+    </div>
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
+    <div v-if="isDefaultPassword" class="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-amber-100">
+      <ShieldAlert class="mt-0.5 size-5 shrink-0" />
+      <div><div class="font-medium">正在使用默认密码</div><p class="mt-1 text-sm text-amber-100/75">请立即修改密码，修改后需要重新登录。</p></div>
+    </div>
 
-.btn-label {
-  margin-left: 4px;
-}
-</style>
+    <div class="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+      <Card>
+        <CardHeader><CardTitle class="flex items-center gap-2 text-base"><UserRound class="size-4" />账户信息</CardTitle></CardHeader>
+        <CardContent class="space-y-4 text-sm">
+          <div class="flex items-center justify-between gap-4 border-b pb-3"><span class="text-muted-foreground">用户名</span><span class="font-medium">{{ user?.username || '—' }}</span></div>
+          <div class="flex items-center justify-between gap-4 border-b pb-3"><span class="text-muted-foreground">账户状态</span><Badge :variant="user?.is_active ? 'outline' : 'destructive'">{{ user?.is_active ? '已启用' : '已停用' }}</Badge></div>
+          <div class="flex items-center justify-between gap-4 border-b pb-3"><span class="text-muted-foreground">账户权限</span><Badge :variant="user?.is_admin ? 'default' : 'secondary'"><ShieldCheck v-if="user?.is_admin" class="mr-1 size-3" />{{ user?.is_admin ? '超级管理员' : '普通用户' }}</Badge></div>
+          <div class="flex items-center justify-between gap-4"><span class="text-muted-foreground">创建时间</span><span>{{ formatDateTime(user?.created_at) }}</span></div>
+        </CardContent>
+      </Card>
 
+      <Card>
+        <CardHeader><CardTitle class="flex items-center gap-2 text-base"><KeyRound class="size-4" />修改密码</CardTitle><CardDescription>新密码长度为 6–100 个字符。</CardDescription></CardHeader>
+        <CardContent>
+          <form class="space-y-4" @submit="submit">
+            <div class="space-y-2"><Label for="old-password">旧密码</Label><Input id="old-password" ref="oldPasswordInput" v-model="oldPassword" v-bind="oldPasswordAttrs" type="password" autocomplete="current-password" /><p v-if="errors.oldPassword" class="text-sm text-destructive">{{ errors.oldPassword }}</p></div>
+            <div class="space-y-2"><Label for="new-password">新密码</Label><Input id="new-password" v-model="newPassword" v-bind="newPasswordAttrs" type="password" autocomplete="new-password" /><p v-if="errors.newPassword" class="text-sm text-destructive">{{ errors.newPassword }}</p></div>
+            <div class="space-y-2"><Label for="confirm-password">确认新密码</Label><Input id="confirm-password" v-model="confirmPassword" v-bind="confirmPasswordAttrs" type="password" autocomplete="new-password" /><p v-if="errors.confirmPassword" class="text-sm text-destructive">{{ errors.confirmPassword }}</p></div>
+            <div class="flex justify-end gap-2"><Button type="button" variant="secondary" @click="resetForm()">重置</Button><Button type="submit" :disabled="loading">{{ loading ? '提交中…' : '修改密码' }}</Button></div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  </div>
+</template>

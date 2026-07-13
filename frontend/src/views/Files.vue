@@ -1,50 +1,50 @@
 <template>
-  <div class="files-page">
-    <el-card>
+  <div class="files-page page-shell">
+    <ui-card>
       <template #header>
         <div class="card-header">
           <span>文件管理</span>
           <div class="card-actions">
-            <el-select
+            <ui-select
               v-model="selectedDirectory"
               placeholder="选择 Nginx 目录/版本"
               style="width: 240px; margin-right: 8px"
               @change="handleDirectoryChange"
             >
-              <el-option
+              <ui-option
                 v-for="version in versions"
                 :key="version.directory"
                 :label="formatOptionLabel(version)"
                 :value="version.directory"
               />
-            </el-select>
-            <el-switch
+            </ui-select>
+            <ui-switch
               v-model="rootOnly"
               active-text="整个目录"
               inactive-text="仅 HTML"
               style="margin-right: 8px"
               @change="handleRootOnlyChange"
             />
-            <el-button size="small" type="info" @click="handleGoRoot">
-              <el-icon><HomeFilled /></el-icon>
+            <ui-button size="small" type="info" @click="handleGoRoot">
+              <ui-icon><HomeFilled /></ui-icon>
               <span class="btn-label">根目录</span>
-            </el-button>
-            <el-button size="small" type="info" @click="handleGoParent" :disabled="!currentPath">
-              <el-icon><ArrowUpBold /></el-icon>
+            </ui-button>
+            <ui-button size="small" type="info" @click="handleGoParent" :disabled="!currentPath">
+              <ui-icon><ArrowUpBold /></ui-icon>
               <span class="btn-label">上一级</span>
-            </el-button>
-            <el-button size="small" type="primary" @click="handleUpload">
-              <el-icon><UploadFilled /></el-icon>
+            </ui-button>
+            <ui-button size="small" type="primary" @click="handleUpload">
+              <ui-icon><UploadFilled /></ui-icon>
               <span class="btn-label">上传文件</span>
-            </el-button>
-            <el-button size="small" type="cyan" @click="handleCreateDir">
-              <el-icon><FolderAdd /></el-icon>
+            </ui-button>
+            <ui-button size="small" type="cyan" @click="handleCreateDir">
+              <ui-icon><FolderAdd /></ui-icon>
               <span class="btn-label">新建文件夹</span>
-            </el-button>
-            <el-button size="small" type="info" text @click="handleRefresh">
-              <el-icon><RefreshRight /></el-icon>
+            </ui-button>
+            <ui-button size="small" type="info" text @click="handleRefresh">
+              <ui-icon><RefreshRight /></ui-icon>
               <span class="btn-label">刷新</span>
-            </el-button>
+            </ui-button>
           </div>
         </div>
       </template>
@@ -59,22 +59,22 @@
         </div>
       </div>
       <div class="version-info" v-if="selectedDirectory">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="当前 Nginx 目录">
-            <el-text type="info" size="small">{{ selectedDirectory || '-' }}</el-text>
-          </el-descriptions-item>
-          <el-descriptions-item label="当前 Nginx 版本">
-            <el-tag v-if="formatVersionLabel(currentVersionInfo)" type="info" size="small">
+        <ui-descriptions :column="2" border size="small">
+          <ui-descriptions-item label="当前 Nginx 目录">
+            <ui-text type="info" size="small">{{ selectedDirectory || '-' }}</ui-text>
+          </ui-descriptions-item>
+          <ui-descriptions-item label="当前 Nginx 版本">
+            <ui-tag v-if="formatVersionLabel(currentVersionInfo)" type="info" size="small">
               {{ formatVersionLabel(currentVersionInfo) }}
-            </el-tag>
+            </ui-tag>
             <span v-else class="text-muted">未知</span>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="currentVersionInfo?.running" label="运行状态" :span="2">
-            <el-tag type="success" size="small">运行中</el-tag>
-          </el-descriptions-item>
-        </el-descriptions>
+          </ui-descriptions-item>
+          <ui-descriptions-item v-if="currentVersionInfo?.running" label="运行状态" :span="2">
+            <ui-tag type="success" size="small">运行中</ui-tag>
+          </ui-descriptions-item>
+        </ui-descriptions>
       </div>
-      <el-table
+      <ui-table
         :data="fileList"
         style="width: 100%"
         :loading="loading"
@@ -83,122 +83,122 @@
         :row-key="getRowKey"
         empty-text="暂无文件，请先选择目录或上传文件"
       >
-        <el-table-column prop="name" label="文件名" min-width="260" show-overflow-tooltip>
+        <ui-table-column prop="name" label="文件名" min-width="260" show-overflow-tooltip>
           <template #default="{ row }">
             <span
               class="file-name"
               :class="{ 'is-dir': row.is_dir }"
               @dblclick="handleRowDblClick(row)"
             >
-              <el-icon v-if="row.is_dir" class="file-icon">
+              <ui-icon v-if="row.is_dir" class="file-icon">
                 <folder />
-              </el-icon>
-              <el-icon v-else class="file-icon">
+              </ui-icon>
+              <ui-icon v-else class="file-icon">
                 <document />
-              </el-icon>
+              </ui-icon>
               <span class="file-name-text">{{ row.name }}</span>
             </span>
           </template>
-        </el-table-column>
-        <el-table-column label="大小" width="140" align="center">
+        </ui-table-column>
+        <ui-table-column label="大小" width="140" align="center">
           <template #default="{ row }">
             <span v-if="!row.is_dir">{{ formatSize(row.size) }}</span>
             <span v-else>-</span>
           </template>
-        </el-table-column>
-        <el-table-column label="修改时间" width="200" align="center" show-overflow-tooltip>
+        </ui-table-column>
+        <ui-table-column label="修改时间" width="200" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             {{ formatDateTime(row.modified_time) }}
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="400" fixed="right" align="center" class-name="file-ops-column">
+        </ui-table-column>
+        <ui-table-column label="操作" width="400" fixed="right" align="center" class-name="file-ops-column">
           <template #default="{ row }">
             <div class="file-actions" :class="{ 'is-dir': row.is_dir }">
               <template v-if="row.is_dir">
-                <el-tooltip content="进入" placement="top">
-                  <el-button
+                <ui-tooltip content="进入" placement="top">
+                  <ui-button
                     size="small"
                     type="success"
                     circle
                     aria-label="进入目录"
                     @click="enterDirectory(row)"
                   >
-                    <el-icon><ArrowRightBold /></el-icon>
-                  </el-button>
-                </el-tooltip>
-                <el-tooltip content="压缩" placement="top">
-                  <el-button
+                    <ui-icon><ArrowRightBold /></ui-icon>
+                  </ui-button>
+                </ui-tooltip>
+                <ui-tooltip content="压缩" placement="top">
+                  <ui-button
                     size="small"
                     type="primary"
                     circle
                     aria-label="压缩文件夹"
                     @click="handleCompress(row)"
                   >
-                    <el-icon><Box /></el-icon>
-                  </el-button>
-                </el-tooltip>
+                    <ui-icon><Box /></ui-icon>
+                  </ui-button>
+                </ui-tooltip>
               </template>
               <template v-else>
-                <el-tooltip v-if="isArchiveFile(row.name)" content="解压" placement="top">
-                  <el-button
+                <ui-tooltip v-if="isArchiveFile(row.name)" content="解压" placement="top">
+                  <ui-button
                     size="small"
                     type="primary"
                     circle
                     aria-label="解压压缩包"
                     @click="handleExtract(row)"
                   >
-                    <el-icon><FolderOpened /></el-icon>
-                  </el-button>
-                </el-tooltip>
-                <el-tooltip v-else content="编辑" placement="top">
-                  <el-button
+                    <ui-icon><FolderOpened /></ui-icon>
+                  </ui-button>
+                </ui-tooltip>
+                <ui-tooltip v-else content="编辑" placement="top">
+                  <ui-button
                     size="small"
                     type="info"
                     circle
                     aria-label="编辑文件"
                     @click="handleEdit(row)"
                   >
-                    <el-icon><Edit /></el-icon>
-                  </el-button>
-                </el-tooltip>
-                <el-tooltip content="下载" placement="top">
-                  <el-button
+                    <ui-icon><Edit /></ui-icon>
+                  </ui-button>
+                </ui-tooltip>
+                <ui-tooltip content="下载" placement="top">
+                  <ui-button
                     size="small"
                     type="cyan"
                     circle
                     aria-label="下载文件"
                     @click="handleDownload(row)"
                   >
-                    <el-icon><Download /></el-icon>
-                  </el-button>
-                </el-tooltip>
+                    <ui-icon><Download /></ui-icon>
+                  </ui-button>
+                </ui-tooltip>
               </template>
-              <el-tooltip content="重命名" placement="top">
-                <el-button
+              <ui-tooltip content="重命名" placement="top">
+                <ui-button
                   size="small"
                   type="warning"
                   circle
                   aria-label="重命名"
                   @click="handleRename(row)"
                 >
-                  <el-icon><EditPen /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="删除" placement="top">
-                <el-button
+                  <ui-icon><EditPen /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
+              <ui-tooltip content="删除" placement="top">
+                <ui-button
                   size="small"
                   type="danger"
                   circle
                   aria-label="删除"
                   @click="handleDelete(row)"
                 >
-                  <el-icon><DeleteIcon /></el-icon>
-                </el-button>
-              </el-tooltip>
+                  <ui-icon><DeleteIcon /></ui-icon>
+                </ui-button>
+              </ui-tooltip>
             </div>
           </template>
-        </el-table-column>
-      </el-table>
+        </ui-table-column>
+      </ui-table>
 
       <!-- 隐藏的上传输入框 -->
       <input
@@ -210,7 +210,7 @@
       />
 
       <!-- 文件编辑对话框（MonacoEditor） -->
-      <el-dialog 
+      <ui-dialog
         v-model="editDialogVisible" 
         title="编辑文件" 
         width="75%"
@@ -227,26 +227,26 @@
         />
         <template #footer>
           <span class="dialog-footer">
-            <el-button @click="editDialogVisible = false">
-              <el-icon><CloseBold /></el-icon>
+            <ui-button @click="editDialogVisible = false">
+              <ui-icon><CloseBold /></ui-icon>
               <span class="btn-label">取 消</span>
-            </el-button>
-            <el-button type="primary" @click="submitEdit">
-              <el-icon><Check /></el-icon>
+            </ui-button>
+            <ui-button type="primary" @click="submitEdit">
+              <ui-icon><Check /></ui-icon>
               <span class="btn-label">保 存</span>
-            </el-button>
+            </ui-button>
           </span>
         </template>
-      </el-dialog>
-    </el-card>
+      </ui-dialog>
+    </ui-card>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from '@/lib/feedback'
 import { formatDateTime } from '../utils/date'
 import {
   Folder,
@@ -265,7 +265,7 @@ import {
   Check,
   Box,
   FolderOpened
-} from '@element-plus/icons-vue'
+} from '@/components/icons'
 import MonacoEditor from '../components/MonacoEditor.vue'
 
 const fileList = ref([])
@@ -709,10 +709,6 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.files-page {
-  padding: 20px;
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -821,9 +817,8 @@ onMounted(async () => {
   max-height: 85vh;
 }
 
-.edit-dialog .el-dialog__body {
+.edit-dialog .ui-dialog__body {
   max-height: 60vh;
   overflow: auto;
 }
 </style>
-
