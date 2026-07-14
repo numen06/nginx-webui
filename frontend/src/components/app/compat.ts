@@ -610,6 +610,16 @@ const UiUpload = defineComponent({
       if (input.value) input.value.value = ''
     }
 
+    const notifyChange = (file: UploadFileItem) => {
+      if (props.onChange) props.onChange(file, files.value)
+      else emit('change', file, files.value)
+    }
+
+    const notifyRemove = (file: UploadFileItem) => {
+      if (props.onRemove) props.onRemove(file, files.value)
+      else emit('remove', file, files.value)
+    }
+
     const selectFiles = (selected: File[]) => {
       if (!selected.length || props.disabled) return
       const nextFiles = selected.map(raw => ({ name: raw.name, size: raw.size, raw }))
@@ -618,9 +628,7 @@ const UiUpload = defineComponent({
         return
       }
       files.value = props.multiple ? [...files.value, ...nextFiles] : nextFiles.slice(0, 1)
-      nextFiles.forEach(file => {
-        emit('change', file, files.value)
-      })
+      nextFiles.forEach(notifyChange)
       if (input.value) input.value.value = ''
     }
 
@@ -630,7 +638,7 @@ const UiUpload = defineComponent({
       const allowed = await props.beforeRemove?.(file, files.value)
       if (allowed === false) return
       files.value = files.value.filter(item => item !== file)
-      emit('remove', file, files.value)
+      notifyRemove(file)
     }
 
     const openFileDialog = () => {

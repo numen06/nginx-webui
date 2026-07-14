@@ -564,8 +564,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 </script>
 
 <template>
-  <div class="page-shell">
-    <div class="page-heading gap-4">
+  <div class="page-shell max-w-none lg:h-full lg:min-h-0 lg:overflow-hidden">
+    <div class="page-heading shrink-0 gap-4">
       <div>
         <h2 class="page-title">配置管理</h2>
         <p class="page-description">编辑工作副本、校验配置并安全同步到运行中的 Nginx。</p>
@@ -582,12 +582,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       </div>
     </div>
 
-    <div v-if="pageError" class="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-red-200">
+    <div v-if="pageError" class="flex shrink-0 items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-red-200">
       <Server class="mt-0.5 size-4 shrink-0" />
       <div><div class="font-medium">配置数据加载失败</div><div class="mt-1 text-red-200/80">{{ pageError }}</div></div>
     </div>
 
-    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
+    <div class="grid shrink-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
       <Card class="gap-0 py-0">
         <CardHeader class="border-b p-4 md:p-5">
           <div class="flex flex-wrap items-start justify-between gap-3">
@@ -636,7 +636,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       </Card>
     </div>
 
-    <Card class="gap-0 py-0">
+    <Card class="shrink-0 gap-0 py-0">
       <CardContent class="flex flex-wrap gap-2 p-3">
         <Button size="sm" @click="handleNewSite"><Plus class="size-4" />新建站点</Button>
         <Button size="sm" variant="outline" @click="handleNewFile"><FileCode2 class="size-4" />新建文件</Button>
@@ -650,11 +650,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       </CardContent>
     </Card>
 
-    <Card class="overflow-hidden gap-0 py-0">
-      <div class="grid min-w-0 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <aside class="min-w-0 border-b bg-muted/15 lg:border-r lg:border-b-0">
-          <Tabs v-model="sidebarTab" class="gap-0">
-            <div class="space-y-3 border-b p-3">
+    <Card class="overflow-hidden gap-0 py-0 lg:min-h-0 lg:flex-1">
+      <div class="grid min-w-0 lg:min-h-0 lg:flex-1 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <aside class="min-w-0 border-b bg-muted/15 lg:min-h-0 lg:overflow-hidden lg:border-r lg:border-b-0">
+          <Tabs v-model="sidebarTab" class="gap-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+            <div class="shrink-0 space-y-3 border-b p-3">
               <TabsList class="grid w-full grid-cols-2">
                 <TabsTrigger value="sites">站点配置 <span class="ml-1 text-xs opacity-60">{{ siteItems.length }}</span></TabsTrigger>
                 <TabsTrigger value="files">文件树 <span class="ml-1 text-xs opacity-60">{{ flatEntries.length }}</span></TabsTrigger>
@@ -671,8 +671,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
               </div>
             </div>
 
-            <TabsContent value="sites" class="m-0">
-              <ScrollArea class="h-[420px] lg:h-[640px]">
+            <TabsContent value="sites" class="m-0 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
+              <ScrollArea class="h-[420px] lg:h-full">
                 <div class="space-y-1 p-2">
                   <button
                     v-for="site in filteredSites"
@@ -691,8 +691,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="files" class="m-0">
-              <ScrollArea class="h-[420px] lg:h-[640px]">
+            <TabsContent value="files" class="m-0 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
+              <ScrollArea class="h-[420px] lg:h-full">
                 <div class="space-y-0.5 p-2">
                   <button
                     v-for="entry in filteredEntries"
@@ -714,8 +714,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
           </Tabs>
         </aside>
 
-        <main class="min-w-0 p-3">
-          <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <main class="flex min-w-0 flex-col p-3 lg:min-h-0 lg:overflow-hidden">
+          <div class="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
             <div class="min-w-0">
               <div class="flex min-w-0 items-center gap-2">
                 <FileCode2 class="size-4 shrink-0 text-primary" />
@@ -729,13 +729,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
               <Button size="sm" variant="outline" :disabled="!currentFilePath" @click="handleValidate"><CheckCircle2 class="size-4" />校验</Button>
             </div>
           </div>
-          <MonacoEditor v-if="currentFilePath" v-model="configContent" language="nginx" height="clamp(480px, 62vh, 680px)" @change="handleContentChange" />
-          <div v-else class="grid min-h-[480px] place-items-center rounded-md border border-dashed text-sm text-muted-foreground">
+          <MonacoEditor v-if="currentFilePath" v-model="configContent" class="min-h-[480px] flex-1 lg:min-h-0" language="nginx" height="100%" @change="handleContentChange" />
+          <div v-else class="grid min-h-[480px] flex-1 place-items-center rounded-md border border-dashed text-sm text-muted-foreground lg:min-h-0">
             <div class="text-center"><FileCode2 class="mx-auto mb-2 size-7 opacity-40" />请选择一个配置文件</div>
           </div>
         </main>
       </div>
-      <div class="flex items-start gap-3 border-t bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+      <div class="flex shrink-0 items-start gap-3 border-t bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
         <Server class="mt-0.5 size-4 shrink-0 text-primary" />
         <span>保存只更新工作副本；“重新装载”会先测试配置，成功后自动备份并覆盖线上配置。</span>
       </div>
