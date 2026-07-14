@@ -90,8 +90,10 @@ app.include_router(system.router)
 
 def _ensure_last_nginx_from_default_tar() -> None:
     """
-    若运行版目录 last 下尚无 nginx 可执行文件，但存在默认源码包
-   （backend/default-nginx/nginx-*.tar.gz），则自动编译对应版本并同步到 last。
+    将镜像内置源码包登记到构建目录，确保它能出现在版本列表中。
+
+    若运行版目录 last 下尚无 nginx 可执行文件，则进一步自动编译该版本并同步到 last；
+    已有可用 last 时仅登记源码包，不替换当前运行版。
     """
     from app.routers.nginx_manager import (
         _infer_version_from_filename,
@@ -100,11 +102,6 @@ def _ensure_last_nginx_from_default_tar() -> None:
         _ensure_nginx_dirs,
     )
     from app.utils.nginx_status_cache import clear_nginx_status_cache
-
-    last_path = _get_install_path("last")
-    last_exe = _get_nginx_executable(last_path)
-    if last_path.exists() and last_exe.exists():
-        return
 
     default_tar = _get_default_nginx_tar_path()
     if default_tar is None or not default_tar.exists():
@@ -123,9 +120,21 @@ def _ensure_last_nginx_from_default_tar() -> None:
     if not build_tar.exists():
         try:
             shutil.copy2(default_tar, build_tar)
+            logging.info(
+                "[startup] 已准备镜像内置 Nginx %s 源码包: %s",
+                version,
+                build_tar,
+            )
         except Exception as e:
             logging.error("[startup] 复制默认源码包到构建目录失败: %s", e)
             return
+
+    # 已有可用发布版时只登记内置源码包，不自动编译或替换当前运行版。
+    # 这样升级镜像后，新内置版本会出现在管理列表中，由用户决定何时编译、发布。
+    last_path = _get_install_path("last")
+    last_exe = _get_nginx_executable(last_path)
+    if last_path.exists() and last_exe.exists():
+        return
 
     install_path = _get_install_path(version)
     exe = _get_nginx_executable(install_path)
@@ -219,7 +228,7 @@ async def startup_event():
 
     # 自动启动nginx（如果有已安装的版本）
     try:
-        # 无 last 时：若镜像/仓库带有默认源码包，则首次启动自动编译并同步到 last
+        # 先登记镜像内置源码包；无 last 时再自动编译并同步到 last
         _ensure_last_nginx_from_default_tar()
 
         # 检查是否有运行中的nginx

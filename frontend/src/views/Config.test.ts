@@ -120,4 +120,21 @@ describe('Config', () => {
     expect(wrapper.find('[aria-label="退出专注编辑"]').exists()).toBe(true)
     expect(wrapper.findAll('button').some(button => button.text().includes('保存'))).toBe(true)
   })
+
+  it('groups save and force apply while keeping legacy split visible', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+
+    const saveActions = wrapper.get('.config-save-actions')
+    expect(saveActions.text()).toContain('保存')
+    expect(saveActions.text()).toContain('强制覆盖')
+
+    const splitButton = wrapper.findAll('button').find(button => button.text().includes('拆分老配置'))
+    expect(splitButton).toBeTruthy()
+    expect(splitButton!.find('span.hidden').exists()).toBe(false)
+
+    const mergedPreview = wrapper.get('button[aria-label="合并预览"]')
+    expect(mergedPreview.text()).toBe('')
+    expect(mergedPreview.attributes('title')).toBe('合并预览')
+  })
 })
