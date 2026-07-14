@@ -274,12 +274,30 @@
             />
           </ui-select>
         </ui-form-item>
-        <ui-form-item label="解压选项">
+        <ui-form-item label="部署位置">
           <ui-radio-group v-model="deployForm.extractToSubdir">
             <ui-radio :label="false">直接解压到 html 根目录</ui-radio>
-            <ui-radio :label="true">解压到子目录（使用包名）</ui-radio>
+            <ui-radio :label="true">解压到访问路径对应的子目录</ui-radio>
           </ui-radio-group>
         </ui-form-item>
+        <ui-form-item v-if="deployForm.extractToSubdir" label="访问路径">
+          <div class="access-path-field">
+            <ui-input
+              v-model="deployForm.accessPath"
+              placeholder="例如 /portal/"
+              clearable
+            />
+            <ui-text type="info" size="small">
+              资源将部署到对应的 html 子目录，并自动修正 index.html 中以 / 开头的资源地址。
+            </ui-text>
+          </div>
+        </ui-form-item>
+        <ui-alert
+          v-if="deployForm.extractToSubdir"
+          :title="`部署后访问地址：${normalizedDeployAccessPath || '请填写有效路径'}`"
+          type="info"
+          :closable="false"
+        />
       </ui-form>
       <template #footer>
         <span class="dialog-footer">
@@ -319,7 +337,8 @@ const uploadForm = ref({})
 const deployForm = ref({
   filename: null,
   directory: null,
-  extractToSubdir: false
+  extractToSubdir: false,
+  accessPath: '/'
 })
 const extractForm = ref({
   directory: null,
@@ -361,6 +380,26 @@ const htmlDirPath = computed(() => {
   }
   return '-'
 })
+
+const normalizeAccessPath = (value) => {
+  const trimmed = String(value || '').trim()
+  if (!trimmed || trimmed.includes('\\') || trimmed.includes('?') || trimmed.includes('#')) {
+    return ''
+  }
+  const segments = trimmed.split('/').filter(Boolean)
+  if (segments.some(segment => segment === '.' || segment === '..')) return ''
+  return segments.length ? `/${segments.join('/')}/` : '/'
+}
+
+const normalizedDeployAccessPath = computed(() => (
+  deployForm.value.extractToSubdir
+    ? normalizeAccessPath(deployForm.value.accessPath)
+    : '/'
+))
+
+const packageDirectoryName = (filename) => String(filename || '')
+  .replace(/\.tar\.gz$/i, '')
+  .replace(/\.(zip|tgz|tar)$/i, '')
 
 const loadVersions = async () => {
   try {
@@ -460,6 +499,7 @@ const handleDeployPackage = (filename) => {
   deployForm.value.filename = filename
   deployForm.value.directory = selectedDirectory.value
   deployForm.value.extractToSubdir = false
+  deployForm.value.accessPath = `/${packageDirectoryName(filename)}/`
   deployDialogVisible.value = true
 }
 
@@ -472,6 +512,10 @@ const handleDeployConfirm = async () => {
     ElMessage.warning('请先选择 Nginx 目录/版本')
     return
   }
+  if (deployForm.value.extractToSubdir && !normalizedDeployAccessPath.value) {
+    ElMessage.warning('访问路径格式不正确，请使用 /portal/ 这样的路径')
+    return
+  }
 
   deploying.value = deployForm.value.filename
   try {
@@ -479,7 +523,8 @@ const handleDeployConfirm = async () => {
       deployForm.value.filename,
       null,
       deployForm.value.directory,
-      deployForm.value.extractToSubdir
+      deployForm.value.extractToSubdir,
+      normalizedDeployAccessPath.value
     )
     ElMessage.success(res.message || '部署成功')
     deployDialogVisible.value = false
@@ -680,6 +725,12 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.access-path-field {
+  display: grid;
+  gap: 8px;
+  width: 100%;
 }
 
 </style>
