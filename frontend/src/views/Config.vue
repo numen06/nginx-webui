@@ -7,6 +7,8 @@ import {
   FileCode2,
   Folder,
   FolderPlus,
+  Maximize2,
+  Minimize2,
   Pencil,
   Plus,
   RefreshCw,
@@ -34,9 +36,6 @@ import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card'
 import {
   Dialog,
@@ -52,7 +51,6 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Tabs,
   TabsContent,
@@ -113,6 +111,7 @@ const siteItems = ref<SiteItem[]>([])
 const siteKeyword = ref('')
 const previewVisible = ref(false)
 const previewContent = ref('')
+const focusMode = ref(false)
 const configInfo = ref<ConfigInfo>({ ...EMPTY_CONFIG_INFO })
 
 const filteredSites = computed(() => {
@@ -564,8 +563,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
 </script>
 
 <template>
-  <div class="page-shell max-w-none lg:h-full lg:min-h-0 lg:overflow-hidden">
-    <div class="page-heading shrink-0 gap-4">
+  <div
+    class="page-shell max-w-none lg:h-full lg:min-h-0 lg:overflow-hidden"
+    :class="focusMode ? 'gap-2 p-2 md:p-3' : 'gap-3 p-3 md:p-4'"
+    :data-focus-mode="focusMode"
+  >
+    <div v-if="!focusMode" class="page-heading shrink-0 gap-4">
       <div>
         <h2 class="page-title">配置管理</h2>
         <p class="page-description">编辑工作副本、校验配置并安全同步到运行中的 Nginx。</p>
@@ -587,72 +590,66 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
       <div><div class="font-medium">配置数据加载失败</div><div class="mt-1 text-red-200/80">{{ pageError }}</div></div>
     </div>
 
-    <div class="grid shrink-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
-      <Card class="gap-0 py-0">
-        <CardHeader class="border-b p-4 md:p-5">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div><CardTitle class="text-base">运行配置</CardTitle><CardDescription class="mt-1">当前版本与工作副本状态</CardDescription></div>
-            <Badge :variant="configInfo.pending_changes ? 'secondary' : 'default'">
-              {{ configInfo.pending_changes ? '存在待应用修改' : '已同步' }}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent class="grid grid-cols-2 gap-px overflow-hidden p-0 lg:grid-cols-4">
-          <template v-if="loading">
-            <Skeleton v-for="index in 4" :key="index" class="m-4 h-12" />
-          </template>
-          <template v-else>
-            <div v-for="item in [
-              ['Nginx 版本', configInfo.nginx_version || '未知'],
-              ['安装目录', configInfo.install_path || '系统安装'],
-              ['配置目录', configInfo.config_dir || '未知'],
-              ['可执行文件', configInfo.binary || '未知'],
-            ]" :key="String(item[0])" class="min-w-0 border-r border-b p-4">
-              <div class="text-xs text-muted-foreground">{{ item[0] }}</div>
-              <div class="mt-1 truncate font-mono text-xs font-medium" :title="String(item[1])">{{ item[1] }}</div>
-            </div>
-          </template>
-        </CardContent>
-      </Card>
-
-      <Card class="gap-0 py-0">
-        <CardHeader class="border-b p-4 md:p-5">
-          <div class="flex items-center justify-between gap-3">
-            <div><CardTitle class="text-base">配置备份</CardTitle><CardDescription class="mt-1">最多保留最近 10 个版本</CardDescription></div>
-            <Archive class="size-5 text-primary" />
-          </div>
-        </CardHeader>
-        <CardContent class="space-y-3 p-4 md:p-5">
-          <NativeSelect v-model="selectedBackupId" class="w-full" :disabled="backupLoading || !backupOptions.length" aria-label="选择配置备份">
+    <Card v-if="!focusMode" class="shrink-0 gap-0 py-0">
+      <CardContent class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 p-2">
+        <div class="flex min-w-0 flex-1 items-center gap-2 text-xs">
+          <Server class="size-4 shrink-0 text-primary" />
+          <Badge :variant="configInfo.pending_changes ? 'secondary' : 'default'">
+            {{ configInfo.pending_changes ? '待应用' : '已同步' }}
+          </Badge>
+          <span class="shrink-0 font-medium">Nginx {{ loading ? '加载中' : (configInfo.nginx_version || '未知') }}</span>
+          <span class="hidden text-muted-foreground xl:inline">·</span>
+          <span class="hidden min-w-0 truncate font-mono text-muted-foreground xl:inline" :title="configInfo.config_dir || ''">
+            配置 {{ configInfo.config_dir || '未知' }}
+          </span>
+          <span class="hidden min-w-0 truncate font-mono text-muted-foreground 2xl:inline" :title="configInfo.install_path || ''">
+            · 安装 {{ configInfo.install_path || '系统安装' }}
+          </span>
+        </div>
+        <div class="flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
+          <Archive class="hidden size-4 shrink-0 text-muted-foreground sm:block" />
+          <NativeSelect v-model="selectedBackupId" class="h-8 w-full sm:w-56" :disabled="backupLoading || !backupOptions.length" aria-label="选择配置备份">
             <NativeSelectOption value="">{{ backupOptions.length ? '选择备份版本' : '暂无备份' }}</NativeSelectOption>
             <NativeSelectOption v-for="item in backupOptions" :key="item.id" :value="item.id.toString()">{{ item.label }}</NativeSelectOption>
           </NativeSelect>
-          <div class="grid grid-cols-3 gap-2">
-            <Button size="sm" variant="outline" :disabled="backupLoading" @click="handleLoadBackups"><RefreshCw class="size-4" /><span class="hidden sm:inline">刷新</span></Button>
-            <Button size="sm" variant="outline" :disabled="backupLoading" @click="handleCreateBackup"><Plus class="size-4" /><span class="hidden sm:inline">新备份</span></Button>
-            <Button size="sm" variant="outline" :disabled="backupLoading || !selectedBackupId" @click="handleRollback"><RotateCcw class="size-4" /><span class="hidden sm:inline">回滚</span></Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-
-    <Card class="shrink-0 gap-0 py-0">
-      <CardContent class="flex flex-wrap gap-2 p-3">
-        <Button size="sm" @click="handleNewSite"><Plus class="size-4" />新建站点</Button>
-        <Button size="sm" variant="outline" @click="handleNewFile"><FileCode2 class="size-4" />新建文件</Button>
-        <Button size="sm" variant="outline" @click="handleNewDir"><FolderPlus class="size-4" />新建目录</Button>
-        <Button size="sm" variant="outline" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleRename"><Pencil class="size-4" />重命名</Button>
-        <Button size="sm" variant="destructive" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleDelete"><Trash2 class="size-4" />删除</Button>
-        <span class="hidden flex-1 md:block" />
-        <Button size="sm" variant="outline" @click="handleSplitLegacy"><Scissors class="size-4" />拆分老配置</Button>
-        <Button size="sm" variant="outline" @click="handleMergedPreview"><Eye class="size-4" />合并预览</Button>
-        <Button size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}</Button>
+          <Button size="icon-sm" variant="outline" :disabled="backupLoading" title="刷新备份" aria-label="刷新备份" @click="handleLoadBackups"><RefreshCw class="size-4" /></Button>
+          <Button size="icon-sm" variant="outline" :disabled="backupLoading" title="创建备份" aria-label="创建备份" @click="handleCreateBackup"><Plus class="size-4" /></Button>
+          <Button size="icon-sm" variant="outline" :disabled="backupLoading || !selectedBackupId" title="回滚备份" aria-label="回滚备份" @click="handleRollback"><RotateCcw class="size-4" /></Button>
+        </div>
       </CardContent>
     </Card>
 
     <Card class="overflow-hidden gap-0 py-0 lg:min-h-0 lg:flex-1">
-      <div class="grid min-w-0 lg:min-h-0 lg:flex-1 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <aside class="min-w-0 border-b bg-muted/15 lg:min-h-0 lg:overflow-hidden lg:border-r lg:border-b-0">
+      <div class="flex shrink-0 flex-wrap items-center gap-2 border-b bg-muted/10 p-2">
+        <Button size="sm" @click="handleNewSite"><Plus class="size-4" />新建站点</Button>
+        <Button size="sm" variant="outline" @click="handleNewFile"><FileCode2 class="size-4" />新建文件</Button>
+        <Button size="sm" variant="outline" @click="handleNewDir"><FolderPlus class="size-4" /><span class="hidden sm:inline">新建目录</span></Button>
+        <Button size="sm" variant="outline" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleRename"><Pencil class="size-4" /><span class="hidden sm:inline">重命名</span></Button>
+        <Button size="sm" variant="destructive" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleDelete"><Trash2 class="size-4" /><span class="hidden sm:inline">删除</span></Button>
+        <span class="hidden flex-1 md:block" />
+        <Button v-if="focusMode" size="sm" variant="secondary" @click="handleTest"><TestTube2 class="size-4" /><span class="hidden lg:inline">测试</span></Button>
+        <Button v-if="focusMode" size="sm" :disabled="!currentFilePath || saving" @click="handleSave"><Save class="size-4" /><span class="hidden lg:inline">{{ saving ? '保存中' : '保存' }}</span></Button>
+        <Button v-if="focusMode" size="sm" variant="outline" @click="handleReload"><RefreshCw class="size-4" /><span class="hidden xl:inline">重新装载</span></Button>
+        <Button size="sm" variant="outline" title="拆分老配置" aria-label="拆分老配置" @click="handleSplitLegacy"><Scissors class="size-4" /><span class="hidden 2xl:inline">拆分老配置</span></Button>
+        <Button size="sm" variant="outline" title="合并预览" aria-label="合并预览" @click="handleMergedPreview"><Eye class="size-4" /><span class="hidden xl:inline">合并预览</span></Button>
+        <Button size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" /><span class="hidden sm:inline">{{ applying ? '覆盖中' : '强制覆盖' }}</span></Button>
+        <Button
+          size="sm"
+          variant="outline"
+          :aria-pressed="focusMode"
+          :aria-label="focusMode ? '退出专注编辑' : '进入专注编辑'"
+          @click="focusMode = !focusMode"
+        >
+          <Minimize2 v-if="focusMode" class="size-4" />
+          <Maximize2 v-else class="size-4" />
+          <span class="hidden sm:inline">{{ focusMode ? '退出专注' : '专注编辑' }}</span>
+        </Button>
+      </div>
+      <div
+        class="grid min-w-0 lg:min-h-0 lg:flex-1"
+        :class="focusMode ? 'lg:grid-cols-1' : 'lg:grid-cols-[300px_minmax(0,1fr)]'"
+      >
+        <aside v-if="!focusMode" class="min-w-0 border-b bg-muted/15 lg:min-h-0 lg:overflow-hidden lg:border-r lg:border-b-0">
           <Tabs v-model="sidebarTab" class="gap-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col">
             <div class="shrink-0 space-y-3 border-b p-3">
               <TabsList class="grid w-full grid-cols-2">
@@ -735,7 +732,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
           </div>
         </main>
       </div>
-      <div class="flex shrink-0 items-start gap-3 border-t bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+      <div v-if="!focusMode" class="flex shrink-0 items-start gap-3 border-t bg-primary/5 px-4 py-2 text-xs text-muted-foreground">
         <Server class="mt-0.5 size-4 shrink-0 text-primary" />
         <span>保存只更新工作副本；“重新装载”会先测试配置，成功后自动备份并覆盖线上配置。</span>
       </div>

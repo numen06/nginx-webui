@@ -356,6 +356,8 @@ defineExpose({
 .log-viewer-container {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   height: 100%;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -367,6 +369,7 @@ defineExpose({
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 8px 15px;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
@@ -374,11 +377,21 @@ defineExpose({
 
 .log-viewer-actions {
   display: flex;
+  min-width: 0;
+  flex: 1;
   gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.log-viewer-actions :deep(.ui-button) {
+  flex: 0 0 auto;
 }
 
 .log-viewer-info {
   display: flex;
+  flex: 0 0 auto;
   gap: 15px;
   font-size: 12px;
   color: var(--text-secondary);
@@ -390,6 +403,8 @@ defineExpose({
 }
 
 .log-viewer-content {
+  min-width: 0;
+  min-height: 0;
   flex: 1;
   overflow-y: auto;
   overflow-x: auto;
@@ -399,6 +414,7 @@ defineExpose({
   font-size: 13px;
   line-height: 1.6;
   user-select: text;
+  overscroll-behavior: contain;
 }
 
 .log-viewer-lines {
@@ -441,13 +457,12 @@ defineExpose({
 .line-content {
   flex: 1;
   padding: 2px 10px;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  min-width: 0;
+  white-space: pre;
+  min-width: max-content;
 }
 
 .log-line.selected .line-content {
-  color: var(--text-primary);
+  color: #f1f5f9;
 }
 
 .line-content :deep(mark) {
@@ -486,5 +501,27 @@ defineExpose({
   height: 100%;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .log-viewer-header {
+    align-items: stretch;
+    flex-direction: column-reverse;
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .log-viewer-info {
+    justify-content: flex-end;
+  }
+
+  .line-number {
+    width: 48px;
+    padding-inline: 6px;
+  }
+
+  .line-content {
+    padding-inline: 8px;
+  }
 }
 </style>

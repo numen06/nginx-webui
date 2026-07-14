@@ -108,4 +108,16 @@ describe('Config', () => {
     expect(editor.classes()).toContain('flex-1')
     expect(editor.attributes('height')).toBe('100%')
   })
+
+  it('supports a focus mode that prioritizes the editor without hiding save actions', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[aria-label="进入专注编辑"]').trigger('click')
+
+    expect(wrapper.get('.page-shell').attributes('data-focus-mode')).toBe('true')
+    expect(wrapper.find('aside').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="退出专注编辑"]').exists()).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text().includes('保存'))).toBe(true)
+  })
 })
