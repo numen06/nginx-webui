@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { defineComponent, nextTick } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import { UiStep, UiSteps, UiUpload } from './compat'
 
@@ -28,6 +28,38 @@ describe('UiUpload', () => {
 
     expect(onRemove).toHaveBeenCalledOnce()
     expect(wrapper.text()).not.toContain('nginx-1.28.0.tar.gz')
+  })
+
+  it('forwards template on-change and on-remove callbacks to the form state', async () => {
+    const wrapper = mount(defineComponent({
+      components: { UiUpload },
+      setup() {
+        const selectedFiles = ref<File[]>([])
+        const syncFiles = (_file: unknown, fileList: Array<{ raw: File }> = []) => {
+          selectedFiles.value = fileList.map(item => item.raw)
+        }
+        return { selectedFiles, syncFiles }
+      },
+      template: `
+        <UiUpload :on-change="syncFiles" :on-remove="syncFiles">
+          <button type="button">选择文件</button>
+        </UiUpload>
+        <button data-testid="submit" :disabled="!selectedFiles.length">上传</button>
+      `,
+    }))
+    const file = new File(['index'], 'index.html', { type: 'text/html' })
+    const input = wrapper.get('input[type="file"]')
+
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [file],
+    })
+    await input.trigger('change')
+
+    expect(wrapper.get('[data-testid="submit"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[aria-label="移除 index.html"]').trigger('click')
+    expect(wrapper.get('[data-testid="submit"]').attributes('disabled')).toBeDefined()
   })
 })
 
