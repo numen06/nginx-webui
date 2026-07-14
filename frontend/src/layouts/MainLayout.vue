@@ -213,7 +213,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <SidebarProvider>
+  <SidebarProvider class="h-svh overflow-hidden">
     <Sidebar collapsible="icon">
       <SidebarHeader class="border-b border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
         <RouterLink
@@ -274,8 +274,8 @@ onMounted(() => {
       <SidebarRail />
     </Sidebar>
 
-    <SidebarInset class="min-w-0 bg-background">
-      <header class="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+    <SidebarInset class="min-h-0 min-w-0 overflow-hidden bg-background">
+      <header class="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <SidebarTrigger />
         <Separator orientation="vertical" class="h-5" />
         <h1 class="truncate text-sm font-medium md:text-base">{{ currentTitle }}</h1>
@@ -312,7 +312,7 @@ onMounted(() => {
           </DropdownMenu>
         </div>
       </header>
-      <main class="min-w-0 flex-1 overflow-x-hidden">
+      <main class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
         <RouterView />
       </main>
     </SidebarInset>

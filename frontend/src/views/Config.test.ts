@@ -95,4 +95,17 @@ describe('Config', () => {
     expect(wrapper.findAll('button').some(button => button.text().includes('alpha.example.com'))).toBe(true)
     expect(wrapper.findAll('button').some(button => button.text().includes('beta.example.com'))).toBe(false)
   })
+
+  it('lets the editor fill the desktop workspace instead of fixing a viewport height', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+
+    const page = wrapper.get('.page-shell')
+    const editor = wrapper.get('[data-testid="monaco"]')
+
+    expect(page.classes()).toContain('lg:h-full')
+    expect(page.classes()).toContain('lg:overflow-hidden')
+    expect(editor.classes()).toContain('flex-1')
+    expect(editor.attributes('height')).toBe('100%')
+  })
 })
