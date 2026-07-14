@@ -29,6 +29,10 @@ from app.auth import get_current_user, get_current_user_optional_query, User
 from app.config import get_config
 from app.utils.audit import create_audit_log, get_client_ip
 from app.utils.nginx_versions import _get_versions_root, _get_install_path
+from app.utils.static_package import (
+    normalize_static_access_path,
+    rewrite_static_entry_paths,
+)
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -739,6 +743,9 @@ async def deploy_package(
     ),
     version: Optional[str] = Form(None, description="Nginx 版本号"),
     extract_to_subdir: bool = Form(False, description="是否解压到子目录（使用包名）"),
+    access_path: Optional[str] = Form(
+        None, description="静态站点访问路径，例如 /portal/；不传时保持旧版部署行为"
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -794,12 +801,27 @@ async def deploy_package(
             # 获取 html 目录
             html_dir = get_version_root_dir(version, root_only=False)
 
-            # 确定解压目标目录
-            if extract_to_subdir:
-                # 使用包名（不含扩展名）作为子目录名
-                package_name = Path(original_filename).stem
-                if package_name.endswith(".tar"):
-                    package_name = package_name[:-4]
+            package_name = Path(original_filename).stem
+            if package_name.endswith(".tar"):
+                package_name = package_name[:-4]
+
+            try:
+                normalized_access_path = normalize_static_access_path(
+                    access_path
+                    if access_path is not None
+                    else (f"/{package_name}/" if extract_to_subdir else "/")
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
+
+            # 新版由访问路径决定部署目录；未传 access_path 时兼容旧版参数。
+            if access_path is not None:
+                relative_target = normalized_access_path.strip("/")
+                target_dir = html_dir / relative_target if relative_target else html_dir
+                extract_to_subdir = normalized_access_path != "/"
+            elif extract_to_subdir:
                 target_dir = html_dir / package_name
             else:
                 target_dir = html_dir
@@ -824,6 +846,10 @@ async def deploy_package(
                     detail="不支持的文件格式，仅支持 .zip, .tar.gz, .tgz, .tar",
                 )
 
+            rewritten_files = rewrite_static_entry_paths(
+                target_dir, normalized_access_path
+            )
+
             # 记录操作日志
             create_audit_log(
                 db=db,
@@ -836,6 +862,8 @@ async def deploy_package(
                     "size": len(content),
                     "version": version,
                     "extract_to_subdir": extract_to_subdir,
+                    "access_path": normalized_access_path,
+                    "rewritten_files": rewritten_files,
                     "from_uploaded": bool(filename),
                 },
                 ip_address=get_client_ip(request),
@@ -843,8 +871,13 @@ async def deploy_package(
 
             return {
                 "success": True,
-                "message": f"静态资源包已成功部署到 {target_dir.relative_to(html_dir)}",
+                "message": (
+                    "静态资源包已成功部署，"
+                    f"访问路径为 {normalized_access_path}"
+                ),
                 "target_dir": str(target_dir.relative_to(html_dir)),
+                "access_path": normalized_access_path,
+                "rewritten_files": rewritten_files,
             }
         finally:
             # 清理临时文件（仅当是新上传的文件时）

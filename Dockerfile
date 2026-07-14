@@ -65,8 +65,6 @@ ARG DNF_RETRIES=10
 ARG DNF_MAX_PARALLEL_DOWNLOADS=10
 ARG DNF_INSTALL_WEAK_DEPS=False
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-# 默认随镜像打包的 Nginx 源码版本（构建时下载 tar.gz，运行时由后端自动编译）
-ARG NGINX_DEFAULT_SOURCE_VERSION=1.31.2
 
 #设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
@@ -93,24 +91,20 @@ RUN set -eux; \
 # 设置工作目录
 WORKDIR /app
 
-# 复制后端代码（排除不需要的文件，.dockerignore 已处理）
+# 复制后端代码与仓库内置的默认 Nginx 源码包（排除项由 .dockerignore 控制）
 COPY backend/ /app/backend/
 
-# 清理可能存在的缓存文件
-RUN find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/backend -type f -name "*.pyc" -delete 2>/dev/null || true && \
+# 校验默认源码包已进入镜像，并清理可能存在的缓存文件
+RUN set -eux; \
+    test -f /app/backend/default-nginx/nginx-1.31.2.tar.gz; \
+    find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true; \
+    find /app/backend -type f -name "*.pyc" -delete 2>/dev/null || true; \
     find /app/backend -type f -name "*.pyo" -delete 2>/dev/null || true
 
 # 安装 Python 依赖（合并命令减少层数）
 RUN pip install --upgrade pip --index-url=${PIP_INDEX_URL} && \
     cd /app/backend && pip install --no-cache-dir --index-url=${PIP_INDEX_URL} -r requirements.txt && \
     rm -rf /root/.cache/pip /root/.config/pip
-
-# 将默认 Nginx 源码包放入镜像（不编译）；首次启动时由 FastAPI 检测 last 并触发编译
-RUN set -eux; \
-    mkdir -p /app/backend/default-nginx; \
-    curl -fsSL "https://nginx.org/download/nginx-${NGINX_DEFAULT_SOURCE_VERSION}.tar.gz" \
-        -o "/app/backend/default-nginx/nginx-${NGINX_DEFAULT_SOURCE_VERSION}.tar.gz"
 
 # 准备数据目录结构，便于通过 /app/data 单目录持久化
 # 同时清理临时文件和缓存

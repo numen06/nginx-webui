@@ -23,8 +23,11 @@ from app.utils.nginx import (
 from app.utils.nginx_status_cache import clear_nginx_status_cache
 
 
-DYNAMIC_UPSTREAM_FILE = "00-webui-dynamic-upstreams.conf"
+DYNAMIC_UPSTREAM_FILE = "zz-webui-dynamic-upstreams.conf"
+LEGACY_DYNAMIC_UPSTREAM_FILES = ("00-webui-dynamic-upstreams.conf",)
 DYNAMIC_LOCATION_INCLUDE = "include conf.d/webui-dynamic/locations/*.conf;"
+DYNAMIC_LOCATION_BLOCK_START = "# BEGIN NGINX WEBUI DYNAMIC LOCATIONS"
+DYNAMIC_LOCATION_BLOCK_END = "# END NGINX WEBUI DYNAMIC LOCATIONS"
 RESERVED_ROUTE_PREFIXES = (
     "/api",
     "/assets",
@@ -243,7 +246,7 @@ location = {route_prefix} {{
 {path_proxy_directives}
 }}
 
-location {route_prefix}/ {{
+location ^~ {route_prefix}/ {{
 {path_proxy_directives}
 }}
 """
@@ -281,7 +284,7 @@ def get_dynamic_config_preview(db: Session) -> str:
     return "\n".join(chunks).rstrip() + "\n"
 
 
-def _find_server_block(content: str, preferred: bool = False) -> Optional[tuple[int, int]]:
+def _find_server_block(content: str) -> Optional[tuple[int, int]]:
     lines = content.splitlines()
     candidates = []
     index = 0
@@ -301,8 +304,6 @@ def _find_server_block(content: str, preferred: bool = False) -> Optional[tuple[
                 score = 3
             elif "server_name _" in block:
                 score = 2
-            elif preferred:
-                score = 1
             candidates.append((score, start, index))
         index += 1
     if not candidates:
@@ -312,36 +313,98 @@ def _find_server_block(content: str, preferred: bool = False) -> Optional[tuple[
     return start, end
 
 
-def _ensure_dynamic_include(conf_dir: Path) -> Optional[Path]:
+def _remove_dynamic_location_block(content: str) -> str:
+    """移除旧版 include 和当前内联动态 location 块。"""
+    result: List[str] = []
+    inside_dynamic_block = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped == DYNAMIC_LOCATION_BLOCK_START:
+            inside_dynamic_block = True
+            continue
+        if inside_dynamic_block:
+            if stripped == DYNAMIC_LOCATION_BLOCK_END:
+                inside_dynamic_block = False
+            continue
+        if stripped == DYNAMIC_LOCATION_INCLUDE:
+            continue
+        result.append(line)
+
+    return "\n".join(result).rstrip() + "\n"
+
+
+def _dynamic_server_score(content: str, block: tuple[int, int]) -> int:
+    lines = content.splitlines()
+    start, end = block
+    server_block = "\n".join(lines[start : end + 1])
+    if "location /api/" in server_block:
+        return 40
+    if re.search(r"^\s*server_name\s+_;", server_block, re.MULTILINE):
+        return 30
+    if re.search(r"^\s*listen\s+[^;]*\bdefault_server\b", server_block, re.MULTILINE):
+        return 20
+    if re.search(r"^\s*listen\s+(?:[^;:]+:)?80\b", server_block, re.MULTILINE):
+        return 10
+    return 0
+
+
+def _indent_dynamic_locations(rendered: Dict[str, str], indent: str) -> List[str]:
+    lines = [f"{indent}{DYNAMIC_LOCATION_BLOCK_START}"]
+    location_paths = sorted(key for key in rendered if key.startswith("locations/"))
+    for index, path in enumerate(location_paths):
+        if index:
+            lines.append("")
+        for line in rendered[path].rstrip().splitlines():
+            lines.append(f"{indent}{line}" if line else "")
+    lines.append(f"{indent}{DYNAMIC_LOCATION_BLOCK_END}")
+    return lines
+
+
+def _sync_dynamic_locations(conf_dir: Path, rendered: Dict[str, str]) -> Optional[Path]:
+    """把动态 location 直接写入主 HTTP server，避免通配 include 未被活动配置加载。"""
     conf_d_dir = conf_dir / "conf.d"
     conf_d_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(conf_d_dir.glob("*.conf"))
 
+    cleaned_contents: Dict[Path, str] = {}
     for file_path in files:
         content = file_path.read_text(encoding="utf-8", errors="ignore")
-        if DYNAMIC_LOCATION_INCLUDE in content:
-            return file_path
+        cleaned = _remove_dynamic_location_block(content)
+        cleaned_contents[file_path] = cleaned
+        if cleaned != content:
+            file_path.write_text(cleaned, encoding="utf-8")
+
+    has_locations = any(key.startswith("locations/") for key in rendered)
+    if not has_locations:
+        return None
 
     selected: Optional[Path] = None
     selected_block: Optional[tuple[int, int]] = None
+    selected_score = -1
     for file_path in files:
-        content = file_path.read_text(encoding="utf-8", errors="ignore")
+        if file_path.name == DYNAMIC_UPSTREAM_FILE:
+            continue
+        content = cleaned_contents[file_path]
         block = _find_server_block(content)
-        if block:
+        if block is not None:
+            score = _dynamic_server_score(content, block)
+        else:
+            score = -1
+        if block is not None and score > selected_score:
             selected = file_path
             selected_block = block
-            if "location /api/" in content:
-                break
+            selected_score = score
 
     if selected is None or selected_block is None:
         return None
 
-    lines = selected.read_text(encoding="utf-8", errors="ignore").splitlines()
+    lines = cleaned_contents[selected].splitlines()
     _, end = selected_block
-    indent = "    "
-    include_line = f"{indent}{DYNAMIC_LOCATION_INCLUDE}"
-    lines.insert(end, "")
-    lines.insert(end + 1, include_line)
+    closing_indent = re.match(r"^\s*", lines[end]).group(0)
+    indent = closing_indent + "    "
+    dynamic_lines = [""] + _indent_dynamic_locations(rendered, indent)
+    lines[end:end] = dynamic_lines
     selected.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return selected
 
@@ -350,6 +413,11 @@ def _write_dynamic_files(conf_dir: Path, rendered: Dict[str, str]) -> None:
     conf_d_dir = conf_dir / "conf.d"
     locations_dir = conf_d_dir / "webui-dynamic" / "locations"
     locations_dir.mkdir(parents=True, exist_ok=True)
+
+    for legacy_name in LEGACY_DYNAMIC_UPSTREAM_FILES:
+        legacy_path = conf_d_dir / legacy_name
+        if legacy_path.exists():
+            legacy_path.unlink()
 
     upstream_path = conf_d_dir / DYNAMIC_UPSTREAM_FILE
     upstream_path.write_text(rendered["upstreams"], encoding="utf-8")
@@ -362,10 +430,10 @@ def _write_dynamic_files(conf_dir: Path, rendered: Dict[str, str]) -> None:
         target = locations_dir / Path(key).name
         target.write_text(content, encoding="utf-8")
 
-    include_file = _ensure_dynamic_include(conf_dir)
+    location_server_file = _sync_dynamic_locations(conf_dir, rendered)
     has_locations = any(key.startswith("locations/") for key in rendered)
-    if has_locations and include_file is None:
-        raise RuntimeError("未找到可插入动态 location include 的 server 配置")
+    if has_locations and location_server_file is None:
+        raise RuntimeError("未找到可写入动态 location 的 HTTP server 配置")
 
 
 def _snapshot_config_dir(conf_dir: Path) -> Path:

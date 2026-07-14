@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { z } from 'zod'
 import { KeyRound, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, UserRound } from 'lucide-vue-next'
 import type { User } from '@/api/auth'
@@ -33,6 +34,7 @@ import { useAuthStore } from '@/store/auth'
 import { formatDateTime } from '@/utils/date'
 
 const authStore = useAuthStore()
+const router = useRouter()
 const users = ref<User[]>([])
 const loading = ref(false)
 const keyword = ref('')
@@ -52,6 +54,14 @@ const form = reactive<CreateUserPayload>({
   is_admin: false,
 })
 const passwordForm = reactive({ password: '', confirm: '' })
+
+const editingUser = computed(() => users.value.find(user => user.id === editingId.value) || null)
+const isEditingCurrentUser = computed(() => editingId.value === authStore.user?.id)
+const isAdminTransfer = computed(() => Boolean(
+  editingUser.value
+  && !editingUser.value.is_admin
+  && form.is_admin,
+))
 
 const filteredUsers = computed(() => {
   const query = keyword.value.trim().toLowerCase()
@@ -116,17 +126,36 @@ async function submitUser() {
   formError.value = ''
   try {
     if (editingId.value == null) {
-      await usersApi.createUser(parsed.data as CreateUserPayload)
+      await usersApi.createUser({ ...parsed.data, is_admin: false } as CreateUserPayload)
       ElMessage.success('用户创建成功')
     } else {
+      if (isAdminTransfer.value) {
+        try {
+          await ElMessageBox.confirm(
+            `确定将超级管理员身份转交给“${parsed.data.username}”吗？转交后当前账户将失去用户管理权限。`,
+            '转交超级管理员',
+            { confirmButtonText: '确认转交' },
+          )
+        } catch (error) {
+          if (error === 'cancel') return
+          throw error
+        }
+      }
       const payload: UpdateUserPayload = {
         username: parsed.data.username,
         is_active: parsed.data.is_active,
         is_admin: parsed.data.is_admin,
       }
       await usersApi.updateUser(editingId.value, payload)
+      if (isAdminTransfer.value) {
+        await authStore.ensureUser(true)
+        ElMessage.success('超级管理员身份已转交')
+        editorOpen.value = false
+        await router.replace('/dashboard')
+        return
+      }
       ElMessage.success('用户信息已更新')
-      if (editingId.value === authStore.user?.id) await authStore.ensureUser(true)
+      if (isEditingCurrentUser.value) await authStore.ensureUser(true)
     }
     editorOpen.value = false
     await loadUsers()
@@ -185,7 +214,7 @@ onMounted(loadUsers)
     <div class="page-heading">
       <div>
         <h2 class="page-title">用户管理</h2>
-        <p class="page-description">管理系统账户、状态与超级管理员权限。</p>
+        <p class="page-description">管理系统账户与状态；系统始终仅保留一个超级管理员。</p>
       </div>
       <div class="toolbar">
         <Button variant="secondary" :disabled="loading" @click="loadUsers">
@@ -254,8 +283,10 @@ onMounted(loadUsers)
       <form class="space-y-4" @submit.prevent="submitUser">
         <div class="space-y-2"><Label for="user-name">用户名</Label><Input id="user-name" v-model="form.username" autocomplete="off" /></div>
         <div v-if="editingId == null" class="space-y-2"><Label for="user-password">初始密码</Label><Input id="user-password" v-model="form.password" type="password" autocomplete="new-password" /></div>
-        <div class="flex items-center justify-between rounded-lg border p-3"><div><Label>启用账户</Label><p class="text-xs text-muted-foreground">停用后该用户无法登录。</p></div><Switch v-model="form.is_active" /></div>
-        <div class="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="is-admin" v-model="form.is_admin" /><div><Label for="is-admin">超级管理员</Label><p class="text-xs text-muted-foreground">允许管理用户及重置其他账户密码。</p></div></div>
+        <div class="flex items-center justify-between rounded-lg border p-3"><div><Label>启用账户</Label><p class="text-xs text-muted-foreground">停用后该用户无法登录。</p></div><Switch v-model="form.is_active" :disabled="isEditingCurrentUser" /></div>
+        <div v-if="editingId == null" class="rounded-lg border p-3 text-sm text-muted-foreground">新用户默认为普通用户。超级管理员身份需要在创建后通过编辑操作转交。</div>
+        <div v-else-if="editingUser?.is_admin" class="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3"><ShieldCheck class="mt-0.5 size-4 shrink-0 text-primary" /><div><Label>当前超级管理员</Label><p class="text-xs text-muted-foreground">系统只允许一个超级管理员，不能直接取消或停用。</p></div></div>
+        <div v-else class="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="is-admin" v-model="form.is_admin" :disabled="!form.is_active" /><div><Label for="is-admin">转交超级管理员身份</Label><p class="text-xs text-muted-foreground">启用后，当前超级管理员会自动降为普通用户。</p></div></div>
         <p v-if="formError" class="text-sm text-destructive">{{ formError }}</p>
         <DialogFooter><Button type="button" variant="secondary" @click="editorOpen = false">取消</Button><Button type="submit" :disabled="submitting">{{ submitting ? '保存中…' : '保存' }}</Button></DialogFooter>
       </form>

@@ -482,8 +482,10 @@
     <ui-dialog
       v-model="uploadDialogVisible"
       title="上传 Nginx 源码包"
+      description="上传源码压缩包后将自动进入编译流程。"
       width="600px"
       :close-on-click-modal="false"
+      @closed="resetUploadSelection"
     >
       <ui-form label-width="100px">
         <ui-form-item label="源码包">
@@ -492,7 +494,9 @@
             :auto-upload="false"
             :limit="1"
             :on-change="handleFileChange"
+            :on-remove="handleFileRemove"
             :before-remove="() => !uploading"
+            accept=".tar.gz,.tgz"
           >
             <ui-button type="primary">
               <ui-icon><FolderOpened /></ui-icon>
@@ -1167,6 +1171,17 @@ const handleFileChange = (file) => {
   selectedFile.value = file.raw
 }
 
+const handleFileRemove = () => {
+  selectedFile.value = null
+}
+
+const resetUploadSelection = () => {
+  if (uploading.value) return
+  uploadRef.value?.clearFiles()
+  selectedFile.value = null
+  uploadVersion.value = ''
+}
+
 const handleUpload = async () => {
   if (!selectedFile.value) {
     ElMessage.warning('请先选择源码包文件')
@@ -1534,13 +1549,6 @@ onUnmounted(() => {
   box-shadow: 0 4px 16px 0 rgba(103, 194, 58, 0.4);
   transform: translateY(-2px);
   transition: all 0.3s ease;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  width: 100%;
 }
 
 .config-dialog-meta {

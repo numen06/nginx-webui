@@ -1,179 +1,231 @@
 # Nginx WebUI
 
-一个基于 **FastAPI** 和 **Vue 3** 的 Nginx 管理 Web 界面，提供 Nginx 多版本管理、配置管理、证书管理、文件管理、静态包下发、日志与审计、系统监控等功能。
+Nginx WebUI 是一个面向日常运维的 Nginx 管理控制台。通过浏览器即可完成 Nginx 安装与版本切换、配置编辑与重载、证书申请与续签、日志查看、文件管理、配置备份和 Git 同步。
 
-各版本功能说明与升级步骤见 [release-notes/](release-notes/)（发布 Gitee Release 时可从此处复制正文）。
+当前版本内置 **Nginx 1.31.2** 源码包，新部署可直接通过初始化向导完成编译和发布。
 
-![主页](docs/image.png)
-![主页](docs/申请免费证书.png)
+## 界面预览
 
-## 功能特性
+### 运行状态与访问统计
 
-- **Nginx 管理**
-  - ✅ Nginx 配置在线编辑、测试、重载
-  - ✅ 多版本 Nginx 管理（下载、编译、切换版本）
-  - ✅ 配置备份与恢复（保留最近多份备份）
-- **配置与文件**
-  - ✅ 全局配置管理（应用配置、Nginx 路径等）
-  - ✅ 文件管理（上传、编辑、删除 Nginx 相关文件）
-  - ✅ 静态包管理（打包并下发静态资源包）
-- **证书与安全**
-  - ✅ 证书管理（支持 Certbot 自动签发与手动上传证书）
-  - ✅ 证书导出/导入与「迁移与自动续签」向导：见 [docs/cert-migration.md](docs/cert-migration.md)
-  - ✅ JWT 认证与会话管理
-  - ✅ 用户管理与基础权限控制
-- **日志与审计**
-  - ✅ Nginx 访问日志、错误日志在线查看
-  - ✅ 操作审计日志（记录关键操作轨迹）
-- **系统与统计**
-  - ✅ 系统信息与资源监控
-  - ✅ 访问与操作统计
-- **集成与部署**
-  - ✅ Git 仓库同步（配置凭据后，一键推送当前 Nginx 配置）
-  - ✅ Docker 容器化部署与一键打包脚本
+![Nginx WebUI 仪表盘](docs/dashboard.jpg)
 
-## 技术栈
+### 首次安装 Nginx
 
-### 后端
-- FastAPI
-- SQLAlchemy (SQLite)
-- Pydantic
-- Certbot
+![Nginx 1.31.2 初始设置向导](docs/nginx-setup.jpg)
 
-### 前端
-- Vue 3.5 + TypeScript + Composition API
-- Vite 6 + Tailwind CSS 4
-- shadcn-vue + Reka UI + Lucide
-- Pinia、ECharts、Monaco Editor
+### 申请 Let's Encrypt 证书
 
-## 项目结构
+![Let's Encrypt 证书申请](docs/certificates.jpg)
 
-```
-nginx-webui/
-├── backend/              # FastAPI 后端
-│   ├── app/              # 应用代码（路由、模型、业务逻辑、工具等）
-│   ├── config.yaml       # 后端配置文件
-│   └── default-nginx/    # 内置默认 Nginx 源码/配置包
-├── frontend/             # Vue 3 前端
-│   └── src/              # 前端源码（视图、组件、路由、状态等）
-├── data/                 # 运行时数据目录（容器/本地挂载）
-│   ├── backend/          # 后端数据（如 SQLite 数据库）
-│   ├── logs/             # 应用/代理日志
-│   ├── backups/          # Nginx 配置备份
-│   └── nginx/            # Nginx 多版本管理数据
-│       ├── versions/     # 各版本 Nginx 安装目录（含 conf/html/logs/sbin）
-│       ├── build/        # Nginx 源码下载与编译临时目录
-│       └── build_logs/   # 各版本编译日志
-├── scripts/              # 构建和启动脚本（前后端、本地/容器）
-├── docker-compose.yml    # Docker 编排文件
-├── Dockerfile            # 应用镜像构建文件
-├── release-notes/        # 各版本发行说明（供 Gitee Releases 等使用）
-├── QUICKSTART.md         # 本地开发/调试快速上手指南
-└── README.md
-```
+## 主要用途
 
-### 目录说明
+- **管理 Nginx**：下载、编译、切换和发布多个 Nginx 版本。
+- **维护配置**：在线编辑配置，执行语法检查后安全重载，并自动保留备份。
+- **管理证书**：申请 Let's Encrypt 证书、上传已有证书、迁移证书并配置自动续签。
+- **查看运行情况**：集中查看访问日志、错误日志、访问趋势、状态码和主机资源。
+- **管理配套文件**：上传和编辑配置文件，维护静态资源包。
+- **保留操作记录**：记录关键操作审计日志，支持用户和权限管理。
+- **同步配置到 Git**：将当前 Nginx 配置提交并推送到指定仓库。
 
-- **backend/**：后端服务代码与配置，包含认证、用户管理、Nginx 管理、证书、日志、审计等 API
-- **frontend/**：前端单页应用，包含仪表盘、Nginx 管理、配置、文件、证书、Git 同步、用户、审计、日志、静态包、系统等页面
-- **data/**：存放所有运行时生成和下载的数据，包括：
-  - 后端数据库等持久化数据（`backend/`）
-  - 日志文件（`logs/`）
-  - 配置备份（`backups/`）
-  - Nginx 多版本运行数据（`nginx/versions/`）
-  - Nginx 源码构建目录与编译日志（`nginx/build/`、`nginx/build_logs/`）
-- **scripts/**：一键启动、重启、打包、清理等辅助脚本
+## 5 分钟部署
 
-## 快速开始
-
-### 开发环境
-
-#### 后端开发
+推荐使用 Docker Compose。运行前请确认宿主机的 `80`、`443` 和 `800` 端口未被占用。
 
 ```bash
-cd backend
-pip install -r requirements.txt
-python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+git clone https://gitee.com/numen06/nginx-webui.git
+cd nginx-webui
+docker compose up -d --build
 ```
 
-或使用脚本（在项目根目录）：
+启动后访问：
+
+```text
+http://服务器IP:800
+```
+
+查看运行状态和日志：
 
 ```bash
-bash scripts/start-backend.sh
+docker compose ps
+docker compose logs -f nginx-webui
 ```
 
-#### 前端开发
+默认账户：
 
-```bash
-cd frontend
-npm install          # 首次运行需要安装依赖
-npm run dev          # 默认运行在 http://localhost:3001
-```
+- 用户名：`admin`
+- 密码：`admin`
 
-或使用脚本：
+> 首次登录后请立即进入右上角用户菜单修改默认密码。
 
-```bash
-bash scripts/start-frontend.sh
-```
+### 直接运行镜像
 
-### Docker 部署
-
-#### 构建镜像
-
-```bash
-bash scripts/package.sh
-```
-
-#### 运行容器
-
-```bash
-docker-compose up -d
-```
-
-或使用 Docker 命令：
+不需要本地构建时，可以直接运行已发布镜像：
 
 ```bash
 docker run -d \
+  --name nginx-webui \
+  --restart always \
+  -p 800:8000 \
   -p 80:80 \
   -p 443:443 \
-  -p 8000:8000 \
-  -v $(pwd)/nginx-webui/data:/app/data \
-  --name nginx-webui \
+  -v /opt/nginx-webui/data:/app/data \
+  -e APP_PORT=8000 \
+  -e CERTBOT_CONFIG_DIR=/app/data/letsencrypt \
   registry.cn-shanghai.aliyuncs.com/numen/nginx-webui:latest
 ```
 
-## 配置说明
+## 首次使用
 
-配置文件位于 `backend/config.yaml`，可以配置：
+### 1. 修改默认密码
 
-- Nginx 相关路径
-- 应用端口和主机
-- 备份策略
-- SSL 证书路径
+使用 `admin/admin` 登录后，系统会进入用户中心。设置新密码并重新登录，避免管理端暴露默认凭据。
 
-也可以通过环境变量覆盖配置。
+### 2. 安装默认 Nginx
 
-## Git 配置同步
+首次部署且还没有可用 Nginx 时，系统会自动打开初始化向导：
 
-1. 登录前端，进入左侧菜单的 **Git 配置同步** 页面并填写：
-   - 项目名称（决定 `data/git/<项目名称>/` 目录，默认建议为当前根目录名）
-   - 仓库地址（建议 HTTPS）
-   - 目标分支（默认 `main`）
-   - 账号与密码（凭证只保存在后端数据库，不会回显）
-2. 保存后即可点击「立即同步」，系统会：
-   - 以填写的项目名称（若未填写则使用默认值）组织本地仓库
-   - 将正在使用的 `nginx.conf` 导出到 `data/git/<项目名称>/` 目录
-   - 自动执行 `git add/commit/push` 推送到远端
-3. 同步状态（成功/失败/无变更）会显示在卡片中，并记录最近一次的时间与消息。
+1. 点击 **准备源码包**，将内置的 Nginx 1.31.2 源码包复制到构建目录。
+2. 点击 **编译 Nginx**，等待编译完成；进度和错误信息可在界面中查看。
+3. 点击 **发布到生产**，将编译结果切换为当前运行版本。
+4. 返回仪表盘，确认状态变为“运行中”。
 
-> 注意：首次同步会在 `data/git` 下克隆仓库，请确保容器或宿主机具备访问目标 Git 服务的网络权限。
+编译失败时，先查看 **Nginx 管理** 页面中的构建日志；容器内需要具备编译工具以及 PCRE、zlib、OpenSSL 开发库。仓库提供的 Docker 镜像已经包含这些依赖。
 
-## 默认账户
+### 3. 配置站点
 
-- 用户名: `admin`
-- 密码: `admin`
+进入 **配置管理**：
 
-**首次登录后请立即修改密码！**
+1. 编辑主配置或站点配置。
+2. 保存前执行配置测试。
+3. 测试通过后重载 Nginx。
+4. 如果配置异常，可从备份记录恢复上一版本。
+
+建议每次只完成一组相关修改，并在重载后立即检查错误日志和站点访问情况。
+
+## 常用操作
+
+### Nginx 版本管理
+
+进入 **Nginx 管理**，可以下载或上传源码包、编译新版本、查看构建日志以及切换生产版本。切换前建议先备份配置，并确认新版本所需模块与当前配置兼容。
+
+### 申请免费证书
+
+进入 **证书管理**，点击 **申请证书**：
+
+- **HTTP 验证**：域名必须已经解析到当前服务器，公网能够访问 `80` 端口，适合普通域名。
+- **DNS 验证**：根据向导添加 TXT 记录，适合通配符证书或无法开放 `80` 端口的环境。
+
+证书签发后，可在证书列表中检查到期时间和自动续签状态。迁移已有证书时，使用 **迁移与自动续签** 向导；详细说明见 [证书迁移文档](docs/cert-migration.md)。
+
+### 查看日志与统计
+
+- **仪表盘**：查看 Nginx 状态、请求量、错误率、攻击检测和主机资源。
+- **日志查看**：查看访问日志与错误日志，支持搜索和筛选。
+- **操作日志**：追踪用户执行的关键管理操作。
+
+统计为空时，可以在仪表盘执行 **增量分析**；需要重新计算全部日志时再使用 **全量分析**。
+
+### Git 配置同步
+
+进入 **Git 配置同步** 并填写项目名称、仓库地址、目标分支和凭据。保存后点击 **立即同步**，系统会将当前使用的 `nginx.conf` 导出到 `data/git/<项目名称>/`，随后执行提交和推送。
+
+容器必须能够访问目标 Git 服务。凭据保存在后端数据库中，不会在页面中回显。
+
+## 数据、备份与升级
+
+所有运行数据都应持久化到 `/app/data`，主要包括：
+
+- 数据库和用户信息
+- Nginx 已编译版本、源码和构建日志
+- Nginx 配置备份
+- SSL 证书与 Certbot 数据
+- 访问日志、错误日志和统计缓存
+- Git 同步工作目录
+
+Docker Compose 默认将宿主机 `/opt/nginx-webui/data` 挂载到 `/app/data`。升级或迁移前，请先备份该目录：
+
+```bash
+sudo tar -czf nginx-webui-data-$(date +%Y%m%d).tar.gz /opt/nginx-webui/data
+```
+
+从源码更新并重建：
+
+```bash
+git pull
+docker compose build --pull
+docker compose up -d
+```
+
+使用发布镜像时：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+各版本变更和升级注意事项见 [release-notes](release-notes/)。
+
+## 常见问题
+
+### 页面无法访问
+
+```bash
+docker compose ps
+docker compose logs --tail=200 nginx-webui
+```
+
+确认容器处于运行状态，并检查防火墙是否放行管理端口 `800`。
+
+### Nginx 无法启动或重载
+
+先在 **配置管理** 执行配置测试，再检查错误日志。常见原因包括配置语法错误、端口占用、证书路径错误或编译时缺少所需模块。
+
+### 证书申请失败
+
+- HTTP 验证：检查域名解析、`80` 端口、防火墙和反向代理链路。
+- DNS 验证：确认 TXT 记录已经生效；不同 DNS 服务商的生效时间可能不同。
+- 自动续签：在证书管理页运行 **测试自动续签环境** 查看诊断结果。
+
+### Nginx 编译失败
+
+在 **Nginx 管理** 中打开对应版本的构建日志。使用非 Docker 环境时，需要自行安装 GCC、make、PCRE、zlib 和 OpenSSL 开发库。
+
+## 本地开发
+
+本地开发需要 Python 3、Node.js 20+ 和 npm。
+
+启动后端：
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+DATA_ROOT=../data python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+`pyinotify` 仅支持 Linux；在 macOS 开发时可改用：
+
+```bash
+pip install -r <(grep -v '^pyinotify' requirements.txt)
+```
+
+启动前端：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+访问 `http://localhost:3001`。更多开发和调试说明见 [QUICKSTART.md](QUICKSTART.md)。
+
+## 技术栈
+
+- 后端：FastAPI、SQLAlchemy、SQLite、Pydantic、Certbot
+- 前端：Vue 3、TypeScript、Vite、Tailwind CSS、shadcn-vue、Reka UI、Monaco Editor、ECharts
+- 部署：Docker、Docker Compose
 
 ## 许可证
 

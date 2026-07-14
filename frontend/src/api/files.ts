@@ -40,7 +40,7 @@ export const filesApi = {
   },
 
   // 部署静态资源包（使用已上传的文件或新上传的文件）
-  deployPackage(filename, file, version, extractToSubdir) {
+  deployPackage(filename, file, version, extractToSubdir, accessPath) {
     const formData = new FormData();
     if (filename) {
       formData.append("filename", filename);
@@ -52,6 +52,9 @@ export const filesApi = {
       formData.append("version", version);
     }
     formData.append("extract_to_subdir", String(Boolean(extractToSubdir)));
+    if (accessPath) {
+      formData.append("access_path", accessPath);
+    }
     return api.post("/files/deploy-package", formData, {
       headers: {
         "Content-Type": "multipart/form-data",

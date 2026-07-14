@@ -117,6 +117,12 @@ async def create_user(
     db: Session = Depends(get_db),
 ):
     """创建新用户"""
+    if user_data.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="系统仅允许一个超级管理员；请通过编辑普通用户转交管理员身份",
+        )
+
     # 检查用户名是否已存在
     existing_user = db.query(User).filter(User.username == user_data.username).first()
     if existing_user:
@@ -194,22 +200,21 @@ async def update_user(
     requested_admin = (
         user_data.is_admin if user_data.is_admin is not None else user.is_admin
     )
+    if requested_admin and not requested_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="超级管理员账户必须保持启用",
+        )
     if user.id == current_user.id and (not requested_active or not requested_admin):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="不能停用自己或撤销自己的管理员权限",
         )
-    if user.is_admin and user.is_active and (not requested_active or not requested_admin):
-        active_admins = (
-            db.query(User)
-            .filter(User.is_admin.is_(True), User.is_active.is_(True))
-            .count()
+    if user.is_admin and (not requested_active or not requested_admin):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="系统唯一的超级管理员不能被停用或降级；请将身份转交给其他用户",
         )
-        if active_admins <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="必须保留至少一个有效的超级管理员",
-            )
 
     # 检查用户名是否已被其他用户使用
     if user_data.username and user_data.username != user.username:
@@ -225,6 +230,11 @@ async def update_user(
     if user_data.is_active is not None:
         user.is_active = user_data.is_active
     if user_data.is_admin is not None:
+        if user_data.is_admin:
+            db.query(User).filter(
+                User.id != user.id,
+                User.is_admin.is_(True),
+            ).update({User.is_admin: False}, synchronize_session="fetch")
         user.is_admin = user_data.is_admin
 
     try:
@@ -238,7 +248,7 @@ async def update_user(
             username=current_user.username,
             action="user_update",
             target=f"用户: {user.username}",
-            details={"user_id": user.id, "changes": user_data.dict(exclude_unset=True)},
+            details={"user_id": user.id, "changes": user_data.model_dump(exclude_unset=True)},
             ip_address=get_client_ip(request),
         )
 
