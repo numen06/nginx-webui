@@ -40,11 +40,11 @@ function onOpenChange(open: boolean) {
       <AlertDialogFooter>
         <AlertDialogCancel
           v-if="feedbackDialog.kind !== 'alert'"
-          @click="rejectFeedbackDialog"
+          @click.capture="rejectFeedbackDialog"
         >
           {{ feedbackDialog.cancelText }}
         </AlertDialogCancel>
-        <AlertDialogAction @click="resolveFeedbackDialog">
+        <AlertDialogAction @click.capture="resolveFeedbackDialog">
           {{ feedbackDialog.confirmText }}
         </AlertDialogAction>
       </AlertDialogFooter>

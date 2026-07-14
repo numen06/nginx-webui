@@ -97,11 +97,17 @@ export function resolveFeedbackDialog() {
   const result = feedbackDialog.kind === 'prompt'
     ? { value: feedbackDialog.value }
     : 'confirm'
-  feedbackDialog.resolve?.(result)
+  const resolve = feedbackDialog.resolve
   feedbackDialog.open = false
+  feedbackDialog.resolve = undefined
+  feedbackDialog.reject = undefined
+  resolve?.(result)
 }
 
 export function rejectFeedbackDialog() {
-  feedbackDialog.reject?.('cancel')
+  const reject = feedbackDialog.reject
   feedbackDialog.open = false
+  feedbackDialog.resolve = undefined
+  feedbackDialog.reject = undefined
+  reject?.('cancel')
 }
