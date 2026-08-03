@@ -134,28 +134,9 @@ COPY --from=frontend-builder /app/frontend/dist/ /app/backend/static/
 # 恢复工作目录
 WORKDIR /app
 
-# 创建启动脚本（初始化数据库并启动 FastAPI）
-RUN echo '#!/bin/bash' > /app/start.sh && \
-    echo 'set -e' >> /app/start.sh && \
-    echo '# 从环境变量读取端口，默认为 8000' >> /app/start.sh && \
-    echo 'PORT=${APP_PORT:-8000}' >> /app/start.sh && \
-    echo 'CERTBOT_CONFIG_DIR=${CERTBOT_CONFIG_DIR:-/app/data/letsencrypt}' >> /app/start.sh && \
-    echo 'mkdir -p "$CERTBOT_CONFIG_DIR"' >> /app/start.sh && \
-    echo '# 兼容旧容器：若 /etc/letsencrypt 为真实目录且目标为空，先迁移后再切换为软链' >> /app/start.sh && \
-    echo 'if [ -d /etc/letsencrypt ] && [ ! -L /etc/letsencrypt ]; then' >> /app/start.sh && \
-    echo '  if [ -z "$(ls -A "$CERTBOT_CONFIG_DIR" 2>/dev/null)" ] && [ -n "$(ls -A /etc/letsencrypt 2>/dev/null)" ]; then' >> /app/start.sh && \
-    echo '    echo "检测到旧版 /etc/letsencrypt，正在迁移到 $CERTBOT_CONFIG_DIR ..."' >> /app/start.sh && \
-    echo '    cp -a /etc/letsencrypt/. "$CERTBOT_CONFIG_DIR"/ || true' >> /app/start.sh && \
-    echo '  fi' >> /app/start.sh && \
-    echo '  rm -rf /etc/letsencrypt' >> /app/start.sh && \
-    echo 'fi' >> /app/start.sh && \
-    echo 'if [ ! -e /etc/letsencrypt ]; then ln -s "$CERTBOT_CONFIG_DIR" /etc/letsencrypt; fi' >> /app/start.sh && \
-    echo 'if [ -L /etc/letsencrypt ]; then echo "Certbot 数据目录: $(readlink -f /etc/letsencrypt)"; fi' >> /app/start.sh && \
-    echo 'echo "初始化数据库..."' >> /app/start.sh && \
-    echo 'cd /app/backend && python3 -c "from app.database import init_db; init_db()"' >> /app/start.sh && \
-    echo 'echo "启动 FastAPI 服务在端口 $PORT..."' >> /app/start.sh && \
-    echo 'cd /app/backend && python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT' >> /app/start.sh && \
-    chmod +x /app/start.sh
+# 既有 Nginx 先启动，WebUI 后初始化，避免容器重启时反向代理长时间中断。
+COPY docker-entrypoint.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 # 暴露端口
 EXPOSE 8000
