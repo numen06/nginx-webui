@@ -136,7 +136,7 @@ WORKDIR /app
 
 # 既有 Nginx 先启动，WebUI 后初始化，避免容器重启时反向代理长时间中断。
 COPY docker-entrypoint.sh /app/start.sh
-RUN chmod +x /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
 # 暴露端口
 EXPOSE 8000
