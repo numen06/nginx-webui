@@ -1,9 +1,18 @@
 import api from './index'
 
-const CERTBOT_OPERATION_TIMEOUT = 360000
+const CERTBOT_OPERATION_TIMEOUT = 1200000
 const DNS_VERIFY_TIMEOUT = 90000
 
 export const certificatesApi = {
+  getAliyunDnsConfig() {
+    return api.get('/certificates/aliyun-dns/config')
+  },
+  saveAliyunDnsConfig(config) {
+    return api.put('/certificates/aliyun-dns/config', config)
+  },
+  testAliyunDnsConfig() {
+    return api.post('/certificates/aliyun-dns/test')
+  },
   // 获取证书列表
   getCertificates() {
     return api.get('/certificates')
@@ -77,13 +86,14 @@ export const certificatesApi = {
   },
 
   // 申请证书
-  requestCertificate(domains, email, validationMethod) {
+  requestCertificate(domains, email, validationMethod, replaceExisting = false) {
     return api.post(
       '/certificates/request',
       {
         domains,
         email,
-        validation_method: validationMethod
+        validation_method: validationMethod,
+        replace_existing: replaceExisting
       },
       { timeout: CERTBOT_OPERATION_TIMEOUT }
     )

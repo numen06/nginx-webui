@@ -7,17 +7,17 @@
 
 ## 与版本号对齐
 
-应用显示的版本号以 [`backend/config.yaml`](../backend/config.yaml) 中的 `app.version` 为**唯一权威来源**。
+应用显示的版本号以 [`backend/VERSION`](../backend/VERSION) 为**唯一权威来源**。
 
 发布新版本时的建议顺序：
 
-1. 更新 `app.version`
+1. 更新 `backend/VERSION`
 2. 在本目录新增与版本号同名的文件，例如 `1.0.4.md`
 3. 提交代码并打 Tag、在 Gitee 创建 Release，说明正文从该文件复制
 
 ## 文件命名约定
 
-- 使用与 `app.version` **完全一致**的文件名：`x.y.z.md`（示例：`1.0.3.md`）
+- 使用与 `backend/VERSION` **完全一致**的文件名：`x.y.z.md`（示例：`1.0.3.md`）
 - 不使用 `v` 前缀，避免与配置中的版本字符串不一致
 
 ## 单文件内容建议

@@ -226,7 +226,7 @@
               v-model="scope.row.auto_renew"
               @change="handleToggleAutoRenew(scope.row)"
               :loading="scope.row._toggling"
-              :disabled="!isIssuedCert(scope.row)"
+              :disabled="!isIssuedCert(scope.row) || !scope.row.certbot_cert_name || !['http', 'aliyun_dns'].includes(scope.row.issue_method)"
               size="small"
             />
           </template>
@@ -259,7 +259,7 @@
                   <ui-icon><UploadFilled /></ui-icon>
                 </ui-button>
               </ui-tooltip>
-              <ui-tooltip content="续期" placement="top">
+              <ui-tooltip v-if="scope.row.issue_method !== 'upload' || authStore.isAdmin" :content="scope.row.issue_method === 'upload' ? '使用阿里云 DNS 重新签发并启用自动续期' : '续期'" placement="top">
                 <ui-button
                   circle
                   size="small"
@@ -406,10 +406,7 @@
             v-model="requestForm.domain"
             :placeholder="requestForm.validation_method === 'dns' ? '例如：example.com 或 *.example.com' : '例如：example.com'"
           />
-          <div class="form-tip">
-            主域名，将用于证书申请和 Nginx 配置；
-            DNS 验证支持通配符（如 *.example.com），HTTP 验证不支持通配符
-          </div>
+          <div class="form-tip">填写主域名；阿里云 DNS 验证可同时签发主域名及泛域名证书。</div>
         </ui-form-item>
 
         <ui-form-item label="邮箱地址" prop="email">
@@ -422,16 +419,29 @@
 
         <ui-form-item label="验证方式" prop="validation_method">
           <ui-radio-group v-model="requestForm.validation_method" @change="onValidationMethodChange">
-            <ui-radio value="http">
+            <ui-radio v-if="!requestForm.replace_existing" value="http">
               <span>HTTP 验证</span>
               <div class="radio-desc">需要域名已解析到本服务器且 Nginx 正在运行，80 端口可访问</div>
             </ui-radio>
-            <ui-radio value="dns">
-              <span>DNS 验证</span>
-              <div class="radio-desc">在域名 DNS 中添加 TXT 记录；适合无法开放 80 端口的场景</div>
+            <ui-radio v-if="!requestForm.replace_existing" value="dns">
+              <span>手动 DNS 验证</span>
+              <div class="radio-desc">手动填写 TXT；签发后仍需人工续期</div>
+            </ui-radio>
+            <ui-radio v-if="authStore.isAdmin" value="aliyun_dns">
+              <span>阿里云 DNS 自动验证</span>
+              <div class="radio-desc">通过阿里云 API 自动更新 TXT，适用于泛域名和自动续期</div>
             </ui-radio>
           </ui-radio-group>
         </ui-form-item>
+
+        <ui-form-item v-if="requestForm.validation_method === 'aliyun_dns'" label="泛域名">
+          <ui-checkbox v-model="requestForm.include_wildcard">同时签发 *.{{ requestForm.domain || 'example.com' }}</ui-checkbox>
+          <div class="form-tip"><router-link to="/certificate-dns-settings">先配置阿里云 DNS AccessKey</router-link>；已上传的同名证书可在“续期”操作中重新签发接管。</div>
+        </ui-form-item>
+
+        <ui-alert v-if="requestForm.replace_existing" type="warning" :closable="false" show-icon>
+          将在签发成功后替换 {{ requestForm.domain }} 的证书记录；签发失败时保留当前证书。
+        </ui-alert>
 
         <ui-form-item v-if="requestForm.validation_method === 'dns'" label=" ">
           <ui-button type="primary" link @click="tryRestoreDnsSession">
@@ -448,7 +458,7 @@
         >
           <template #title>
             <span style="font-size: 12px;">
-              申请成功后将自动完成：1) 证书文件持久化存储  2) 自动修改 Nginx 配置添加 SSL  3) 开启自动续期
+              申请成功后将持久化证书并配置 SSL；HTTP 和阿里云 DNS 自动验证可启用自动续期，手动 DNS 需人工续期。
             </span>
           </template>
         </ui-alert>
@@ -494,14 +504,14 @@
             <span class="btn-label">完成申请（签发证书）</span>
           </ui-button>
           <ui-button
-            v-if="requestForm.validation_method === 'http'"
+            v-if="requestForm.validation_method === 'http' || requestForm.validation_method === 'aliyun_dns'"
             type="primary"
             :loading="requesting"
             :disabled="isRequestDisabled"
             @click="handleRequestSubmitHttp"
           >
             <ui-icon><Check /></ui-icon>
-            <span class="btn-label">申请证书</span>
+            <span class="btn-label">{{ requestForm.replace_existing ? '重新签发并接管' : '申请证书' }}</span>
           </ui-button>
         </span>
       </template>
@@ -869,7 +879,9 @@ import { certificatesApi } from '../api/certificates'
 import { ElMessage, ElMessageBox } from '@/lib/feedback'
 import { DocumentAdd, UploadFilled, RefreshRight, Delete, FolderOpened, CloseBold, Check, CopyDocument, CircleCheck, Download, Operation, Promotion } from '@/components/icons'
 import { formatDateTime } from '../utils/date'
+import { useAuthStore } from '@/store/auth'
 
+const authStore = useAuthStore()
 const certificateList = ref([])
 /** 默认折叠，避免占满首屏；需要时客户自行展开 */
 const migrationGuideOpen = ref([])
@@ -1181,7 +1193,9 @@ const goToRequestCertFromMigrate = async () => {
   requestForm.value = {
     domain,
     email: '',
-    validation_method: 'http'
+    validation_method: 'http',
+    include_wildcard: true,
+    replace_existing: false
   }
   resetRequestWizard()
   requestDialogVisible.value = true
@@ -1198,7 +1212,9 @@ const requestFormRef = ref(null)
 const requestForm = ref({
   domain: '',
   email: '',
-  validation_method: 'http'
+  validation_method: 'http',
+  include_wildcard: true,
+  replace_existing: false
 })
 
 /** DNS 申请向导 */
@@ -1502,10 +1518,16 @@ const handleRequestSubmitHttp = async () => {
   }
   requesting.value = true
   try {
+    const isAliyun = requestForm.value.validation_method === 'aliyun_dns'
+    const domain = requestForm.value.domain.trim()
+    const domains = isAliyun && requestForm.value.include_wildcard
+      ? [domain, `*.${domain}`]
+      : [domain]
     const response = await certificatesApi.requestCertificate(
-      [requestForm.value.domain.trim()],
+      domains,
       requestForm.value.email,
-      'http'
+      requestForm.value.validation_method,
+      requestForm.value.replace_existing
     )
     if (response.success) {
       let msg = response.message || '证书申请成功'
@@ -1669,7 +1691,7 @@ const validateRequestDomain = (rule, value, callback) => {
   }
 
   if (!isPlain) {
-    callback(new Error('HTTP 验证仅支持普通域名，不支持 * 通配符'))
+    callback(new Error('请输入普通域名；如需泛域名证书，请选择阿里云 DNS 验证并勾选泛域名'))
     return
   }
   callback()
@@ -1829,7 +1851,9 @@ const handleRequest = () => {
   requestForm.value = {
     domain: '',
     email: '',
-    validation_method: 'http'
+    validation_method: 'http',
+    include_wildcard: true,
+    replace_existing: false
   }
   resetRequestWizard()
   requestDialogVisible.value = true
@@ -1991,6 +2015,18 @@ const handleUploadSubmit = async () => {
 }
 
 const handleRenew = async (cert) => {
+  if (cert.issue_method === 'upload') {
+    requestForm.value = {
+      domain: cert.domain,
+      email: '',
+      validation_method: 'aliyun_dns',
+      include_wildcard: true,
+      replace_existing: true
+    }
+    resetRequestWizard()
+    requestDialogVisible.value = true
+    return
+  }
   try {
     const response = await certificatesApi.renewCertificate(cert.id)
     if (response.success) {

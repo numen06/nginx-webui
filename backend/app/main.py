@@ -450,56 +450,59 @@ async def startup_event():
 
                 time.sleep(wait_seconds)
 
-                # 执行续期
                 logging.info("开始执行证书自动续期检查...")
-                result = renew_certificate(domain=None)
+                from hashlib import sha256
+                from app.database import SessionLocal
+                from app.models import Certificate
+                from app.utils.nginx import reload_nginx
 
-                if result["success"]:
-                    logging.info("证书自动续期完成")
-
-                    # 续期成功后，复制证书文件并更新数据库
-                    try:
-                        from app.database import SessionLocal
-                        from app.models import Certificate
-
-                        db = SessionLocal()
+                db = SessionLocal()
+                try:
+                    certificates = (
+                        db.query(Certificate)
+                        .filter(Certificate.auto_renew == True)
+                        .filter(Certificate.status == "issued")
+                        .all()
+                    )
+                    for cert in certificates:
                         try:
-                            certificates = (
-                                db.query(Certificate)
-                                .filter(Certificate.auto_renew == True)
-                                .filter(Certificate.status == "issued")
-                                .all()
+                            if not cert.certbot_cert_name:
+                                raise RuntimeError("证书未关联 Certbot 记录，请重新申请")
+
+                            old_path = Path(cert.cert_path)
+                            old_digest = sha256(old_path.read_bytes()).digest() if old_path.is_file() else None
+                            result = renew_certificate(domain=cert.certbot_cert_name)
+                            if not result.get("success"):
+                                raise RuntimeError(result.get("message") or "未知错误")
+
+                            copy_result = copy_certificate_files(
+                                cert.domain, lineage_name=cert.certbot_cert_name
                             )
+                            if not copy_result.get("success"):
+                                raise RuntimeError(f"续期后复制证书失败: {copy_result.get('message')}")
 
-                            for cert in certificates:
-                                copy_result = copy_certificate_files(
-                                    cert.domain, lineage_name=cert.certbot_cert_name
+                            cert.cert_path = copy_result["cert_path"]
+                            cert.key_path = copy_result["key_path"]
+                            cert_info = get_certificate_info(cert.cert_path)
+                            if cert_info.get("valid_to"):
+                                cert.valid_to = datetime.fromisoformat(
+                                    cert_info["valid_to"].replace("Z", "+00:00")
                                 )
-                                if copy_result["success"]:
-                                    cert.cert_path = copy_result["cert_path"]
-                                    cert.key_path = copy_result["key_path"]
-
-                                    cert_info = get_certificate_info(cert.cert_path)
-                                    if cert_info.get("valid_to"):
-                                        try:
-                                            cert.valid_to = datetime.fromisoformat(
-                                                cert_info["valid_to"].replace(
-                                                    "Z", "+00:00"
-                                                )
-                                            )
-                                        except:
-                                            pass
-                                    if cert_info.get("issuer"):
-                                        cert.issuer = cert_info["issuer"]
-
-                            db.commit()
-                            logging.info("证书文件已更新到持久化目录")
-                        finally:
-                            db.close()
-                    except Exception as exc:
-                        logging.error("续期后更新证书文件失败: %s", exc)
-                else:
-                    logging.info("证书自动续期检查完成，无需续期的证书")
+                            if cert_info.get("issuer"):
+                                cert.issuer = cert_info["issuer"]
+                            new_digest = sha256(Path(cert.cert_path).read_bytes()).digest()
+                            if old_digest != new_digest:
+                                reload_result = reload_nginx()
+                                if not reload_result.get("success"):
+                                    raise RuntimeError(f"证书已续期，但 Nginx 重载失败: {reload_result.get('message')}")
+                            cert.issue_error = None
+                            logging.info("证书 %s 自动续期检查成功", cert.domain)
+                        except Exception as exc:
+                            cert.issue_error = f"自动续期失败: {exc}"
+                            logging.error("证书 %s 自动续期失败: %s", cert.domain, exc, exc_info=True)
+                        db.commit()
+                finally:
+                    db.close()
             except Exception as exc:
                 logging.error("证书自动续期定时任务异常: %s", exc, exc_info=True)
                 time.sleep(3600)
@@ -682,7 +685,8 @@ async def startup_event():
                         cert.certbot_cert_name = certbot_cert_name
                         cert.status = "issued"
                         cert.issue_method = "dns"
-                        cert.auto_renew = True
+                        # 这里仅自动等待用户已填写的 TXT；manual Certbot 没有续期 hook。
+                        cert.auto_renew = False
                         cert.issue_error = None
 
                         cert_info = get_certificate_info(cert.cert_path)

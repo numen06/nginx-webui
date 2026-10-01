@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
 from app.config import get_config
 from app.models import Certificate
 from app.utils.certbot import (
@@ -51,6 +51,11 @@ from app.utils.certbot import (
     _domain_ssl_basename,
 )
 from app.utils.audit import create_audit_log, get_client_ip
+from app.utils.aliyun_dns import (
+    load_credentials,
+    save_credentials,
+    test_credentials,
+)
 
 router = APIRouter(prefix="/api/certificates", tags=["certificates"])
 
@@ -130,6 +135,67 @@ class CertificateRequest(BaseModel):
     domains: List[str]
     email: EmailStr
     validation_method: str = "http"  # 'http' 或 'dns'
+    replace_existing: bool = False
+
+
+class AliyunDnsConfigRequest(BaseModel):
+    zone: str
+    access_key_id: str
+    access_key_secret: Optional[str] = None  # 留空表示保留已保存的 Secret
+
+
+@router.get("/aliyun-dns/config", summary="读取阿里云 DNS 自动验证配置")
+async def get_aliyun_dns_config(current_user: User = Depends(require_admin)):
+    credentials = load_credentials()
+    return {
+        "success": True,
+        "configured": bool(credentials),
+        "zone": credentials["zone"] if credentials else "",
+        "access_key_id": credentials["access_key_id"] if credentials else "",
+        "has_secret": bool(credentials),
+    }
+
+
+@router.put("/aliyun-dns/config", summary="保存阿里云 DNS 自动验证配置")
+async def put_aliyun_dns_config(
+    body: AliyunDnsConfigRequest,
+    request: Request,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    existing = load_credentials() or {}
+    if body.access_key_id.strip() != existing.get("access_key_id") and not body.access_key_secret:
+        raise HTTPException(status_code=400, detail="更换 AccessKey ID 时必须同时填写 Secret")
+    secret = body.access_key_secret or existing.get("access_key_secret", "")
+    try:
+        save_credentials(body.zone, body.access_key_id, secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    create_audit_log(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="cert_aliyun_dns_config",
+        target=body.zone.strip().lower(),
+        details={"access_key_id_changed": body.access_key_id != existing.get("access_key_id")},
+        ip_address=get_client_ip(request),
+    )
+    return {"success": True, "message": "阿里云 DNS 配置已保存"}
+
+
+@router.post("/aliyun-dns/test", summary="测试阿里云 DNS 查询与 TXT 读写权限")
+async def test_aliyun_dns_config(current_user: User = Depends(require_admin)):
+    credentials = load_credentials()
+    if not credentials:
+        raise HTTPException(status_code=400, detail="请先保存阿里云 DNS 配置")
+    try:
+        await asyncio.to_thread(test_credentials, credentials)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="阿里云 DNS API 测试失败，请检查 AccessKey、域名及查询、添加、删除解析记录的权限",
+        ) from exc
+    return {"success": True, "message": "阿里云 DNS 查询和 TXT 写入、清理测试成功"}
 
 
 class CertificateUpdateRequest(BaseModel):
@@ -520,6 +586,8 @@ def _finalize_certbot_issued_certificate(
     ssl_subdir: Optional[str] = None,
     certbot_cert_name: Optional[str] = None,
     existing_cert_id: Optional[int] = None,
+    issue_method: Optional[str] = None,
+    auto_renew: bool = True,
 ) -> dict:
     """certbot 签发成功后：应用 SSL、写入数据库、审计，并返回与 /request 一致的结构。"""
     try:
@@ -571,10 +639,10 @@ def _finalize_certbot_issued_certificate(
             issuer=cert_info.get("issuer", "Let's Encrypt"),
             valid_from=valid_from,
             valid_to=valid_to,
-            auto_renew=True,
+            auto_renew=auto_renew,
             certbot_cert_name=certbot_cert_name,
             status=CERT_STATUS_ISSUED,
-            issue_method="dns" if any(d.startswith("*.") for d in domains) else "http",
+            issue_method=issue_method or ("dns" if any(d.startswith("*.") for d in domains) else "http"),
             created_by_id=current_user.id,
         )
         db.add(cert)
@@ -585,10 +653,10 @@ def _finalize_certbot_issued_certificate(
         cert.issuer = cert_info.get("issuer", "Let's Encrypt")
         cert.valid_from = valid_from
         cert.valid_to = valid_to
-        cert.auto_renew = True
+        cert.auto_renew = auto_renew
         cert.certbot_cert_name = certbot_cert_name
         cert.status = CERT_STATUS_ISSUED
-        cert.issue_method = cert.issue_method or ("dns" if any(d.startswith("*.") for d in domains) else "http")
+        cert.issue_method = issue_method or cert.issue_method or ("dns" if any(d.startswith("*.") for d in domains) else "http")
         cert.issue_error = None
         cert.issue_output = raw_output
     db.commit()
@@ -1510,6 +1578,7 @@ async def dns_challenge_complete(
         ssl_subdir=copy_result.get("ssl_subdir"),
         certbot_cert_name=certbot_cert_name,
         existing_cert_id=pending_cert.id if pending_cert else None,
+        auto_renew=False,
     )
 
 
@@ -1576,11 +1645,16 @@ async def request_cert(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """通过 certbot 自动申请证书（HTTP 验证）；DNS 请使用 /dns-challenge/start 与 /complete。"""
+    """通过 Certbot 申请 HTTP 或阿里云 DNS 自动验证证书。"""
     domain = request_data.domains[0] if request_data.domains else ""
+    if not domain:
+        raise HTTPException(status_code=400, detail="请填写申请域名")
+    if request_data.validation_method == "aliyun_dns" and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="仅管理员可使用阿里云 DNS 自动签发")
 
     existing = db.query(Certificate).filter(Certificate.domain == domain).first()
-    if existing:
+    replacing = request_data.validation_method == "aliyun_dns" and request_data.replace_existing
+    if existing and not replacing:
         return {
             "success": False,
             "message": f"域名 {domain} 已存在证书，请先删除或使用「上传证书」更新",
@@ -1589,7 +1663,8 @@ async def request_cert(
             "suggestions": ["删除该域名证书后重试", "或使用重新上传证书"],
         }
 
-    result = request_certificate(
+    result = await asyncio.to_thread(
+        request_certificate,
         domains=request_data.domains,
         email=request_data.email,
         validation_method=request_data.validation_method,
@@ -1605,7 +1680,7 @@ async def request_cert(
         }
 
     # 复制证书文件到持久化目录
-    copy_result = copy_certificate_files(domain)
+    copy_result = copy_certificate_files(domain, lineage_name=result.get("certbot_cert_name"))
     if not copy_result["success"]:
         return {
             "success": False,
@@ -1621,7 +1696,28 @@ async def request_cert(
     cert_path = copy_result["cert_path"]
     key_path = copy_result["key_path"]
 
-    return _finalize_certbot_issued_certificate(
+    if replacing and existing:
+        # Existing running Nginx configs may still point at upload paths such as
+        # .pem/.key. Keep those paths current before reloading Nginx.
+        try:
+            previous_cert = Path(existing.cert_path)
+            previous_key = Path(existing.key_path)
+            if previous_cert.resolve() != Path(cert_path).resolve():
+                shutil.copy2(cert_path, previous_cert)
+                cert_path = str(previous_cert)
+            if previous_key.resolve() != Path(key_path).resolve():
+                shutil.copy2(key_path, previous_key)
+                key_path = str(previous_key)
+        except OSError as exc:
+            return {
+                "success": False,
+                "message": f"证书已签发，但无法更新现有 Nginx 证书路径: {exc}",
+                "output": result.get("output", ""),
+                "error_code": "existing_certificate_copy_failed",
+                "suggestions": ["检查原证书文件目录的写入权限"],
+            }
+
+    response = _finalize_certbot_issued_certificate(
         domain=domain,
         cert_path=cert_path,
         key_path=key_path,
@@ -1635,7 +1731,18 @@ async def request_cert(
         fullchain_pem=copy_result.get("fullchain_pem"),
         privkey_pem=copy_result.get("privkey_pem"),
         ssl_subdir=copy_result.get("ssl_subdir"),
+        certbot_cert_name=result.get("certbot_cert_name"),
+        existing_cert_id=existing.id if replacing and existing else None,
+        issue_method="aliyun_dns" if request_data.validation_method == "aliyun_dns" else None,
     )
+    if request_data.validation_method == "aliyun_dns":
+        from app.utils.nginx import reload_nginx
+
+        reload_result = reload_nginx()
+        response["nginx_reload"] = reload_result
+        if not reload_result.get("success"):
+            response["message"] += "，但 Nginx 重载失败，请检查运行配置"
+    return response
 
 
 @router.post("/renew/{cert_id}", summary="手动续期证书")
@@ -1645,31 +1752,29 @@ async def renew_cert(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """手动续期指定证书（对于手动上传的证书，会尝试通过certbot申请新证书）"""
+    """手动续期已有 Certbot 自动验证记录的证书。"""
     cert = db.query(Certificate).filter(Certificate.id == cert_id).first()
 
     if not cert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
-    # 先尝试通过 certbot 续期（适用于通过certbot申请的证书）
-    # 优先使用 certbot_cert_name（lineage 名称），若不存在则回退到 domain
-    _renew_name = cert.certbot_cert_name or cert.domain
-    result = await asyncio.to_thread(renew_certificate, _renew_name)
+    if cert.issue_method not in ("http", "aliyun_dns") or not cert.certbot_cert_name:
+        raise HTTPException(
+            status_code=400,
+            detail="此证书没有自动验证的 Certbot 记录；请通过阿里云 DNS 重新签发后再续期",
+        )
 
-    # 如果续期失败，可能是因为证书是手动上传的，certbot中没有记录
-    # 这种情况下，我们可以尝试重新申请证书（如果用户配置了邮箱等信息）
-    # 但目前先返回错误，提示用户手动更新证书
+    result = await asyncio.to_thread(renew_certificate, cert.certbot_cert_name)
+
     if not result["success"]:
-        # 检查是否是因为certbot中没有该域名的记录
         if "No such certificate" in result.get("output", "") or "certificate not found" in result.get("output", "").lower():
             return {
                 "success": False,
-                "message": f"该证书是通过手动上传的，无法自动续期。请通过重新上传功能手动更新证书，或通过申请证书功能使用certbot自动申请新证书。",
+                "message": "Certbot 中找不到此证书的签发记录，请通过阿里云 DNS 重新签发",
                 "output": result.get("output", ""),
-                "error_code": "manual_upload_no_certbot",
+                "error_code": "certbot_lineage_missing",
                 "suggestions": [
-                    "使用「重新上传」替换证书文件",
-                    "或删除后使用 Let's Encrypt 自动申请",
+                    "使用阿里云 DNS 自动验证重新签发",
                 ],
             }
         return {
@@ -1707,9 +1812,12 @@ async def renew_cert(
 
             # 更新nginx配置中的证书路径
             try:
-                from app.utils.nginx import apply_ssl_config
+                from app.utils.nginx import apply_ssl_config, reload_nginx
                 ssl_result = apply_ssl_config(cert.domain, cert.cert_path, cert.key_path)
                 ssl_message = ssl_result.get("message", "")
+                reload_result = reload_nginx()
+                if not reload_result.get("success"):
+                    ssl_message += f"；Nginx 重载失败: {reload_result.get('message')}"
             except Exception as e:
                 ssl_message = f"自动更新 SSL 配置失败: {str(e)}"
         else:
@@ -1874,6 +1982,13 @@ async def update_certificate(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="证书不存在")
 
     if request_data.auto_renew is not None:
+        if request_data.auto_renew and (
+            not cert.certbot_cert_name or cert.issue_method not in ("http", "aliyun_dns")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="此证书没有可自动续期的验证方式，请使用阿里云 DNS 自动验证重新申请",
+            )
         cert.auto_renew = request_data.auto_renew
 
     db.commit()

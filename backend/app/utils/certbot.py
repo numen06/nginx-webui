@@ -931,7 +931,7 @@ def request_certificate(
     domains: List[str], email: str, validation_method: str = "http"
 ) -> Dict[str, Any]:
     """
-    通过 certbot 申请证书（仅支持 HTTP(webroot)；DNS 请使用 start_dns_manual_challenge + complete_dns_manual_challenge）
+    通过 Certbot 申请 HTTP 或阿里云 DNS 自动验证证书；手动 DNS 使用分步流程。
 
     Returns:
         含 success, message, output, cert_path, key_path, error_code, suggestions
@@ -967,7 +967,7 @@ def request_certificate(
             ],
         }
 
-    if validation_method != "http":
+    if validation_method not in ("http", "aliyun_dns"):
         return {
             "success": False,
             "message": f"不支持的验证方式: {validation_method}",
@@ -975,8 +975,32 @@ def request_certificate(
             "cert_path": None,
             "key_path": None,
             "error_code": "unsupported_validation",
-            "suggestions": ["请选择 http 或 dns"],
+            "suggestions": ["请选择 HTTP、手动 DNS 或阿里云 DNS 验证"],
         }
+
+    if validation_method == "aliyun_dns":
+        from app.utils.aliyun_dns import _record_name, load_credentials
+
+        credentials = load_credentials()
+        if not credentials:
+            return {
+                "success": False,
+                "message": "请先在证书 DNS 配置页面保存阿里云凭据",
+                "output": "",
+                "error_code": "aliyun_dns_not_configured",
+                "suggestions": ["配置有 DNS 管理权限的 RAM AccessKey"],
+            }
+        try:
+            for name in domains:
+                _record_name(name, credentials["zone"])
+        except ValueError as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "output": "",
+                "error_code": "aliyun_dns_zone_mismatch",
+                "suggestions": [],
+            }
 
     quarantined = quarantine_broken_renewal_configs()
     acme_check = test_acme_directory_connectivity(timeout_sec=8.0)
@@ -987,7 +1011,7 @@ def request_certificate(
             result["suggestions"].insert(0, notice)
         return result
 
-    # 构建 certbot 命令（仅 HTTP）
+    # --cert-name keeps this issuance in the same lineage as future renewals.
     cmd = [
         str(certbot_path),
         "certonly",
@@ -997,17 +1021,31 @@ def request_certificate(
         "--agree-tos",
         "--email",
         email,
-        "--expand",
+        "--cert-name",
+        domains[0],
     ]
 
     for domain in domains:
         cmd.extend(["-d", domain])
 
-    cmd.append("--webroot")
-    cmd.extend(["--webroot-path", str(Path(config.nginx.static_dir))])
+    if validation_method == "aliyun_dns":
+        import sys
+
+        hook = Path(__file__).with_name("aliyun_dns.py")
+        cmd.extend([
+            "--manual",
+            "--preferred-challenges", "dns",
+            "--manual-auth-hook", f"{sys.executable} {hook} auth",
+            "--manual-cleanup-hook", f"{sys.executable} {hook} cleanup",
+            "--force-renewal",
+        ])
+    else:
+        cmd.append("--expand")
+        cmd.append("--webroot")
+        cmd.extend(["--webroot-path", str(Path(config.nginx.static_dir))])
 
     try:
-        run = _run_certbot(cmd, timeout=300)
+        run = _run_certbot(cmd, timeout=1200 if validation_method == "aliyun_dns" else 300)
         if run.get("timed_out"):
             return {
                 "success": False,
@@ -1057,9 +1095,10 @@ def request_certificate(
             "output": output,
             "cert_path": cert_path,
             "key_path": key_path,
+            "certbot_cert_name": domains[0] if success else None,
         }
         if not success:
-            ret = _enrich_failure_result(ret, "http")
+            ret = _enrich_failure_result(ret, "dns" if validation_method == "aliyun_dns" else "http")
         else:
             ret["error_code"] = None
             ret["suggestions"] = None
@@ -2482,7 +2521,7 @@ def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
         cmd.extend(["--cert-name", domain])
 
     try:
-        result = _run_certbot(cmd, timeout=300)
+        result = _run_certbot(cmd, timeout=1200)
         if result.get("timed_out"):
             return {
                 "success": False,
