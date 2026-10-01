@@ -1,7 +1,7 @@
 """
 数据库连接和初始化模块
 """
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
@@ -74,9 +74,20 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
 # 创建数据库引擎
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},  # SQLite 需要这个参数
+    connect_args={"check_same_thread": False, "timeout": 30},
     echo=False  # 设置为 True 可以打印所有 SQL 语句
 )
+
+
+@event.listens_for(engine, "connect")
+def _configure_sqlite_connection(dbapi_connection, _connection_record):
+    """减少后台任务和 API 并发读写时的 database is locked。"""
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+    finally:
+        cursor.close()
 
 # 创建会话工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

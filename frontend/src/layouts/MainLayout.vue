@@ -110,6 +110,7 @@ const navigation: NavigationGroup[] = [
     label: '配置',
     items: [
       { label: '配置管理', path: '/config', icon: FileCode2 },
+      { label: '证书 DNS 配置', path: '/certificate-dns-settings', icon: ShieldCheck, admin: true },
       { label: '动态服务', path: '/dynamic-services', icon: Network },
       { label: 'Git 配置同步', path: '/git-sync', icon: GitBranch },
     ],

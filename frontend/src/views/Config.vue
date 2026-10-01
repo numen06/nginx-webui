@@ -578,9 +578,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
           <RefreshCw :class="['size-4', { 'animate-spin': loading }]" />刷新
         </Button>
         <Button variant="secondary" @click="handleTest"><TestTube2 class="size-4" />测试</Button>
-        <Button :disabled="!currentFilePath || saving" @click="handleSave">
-          <Save class="size-4" />{{ saving ? '保存中' : '保存' }}
-        </Button>
+        <div class="config-save-actions flex flex-wrap items-center gap-1 rounded-lg border bg-muted/20 p-1">
+          <Button :disabled="!currentFilePath || saving" @click="handleSave">
+            <Save class="size-4" />{{ saving ? '保存中' : '保存' }}
+          </Button>
+          <Button variant="outline" :disabled="applying" @click="handleApply">
+            <Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}
+          </Button>
+        </div>
         <Button variant="outline" @click="handleReload"><RefreshCw class="size-4" />重新装载</Button>
       </div>
     </div>
@@ -628,11 +633,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         <Button size="sm" variant="destructive" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleDelete"><Trash2 class="size-4" /><span class="hidden sm:inline">删除</span></Button>
         <span class="hidden flex-1 md:block" />
         <Button v-if="focusMode" size="sm" variant="secondary" @click="handleTest"><TestTube2 class="size-4" /><span class="hidden lg:inline">测试</span></Button>
-        <Button v-if="focusMode" size="sm" :disabled="!currentFilePath || saving" @click="handleSave"><Save class="size-4" /><span class="hidden lg:inline">{{ saving ? '保存中' : '保存' }}</span></Button>
+        <div v-if="focusMode" class="config-save-actions flex items-center gap-1 rounded-lg border bg-muted/20 p-1">
+          <Button size="sm" :disabled="!currentFilePath || saving" @click="handleSave"><Save class="size-4" />{{ saving ? '保存中' : '保存' }}</Button>
+          <Button size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}</Button>
+        </div>
         <Button v-if="focusMode" size="sm" variant="outline" @click="handleReload"><RefreshCw class="size-4" /><span class="hidden xl:inline">重新装载</span></Button>
-        <Button size="sm" variant="outline" title="拆分老配置" aria-label="拆分老配置" @click="handleSplitLegacy"><Scissors class="size-4" /><span class="hidden 2xl:inline">拆分老配置</span></Button>
-        <Button size="sm" variant="outline" title="合并预览" aria-label="合并预览" @click="handleMergedPreview"><Eye class="size-4" /><span class="hidden xl:inline">合并预览</span></Button>
-        <Button size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" /><span class="hidden sm:inline">{{ applying ? '覆盖中' : '强制覆盖' }}</span></Button>
+        <Button size="sm" variant="outline" @click="handleSplitLegacy"><Scissors class="size-4" />拆分老配置</Button>
+        <Button size="icon-sm" variant="ghost" title="合并预览" aria-label="合并预览" @click="handleMergedPreview"><Eye class="size-4" /></Button>
         <Button
           size="sm"
           variant="outline"

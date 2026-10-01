@@ -24,6 +24,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: 'dashboard', name: 'Dashboard', component: () => import('@/views/Dashboard.vue'), meta: { title: '仪表盘' } },
       { path: 'config', name: 'Config', component: () => import('@/views/Config.vue'), meta: { title: '配置管理' } },
+      { path: 'certificate-dns-settings', name: 'CertificateDnsSettings', component: () => import('@/views/CertificateDnsSettings.vue'), meta: { title: '证书 DNS 配置', requiresAdmin: true } },
       { path: 'dynamic-services', name: 'DynamicServices', component: () => import('@/views/DynamicServices.vue'), meta: { title: '动态服务' } },
       { path: 'git-sync', name: 'GitSync', component: () => import('@/views/GitSync.vue'), meta: { title: 'Git 配置同步' } },
       { path: 'logs', name: 'Logs', component: () => import('@/views/Logs.vue'), meta: { title: '日志查看' } },
