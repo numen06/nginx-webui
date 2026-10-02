@@ -10,6 +10,7 @@ import time
 import uuid
 import json
 import queue
+import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
@@ -499,6 +500,36 @@ def get_certbot_live_root() -> Path:
 
 def get_certbot_renewal_root() -> Path:
     return get_certbot_config_dir() / "renewal"
+
+
+def ensure_default_renewal_window(cert_name: str) -> bool:
+    """Set the default renewal window to 15 days without overriding an explicit value."""
+    name = validate_certbot_lineage_segment(cert_name)
+    path = get_certbot_renewal_root() / f"{name}.conf"
+    if not path.is_file():
+        return False
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    header_end = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines))
+    if any(re.match(r"\s*renew_before_expiry\s*=", line) for line in lines[:header_end]):
+        return False
+
+    setting = "renew_before_expiry = 15 days"
+    for i, line in enumerate(lines[:header_end]):
+        if re.match(r"\s*#\s*renew_before_expiry\s*=", line):
+            lines[i] = setting + ("\n" if line.endswith("\n") else "")
+            break
+    else:
+        lines.insert(0, setting + "\n")
+
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temp.write_text("".join(lines), encoding="utf-8")
+        os.chmod(temp, path.stat().st_mode & 0o777)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+    return True
 
 
 def validate_certbot_lineage_segment(name: str) -> str:
@@ -1083,6 +1114,11 @@ def request_certificate(
             domain = domains[0]
             cert_path = str(get_certbot_live_root() / domain / "fullchain.pem")
             key_path = str(get_certbot_live_root() / domain / "privkey.pem")
+
+            try:
+                ensure_default_renewal_window(domain)
+            except (OSError, ValueError) as exc:
+                logging.warning("无法为证书 %s 设置默认 15 天续期提前量: %s", domain, exc)
 
             if not Path(cert_path).exists():
                 cert_path = None
@@ -2518,6 +2554,10 @@ def renew_certificate(domain: Optional[str] = None) -> Dict[str, Any]:
     ]
 
     if domain:
+        try:
+            ensure_default_renewal_window(domain)
+        except (OSError, ValueError) as exc:
+            logging.warning("无法为证书 %s 设置默认 15 天续期提前量: %s", domain, exc)
         cmd.extend(["--cert-name", domain])
 
     try:
