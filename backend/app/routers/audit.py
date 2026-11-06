@@ -3,13 +3,15 @@
 """
 from typing import Optional
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
+from app.config import MIN_LOG_RETENTION_DAYS
+from app.utils.audit import create_audit_log, get_client_ip
 from app.models import OperationLog
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -18,10 +20,10 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 class CleanupLogsRequest(BaseModel):
     """日志清理请求模型"""
     retain_days: int = Field(
-        default=90,
-        ge=1,
+        default=MIN_LOG_RETENTION_DAYS,
+        ge=MIN_LOG_RETENTION_DAYS,
         le=3650,
-        description="需要保留的天数，默认 90 天"
+        description="需要保留的天数"
     )
 
 
@@ -107,7 +109,8 @@ async def get_audit_logs(
 @router.post("/logs/cleanup", summary="清理操作日志", status_code=status.HTTP_200_OK)
 async def cleanup_audit_logs(
     payload: CleanupLogsRequest,
-    current_user: User = Depends(get_current_user),
+    request: Request,
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     """清理早于指定天数的操作日志"""
@@ -120,7 +123,11 @@ async def cleanup_audit_logs(
         .delete(synchronize_session=False)
     )
     
-    db.commit()
+    create_audit_log(
+        db=db, user_id=current_user.id, username=current_user.username,
+        action="audit_cleanup", details={"result": True, "deleted": deleted_count, "retain_days": retain_days},
+        ip_address=get_client_ip(request),
+    )
     
     return {
         "success": True,

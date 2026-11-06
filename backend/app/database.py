@@ -7,6 +7,8 @@ from sqlalchemy.orm import sessionmaker
 from pathlib import Path
 import bcrypt
 import os
+import secrets
+from tempfile import NamedTemporaryFile
 from datetime import datetime
 from typing import Optional
 
@@ -67,6 +69,20 @@ def _get_db_path() -> Path:
 
 # 数据库文件路径
 DB_PATH = _get_db_path()
+
+def get_or_create_private_secret(name: str) -> str:
+    """在持久化数据目录中原子地创建仅运行用户可读的随机凭据。"""
+    path = DB_PATH.with_name(name)
+    if not path.exists():
+        with NamedTemporaryFile(mode="w", dir=path.parent) as temporary:
+            temporary.write(secrets.token_urlsafe(32) + "\n")
+            temporary.flush()
+            try:
+                os.link(temporary.name, path)
+            except FileExistsError:
+                pass
+    return path.read_text(encoding="utf-8").strip()
+
 
 # SQLite 数据库连接字符串
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
@@ -248,22 +264,24 @@ def init_db():
     db = SessionLocal()
     try:
         admin_user = db.query(User).filter(User.username == "admin").first()
-        if not admin_user:
-            # 默认密码为 "admin"，首次登录后应修改
-            password_hash = bcrypt.hashpw("admin".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-            admin_user = User(
-                username="admin",
-                password_hash=password_hash,
-                is_active=True,
-                is_admin=True,
-                created_at=datetime.now()
-            )
-            db.add(admin_user)
+        has_active_admin = db.query(User.id).filter(User.is_admin.is_(True), User.is_active.is_(True)).first()
+        legacy_password = admin_user is not None and bcrypt.checkpw(b"admin", admin_user.password_hash.encode())
+        if legacy_password or not has_active_admin:
+            password = get_or_create_private_secret("initial-admin-password")
+            password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+            if admin_user is None:
+                admin_user = User(username="admin", is_active=True, is_admin=True)
+                db.add(admin_user)
+            elif not has_active_admin:
+                db.query(User).filter(User.is_admin.is_(True)).update({User.is_admin: False})
+                admin_user.is_active = True
+                admin_user.is_admin = True
+            admin_user.password_hash = password_hash
             db.commit()
-            print("默认管理员账户已创建: admin/admin (首次登录后请修改密码)")
-    except Exception as e:
-        print(f"初始化默认用户时出错: {e}")
+            print(f"已初始化管理员凭据，请从部署主机读取 {DB_PATH.with_name('initial-admin-password')}")
+    except Exception:
         db.rollback()
+        raise
     finally:
         db.close()
 

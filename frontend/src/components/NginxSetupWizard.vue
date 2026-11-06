@@ -22,7 +22,7 @@
           <div class="step-description">
             <ui-icon class="step-icon"><Box /></ui-icon>
             <h3>准备 Nginx 源码包</h3>
-            <p>系统检测到默认的 Nginx 1.31.2 源码包，需要将其复制到构建目录以准备编译。</p>
+            <p>将内置的 Nginx 源码包复制到构建目录以准备编译。</p>
           </div>
           <div class="step-actions">
             <ui-button
@@ -45,7 +45,7 @@
           <div class="step-description">
             <ui-icon class="step-icon"><Tools /></ui-icon>
             <h3>编译 Nginx</h3>
-            <p>开始编译 Nginx 1.31.2，这个过程可能需要几分钟时间，请耐心等待。</p>
+            <p>开始编译 Nginx {{ defaultVersion }}，这个过程可能需要几分钟时间，请耐心等待。</p>
           </div>
           <div v-if="compiling" class="compile-progress">
             <ui-progress
@@ -149,7 +149,7 @@ const progressState = {
   progressCheckTimer: null  // 进度检查定时器
 }
 
-const defaultVersion = '1.31.2'
+const defaultVersion = ref('')
 
 const handlePrepare = async () => {
   preparing.value = true
@@ -177,7 +177,8 @@ const handlePrepare = async () => {
   }, 1000)
   
   try {
-    await nginxApi.prepareDefaultNginx()
+    const { version } = await nginxApi.prepareDefaultNginx()
+    defaultVersion.value = version
     
     // 确保进度到达准备阶段的终点
     compileProgress.value = prepareStage.max
@@ -226,7 +227,7 @@ const handleCompile = async () => {
   
   try {
     // 编译是异步的，需要轮询检查状态
-    await nginxApi.compileVersion(defaultVersion)
+    await nginxApi.compileVersion(defaultVersion.value)
     compileStatusText.value = '编译已启动，正在检查进度...'
     
     // 平滑进度更新：在编译阶段（20%-80%）内持续递增
@@ -263,7 +264,7 @@ const handleCompile = async () => {
     // 轮询检查编译进度
     progressState.progressCheckTimer = setInterval(async () => {
       try {
-        const progressResponse = await nginxApi.getCompileProgress(defaultVersion)
+        const progressResponse = await nginxApi.getCompileProgress(defaultVersion.value)
         
         // API拦截器已经返回了data，所以progressResponse就是数据对象
         let progressData = progressResponse
@@ -360,7 +361,7 @@ const handlePublish = async () => {
   }, 1000)
   
   try {
-    await nginxApi.upgradeToProduction(defaultVersion)
+    await nginxApi.upgradeToProduction(defaultVersion.value)
     
     // 更新进度到90%
     compileProgress.value = 90

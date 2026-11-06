@@ -97,11 +97,14 @@ class BackupConfig(BaseModel):
     backup_dir: str = "/app/data/backups"
 
 
+MIN_LOG_RETENTION_DAYS = 185
+
+
 class LogrotateConfig(BaseModel):
     """日志轮转配置"""
 
     enabled: bool = True
-    retention_days: int = 7
+    retention_days: int = Field(default=MIN_LOG_RETENTION_DAYS, ge=MIN_LOG_RETENTION_DAYS)
     rotate_time: str = "00:00"  # 格式: HH:MM
 
 
@@ -239,8 +242,9 @@ class ConfigManager:
         logrotate_config["enabled"] = os.getenv(
             "LOGROTATE_ENABLED", str(logrotate_config.get("enabled", "true"))
         ).lower() in ("true", "1", "yes")
-        logrotate_config["retention_days"] = int(
-            os.getenv("LOGROTATE_RETENTION_DAYS", logrotate_config.get("retention_days", 7))
+        logrotate_config["retention_days"] = max(
+            MIN_LOG_RETENTION_DAYS,
+            int(os.getenv("LOGROTATE_RETENTION_DAYS", logrotate_config.get("retention_days", MIN_LOG_RETENTION_DAYS))),
         )
         logrotate_config["rotate_time"] = os.getenv(
             "LOGROTATE_ROTATE_TIME", logrotate_config.get("rotate_time", "00:00")

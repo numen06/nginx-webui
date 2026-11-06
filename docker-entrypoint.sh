@@ -30,4 +30,4 @@ fi
 
 echo "启动 FastAPI 服务在端口 $PORT..."
 cd /app/backend
-exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --no-server-header

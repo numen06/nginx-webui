@@ -183,7 +183,7 @@ def _registry_auth(request: Request, db: Session) -> dict:
         except (binascii.Error, UnicodeDecodeError):
             username, separator, password = "", "", ""
         if separator:
-            user = authenticate_user(db, username, password)
+            user = authenticate_user(db, username, password, request)
             if user:
                 return {"method": "basic_auth", "user": user}
 

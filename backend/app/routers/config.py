@@ -7,12 +7,11 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
-from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.auth import get_current_user, get_current_user_basic, User
+from app.auth import get_current_user, require_admin, User
 from app.utils.nginx import (
     get_config_content,
     save_config_content,
@@ -198,7 +197,7 @@ async def update_config(
 
 
 @router.post("/test", summary="测试配置有效性")
-async def test_nginx_config(current_user: User = Depends(get_current_user)):
+async def test_nginx_config(current_user: User = Depends(require_admin)):
     """测试 Nginx 配置是否有效（测试已保存的配置文件）"""
     result = test_config()
     return result
@@ -215,7 +214,7 @@ async def format_nginx_config(
 
 @router.post("/validate", summary="校验配置内容")
 async def validate_nginx_config(
-    request_data: ConfigValidateRequest, current_user: User = Depends(get_current_user)
+    request_data: ConfigValidateRequest, current_user: User = Depends(require_admin)
 ):
     """校验 Nginx 配置内容（不保存，使用临时文件测试）"""
     if request_data.path and request_data.path != "nginx.conf":
@@ -419,7 +418,7 @@ async def get_config_merged_preview(current_user: User = Depends(get_current_use
 @router.post("/reload", summary="重新加载 Nginx 配置")
 async def reload_nginx_config(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """重新加载 Nginx 配置"""
@@ -485,7 +484,7 @@ async def reload_nginx_config(
 @router.post("/apply", summary="强制覆盖配置文件（不重载nginx）")
 async def apply_config(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -686,7 +685,7 @@ async def get_backup_content(
 async def restore_config_backup(
     backup_id: int,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """恢复指定备份的配置"""

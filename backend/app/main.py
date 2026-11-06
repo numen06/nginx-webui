@@ -2,6 +2,7 @@
 FastAPI 应用主入口
 """
 
+import os
 import shutil
 import threading
 import asyncio
@@ -43,7 +44,7 @@ from app.routers import statistics_v2 as statistics, system
 from app.utils.version import get_version
 from app.utils.statistics_cache import cleanup_old_cache
 from app.utils.log_watcher import start_log_watcher
-from app.routers.logs import _resolve_access_log_path
+from app.utils.logrotate import _resolve_access_log_path
 
 # 配置全局日志（包含统计分析日志）
 logging.basicConfig(
@@ -57,11 +58,15 @@ init_db()
 # 读取当前应用版本（从配置 / 环境变量 / 默认值）
 APP_VERSION = get_version()
 
-# 创建 FastAPI 应用（版本号使用程序版本，而不是 Nginx 编译时间）
+# API 文档仅在显式开启时公开。
+api_docs_enabled = os.getenv("ENABLE_API_DOCS", "").lower() in {"1", "true"}
 app = FastAPI(
     title="Nginx WebUI API",
     description="Nginx 管理系统的后端 API",
     version=APP_VERSION,
+    docs_url="/docs" if api_docs_enabled else None,
+    redoc_url="/redoc" if api_docs_enabled else None,
+    openapi_url="/openapi.json" if api_docs_enabled else None,
 )
 
 # 配置 CORS
@@ -796,7 +801,7 @@ if static_dir.exists():
 @app.get("/", summary="API 根路径")
 async def root():
     """API 根路径"""
-    return {"message": "Nginx WebUI API", "version": APP_VERSION, "docs": "/docs"}
+    return {"message": "Nginx WebUI API"}
 
 
 @app.get("/api/health", summary="健康检查")
@@ -820,18 +825,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             }
         )
 
-    # 记录详细的验证错误信息
-    print(f"\n[验证错误] {request.method} {request.url}")
-    print(f"[验证错误] 错误详情: {error_details}")
-
-    # 尝试读取请求体（如果可能）
-    try:
-        body = await request.body()
-        if body:
-            print(f"[验证错误] 请求体: {body.decode('utf-8', errors='ignore')}")
-    except Exception:
-        pass
-
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={"detail": error_details},
@@ -844,7 +837,7 @@ async def global_exception_handler(request, exc):
     logging.error(f"未处理的异常: {str(exc)}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"success": False, "message": "服务器内部错误", "detail": str(exc)},
+        content={"success": False, "message": "服务器内部错误"},
     )
 
 
@@ -857,5 +850,6 @@ if __name__ == "__main__":
         "app.main:app",
         host=config.app.host,
         port=config.app.port,
+        server_header=False,
         reload=config.app.debug,  # 根据配置决定是否启用自动重载
     )

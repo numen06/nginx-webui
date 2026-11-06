@@ -19,6 +19,7 @@
               />
             </ui-select>
             <ui-switch
+              v-if="authStore.isAdmin"
               v-model="rootOnly"
               active-text="整个目录"
               inactive-text="仅 HTML"
@@ -280,6 +281,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useAuthStore } from '@/store/auth'
 import { filesApi } from '../api/files'
 import { nginxApi } from '../api/nginx'
 import { ElMessage, ElMessageBox } from '@/lib/feedback'
@@ -304,6 +306,7 @@ import {
 } from '@/components/icons'
 import MonacoEditor from '../components/MonacoEditor.vue'
 
+const authStore = useAuthStore()
 const fileList = ref([])
 const currentPath = ref('')
 const loading = ref(false)

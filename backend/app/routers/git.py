@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.auth import User, get_current_user
+from app.auth import User, require_admin
 from app.database import get_db
 from app.models import GitRepository
 from app.utils.git_sync import (
@@ -53,7 +53,7 @@ def _get_repo(db: Session) -> Optional[GitRepository]:
 
 @router.get("/config", summary="获取 Git 配置")
 async def get_git_config(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     repo = _get_repo(db)
@@ -69,7 +69,7 @@ async def get_git_config(
 @router.post("/config", summary="保存 Git 配置")
 async def save_git_config(
     request_data: GitConfigRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     project_name = (request_data.project_name or "").strip()
@@ -115,7 +115,7 @@ async def save_git_config(
 
 @router.post("/sync", summary="同步配置到 Git 仓库")
 async def sync_git_repository(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     repo = _get_repo(db)

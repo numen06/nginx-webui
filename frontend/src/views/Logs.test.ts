@@ -5,6 +5,9 @@ import { logsApi } from '@/api/logs'
 import { ElMessageBox } from '@/lib/feedback'
 import { Tabs } from '@/components/ui/tabs'
 
+const auth = vi.hoisted(() => ({ isAdmin: true }))
+vi.mock('@/store/auth', () => ({ useAuthStore: () => auth }))
+
 vi.mock('@/api/logs', () => ({
   logsApi: {
     getAccessLogs: vi.fn(),
@@ -36,6 +39,7 @@ vi.mock('@/components/LogViewer.vue', () => ({
 describe('Logs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    auth.isAdmin = true
     vi.mocked(logsApi.getAccessLogs).mockResolvedValue({
       success: true,
       logs: ['access line'],
@@ -54,7 +58,7 @@ describe('Logs', () => {
     })
     vi.mocked(logsApi.getLogRotateFiles).mockResolvedValue({
       success: true,
-      access_files: [{ filename: 'access.log.20260714', date: '2026-07-14', size: 512 }],
+      access_files: [{ filename: 'access.log.20260714', date: '2026-07-14', size: 512, deletable: true }],
       error_files: [],
     })
     vi.mocked(logsApi.deleteLogRotateFile).mockResolvedValue({ success: true })

@@ -49,7 +49,7 @@
           </ui-form-item>
         </ui-form>
         <div class="action-buttons">
-          <ui-button type="danger" plain @click="openCleanupDialog">清理日志</ui-button>
+          <ui-button type="danger" plain v-if="authStore.isAdmin" @click="openCleanupDialog">清理日志</ui-button>
         </div>
       </div>
 
@@ -99,12 +99,12 @@
         <ui-form-item label="保留天数" prop="retain_days">
           <ui-input-number
             v-model="cleanupForm.retain_days"
-            :min="1"
+            :min="185"
             :max="3650"
             :step="1"
           />
         </ui-form-item>
-        <p class="cleanup-tip">将删除早于指定天数的日志，默认保留 90 天。</p>
+        <p class="cleanup-tip">将删除早于指定天数的日志，至少保留 185 天。</p>
       </ui-form>
       <template #footer>
         <ui-button @click="cleanupDialogVisible = false">取消</ui-button>
@@ -117,11 +117,14 @@
 </template>
 
 <script setup lang="ts">
+import { useAuthStore } from '@/store/auth'
 import { ref, onMounted } from 'vue'
 import { auditApi } from '../api/audit'
 import { ElMessage } from '@/lib/feedback'
 import { Search, RefreshRight } from '@/components/icons'
 import { formatDateTime } from '../utils/date'
+
+const authStore = useAuthStore()
 
 const loading = ref(false)
 const auditLogs = ref([])
@@ -139,12 +142,12 @@ const cleanupDialogVisible = ref(false)
 const cleanupFormRef = ref()
 const cleanupLoading = ref(false)
 const cleanupForm = ref({
-  retain_days: 90
+  retain_days: 185
 })
 const cleanupRules = {
   retain_days: [
     { required: true, message: '请输入保留天数', trigger: 'blur' },
-    { type: 'number', min: 1, max: 3650, message: '范围 1-3650 天', trigger: 'blur' }
+    { type: 'number', min: 185, max: 3650, message: '范围 185-3650 天', trigger: 'blur' }
   ]
 }
 
@@ -237,7 +240,7 @@ const handleSizeChange = (size) => {
 }
 
 const openCleanupDialog = () => {
-  cleanupForm.value.retain_days = 90
+  cleanupForm.value.retain_days = 185
   cleanupDialogVisible.value = true
 }
 

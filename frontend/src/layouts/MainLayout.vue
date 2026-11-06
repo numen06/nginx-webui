@@ -112,13 +112,13 @@ const navigation: NavigationGroup[] = [
       { label: '配置管理', path: '/config', icon: FileCode2 },
       { label: '证书 DNS 配置', path: '/certificate-dns-settings', icon: ShieldCheck, admin: true },
       { label: '动态服务', path: '/dynamic-services', icon: Network },
-      { label: 'Git 配置同步', path: '/git-sync', icon: GitBranch },
+      { label: 'Git 配置同步', path: '/git-sync', icon: GitBranch, admin: true },
     ],
   },
   {
     label: '运维',
     items: [
-      { label: 'Nginx 管理', path: '/nginx', icon: Settings2 },
+      { label: 'Nginx 管理', path: '/nginx', icon: Settings2, admin: true },
       { label: '证书管理', path: '/certificates', icon: ShieldCheck },
       { label: '文件管理', path: '/files', icon: FolderTree },
       { label: '静态资源包', path: '/static-package', icon: FileArchive },
@@ -319,7 +319,7 @@ onMounted(() => {
     </SidebarInset>
   </SidebarProvider>
 
-  <NginxSetupWizard v-model="showSetupWizard" @complete="handleSetupComplete" />
+  <NginxSetupWizard v-if="authStore.isAdmin" v-model="showSetupWizard" @complete="handleSetupComplete" />
 
   <Dialog v-model:open="versionDialogVisible">
     <DialogContent class="max-h-[85vh] overflow-y-auto sm:max-w-xl">

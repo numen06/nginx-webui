@@ -2,8 +2,8 @@
 
 ## 默认账号信息
 
-- **用户名**: `admin`
-- **密码**: `admin`
+- 用户名为 `admin`。
+- 初始密码在 `${DATA_ROOT}/backend/initial-admin-password`，后端首次启动时生成。未设置 `DATA_ROOT` 时默认使用 `/app/data`。
 
 ## 启动步骤
 
@@ -46,9 +46,7 @@ bash scripts/start-frontend.sh
 
 打开浏览器访问：`http://localhost:3001`
 
-使用默认账号登录：
-- 用户名: `admin`
-- 密码: `admin`
+使用用户名 `admin` 和部署目录中的初始密码登录。
 
 ## 常见问题
 
@@ -94,6 +92,8 @@ python3 -c "from app.database import init_db; init_db()"
 3. 点击运行按钮，同时启动后端和前端
 
 ## API 文档
+
+开发环境可设置 `ENABLE_API_DOCS=1` 后启动后端。
 
 后端启动后，访问以下地址查看 API 文档：
 

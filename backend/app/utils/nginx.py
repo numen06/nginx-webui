@@ -601,6 +601,9 @@ events {{
 }}
 
 http {{
+    server_tokens off;
+    autoindex off;
+
     include       mime.types;
     default_type  application/octet-stream;
 
@@ -678,10 +681,10 @@ http {{
             default_index_html = """<!DOCTYPE html>
 <html>
 <head>
-    <title>Nginx WebUI</title>
+    <title>Site is running</title>
 </head>
 <body>
-    <h1>Nginx is running!</h1>
+    <h1>Site is running</h1>
     <p>This is the default page. Please configure your site.</p>
 </body>
 </html>

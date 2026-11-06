@@ -10,7 +10,7 @@ def test_builtin_source_is_registered_when_production_version_already_exists(
 ):
     versions_root = tmp_path / "versions"
     build_root = tmp_path / "build"
-    default_tar = tmp_path / "default-nginx" / "nginx-1.31.2.tar.gz"
+    default_tar = tmp_path / "default-nginx" / "nginx-1.31.8.tar.gz"
     last_executable = versions_root / "last" / "sbin" / "nginx"
     default_tar.parent.mkdir(parents=True)
     default_tar.write_bytes(b"builtin nginx source")
@@ -55,7 +55,7 @@ def test_builtin_source_is_registered_when_production_version_already_exists(
 
     main._ensure_last_nginx_from_default_tar()
 
-    registered_tar = build_root / "nginx-1.31.2.tar.gz"
+    registered_tar = build_root / "nginx-1.31.8.tar.gz"
     assert registered_tar.read_bytes() == default_tar.read_bytes()
     assert last_executable.read_bytes() == b"existing production nginx"
     assert compile_calls == []
