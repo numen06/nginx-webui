@@ -11,6 +11,7 @@ import {
   Server,
   X,
 } from 'lucide-vue-next'
+import { useAuthStore } from '@/store/auth'
 import { logsApi } from '../api/logs'
 import { ElMessage, ElMessageBox } from '@/lib/feedback'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +22,8 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import LogViewer from '../components/LogViewer.vue'
 import { formatDateTime } from '../utils/date'
+
+const authStore = useAuthStore()
 
 type LogTab = 'access' | 'error'
 
@@ -43,6 +46,7 @@ interface LogFilters {
 interface RotateFile {
   filename: string
   date?: string
+  deletable?: boolean
   size?: number
 }
 
@@ -368,7 +372,7 @@ onMounted(() => {
           <Button v-if="currentRotateFile" size="sm" variant="ghost" @click="returnToCurrentLog">
             返回当前日志
           </Button>
-          <Button size="sm" variant="outline" :disabled="rotating" @click="handleRotateLogs">
+          <Button v-if="authStore.isAdmin" size="sm" variant="outline" :disabled="rotating" @click="handleRotateLogs">
             <RotateCw :class="['size-4', { 'animate-spin': rotating }]" />
             <span class="hidden sm:inline">立即分片</span>
           </Button>
@@ -445,6 +449,7 @@ onMounted(() => {
             </button>
             <button
               type="button"
+              v-if="file.deletable"
               class="rotate-file-delete"
               :aria-label="`删除分片 ${file.filename}`"
               @click="deleteRotateFile(file)"

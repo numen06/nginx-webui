@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAuthStore } from '@/store/auth'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   Archive,
@@ -82,6 +83,8 @@ interface BackupOption {
 }
 
 type SidebarTab = 'sites' | 'files'
+
+const authStore = useAuthStore()
 
 const EMPTY_CONFIG_INFO: ConfigInfo = {
   nginx_version: null,
@@ -577,16 +580,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         <Button variant="outline" :disabled="loading" @click="loadConfig">
           <RefreshCw :class="['size-4', { 'animate-spin': loading }]" />刷新
         </Button>
-        <Button variant="secondary" @click="handleTest"><TestTube2 class="size-4" />测试</Button>
+        <Button v-if="authStore.isAdmin" variant="secondary" @click="handleTest"><TestTube2 class="size-4" />测试</Button>
         <div class="config-save-actions flex flex-wrap items-center gap-1 rounded-lg border bg-muted/20 p-1">
           <Button :disabled="!currentFilePath || saving" @click="handleSave">
             <Save class="size-4" />{{ saving ? '保存中' : '保存' }}
           </Button>
-          <Button variant="outline" :disabled="applying" @click="handleApply">
+          <Button v-if="authStore.isAdmin" variant="outline" :disabled="applying" @click="handleApply">
             <Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}
           </Button>
         </div>
-        <Button variant="outline" @click="handleReload"><RefreshCw class="size-4" />重新装载</Button>
+        <Button v-if="authStore.isAdmin" variant="outline" @click="handleReload"><RefreshCw class="size-4" />重新装载</Button>
       </div>
     </div>
 
@@ -619,7 +622,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
           </NativeSelect>
           <Button size="icon-sm" variant="outline" :disabled="backupLoading" title="刷新备份" aria-label="刷新备份" @click="handleLoadBackups"><RefreshCw class="size-4" /></Button>
           <Button size="icon-sm" variant="outline" :disabled="backupLoading" title="创建备份" aria-label="创建备份" @click="handleCreateBackup"><Plus class="size-4" /></Button>
-          <Button size="icon-sm" variant="outline" :disabled="backupLoading || !selectedBackupId" title="回滚备份" aria-label="回滚备份" @click="handleRollback"><RotateCcw class="size-4" /></Button>
+          <Button v-if="authStore.isAdmin" size="icon-sm" variant="outline" :disabled="backupLoading || !selectedBackupId" title="回滚备份" aria-label="回滚备份" @click="handleRollback"><RotateCcw class="size-4" /></Button>
         </div>
       </CardContent>
     </Card>
@@ -632,12 +635,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
         <Button size="sm" variant="outline" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleRename"><Pencil class="size-4" /><span class="hidden sm:inline">重命名</span></Button>
         <Button size="sm" variant="destructive" :disabled="!currentFilePath || currentFilePath === 'nginx.conf'" @click="handleDelete"><Trash2 class="size-4" /><span class="hidden sm:inline">删除</span></Button>
         <span class="hidden flex-1 md:block" />
-        <Button v-if="focusMode" size="sm" variant="secondary" @click="handleTest"><TestTube2 class="size-4" /><span class="hidden lg:inline">测试</span></Button>
+        <Button v-if="authStore.isAdmin && focusMode" size="sm" variant="secondary" @click="handleTest"><TestTube2 class="size-4" /><span class="hidden lg:inline">测试</span></Button>
         <div v-if="focusMode" class="config-save-actions flex items-center gap-1 rounded-lg border bg-muted/20 p-1">
           <Button size="sm" :disabled="!currentFilePath || saving" @click="handleSave"><Save class="size-4" />{{ saving ? '保存中' : '保存' }}</Button>
-          <Button size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}</Button>
+          <Button v-if="authStore.isAdmin" size="sm" variant="outline" :disabled="applying" @click="handleApply"><Upload class="size-4" />{{ applying ? '覆盖中' : '强制覆盖' }}</Button>
         </div>
-        <Button v-if="focusMode" size="sm" variant="outline" @click="handleReload"><RefreshCw class="size-4" /><span class="hidden xl:inline">重新装载</span></Button>
+        <Button v-if="authStore.isAdmin && focusMode" size="sm" variant="outline" @click="handleReload"><RefreshCw class="size-4" /><span class="hidden xl:inline">重新装载</span></Button>
         <Button size="sm" variant="outline" @click="handleSplitLegacy"><Scissors class="size-4" />拆分老配置</Button>
         <Button size="icon-sm" variant="ghost" title="合并预览" aria-label="合并预览" @click="handleMergedPreview"><Eye class="size-4" /></Button>
         <Button
@@ -730,7 +733,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSaveShortcut))
             </div>
             <div class="flex gap-2">
               <Button size="sm" variant="outline" :disabled="!currentFilePath" @click="handleFormat"><Sparkles class="size-4" />格式化</Button>
-              <Button size="sm" variant="outline" :disabled="!currentFilePath" @click="handleValidate"><CheckCircle2 class="size-4" />校验</Button>
+              <Button v-if="authStore.isAdmin" size="sm" variant="outline" :disabled="!currentFilePath" @click="handleValidate"><CheckCircle2 class="size-4" />校验</Button>
             </div>
           </div>
           <MonacoEditor v-if="currentFilePath" v-model="configContent" class="min-h-[480px] flex-1 lg:min-h-0" language="nginx" height="100%" @change="handleContentChange" />

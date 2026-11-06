@@ -12,7 +12,7 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 # 仅复制依赖文件以利用缓存
 COPY --chown=node:node frontend/package*.json ./
-RUN npm install --registry=${NPM_REGISTRY} && \
+RUN npm ci --include=dev --registry=${NPM_REGISTRY} && \
     npm cache clean --force && \
     rm -f /home/node/.npmrc
 
@@ -96,7 +96,7 @@ COPY backend/ /app/backend/
 
 # 校验默认源码包已进入镜像，并清理可能存在的缓存文件
 RUN set -eux; \
-    test -f /app/backend/default-nginx/nginx-1.31.2.tar.gz; \
+    test -f /app/backend/default-nginx/nginx-1.31.8.tar.gz; \
     find /app/backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true; \
     find /app/backend -type f -name "*.pyc" -delete 2>/dev/null || true; \
     find /app/backend -type f -name "*.pyo" -delete 2>/dev/null || true

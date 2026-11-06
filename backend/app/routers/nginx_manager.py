@@ -34,7 +34,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
+from app.utils.nginx_source import hide_server_signature
 from app.config import get_config
 from app.database import get_db
 from app.utils.audit import create_audit_log, get_client_ip
@@ -285,7 +286,7 @@ def _get_default_nginx_tar_path() -> Optional[Path]:
     # parents[2] -> backend 目录
     backend_dir = Path(__file__).resolve().parents[2]
     default_dir = backend_dir / "default-nginx"
-    preferred = default_dir / "nginx-1.31.2.tar.gz"
+    preferred = default_dir / "nginx-1.31.8.tar.gz"
     if preferred.exists():
         return preferred
 
@@ -461,6 +462,9 @@ events {{
 }}
 
 http {{
+    server_tokens off;
+    autoindex off;
+
     include       mime.types;
     default_type  application/octet-stream;
 
@@ -548,6 +552,9 @@ events {{
 }}
 
 http {{
+    server_tokens off;
+    autoindex off;
+
     include       mime.types;
     default_type  application/octet-stream;
 
@@ -858,6 +865,8 @@ def _compile_nginx_from_source(
 
         source_dir = _detect_source_dir(build_dir)
         _log(f"检测到源码目录: {source_dir}")
+        hide_server_signature(source_dir)
+        _log("已设置默认隐藏 HTTP Server 响应头和错误页服务标识")
 
         _log(f"临时安装路径: {tmp_install_path}")
 
@@ -1573,7 +1582,7 @@ async def list_nginx_versions(
 )
 async def get_nginx_version_config(
     version: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """
     读取指定 Nginx 版本目录下的核心配置文件内容：
@@ -1621,7 +1630,7 @@ async def get_nginx_version_config(
 )
 async def check_download_url(
     payload: UrlCheckRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ) -> UrlCheckResult:
     """
     检查指定的下载地址是否可以访问
@@ -1720,7 +1729,7 @@ async def get_download_progress(
 async def download_and_build_nginx_version(
     payload: NginxDownloadRequest,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> NginxBuildResult:
     """
@@ -1881,7 +1890,7 @@ async def upload_and_build_nginx_version(
     request: Request,
     file: UploadFile = File(...),
     version: Optional[str] = Form(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> NginxBuildResult:
     """
@@ -1959,7 +1968,7 @@ async def compile_nginx_version(
     version: str,
     compile_request: CompileRequest = Body(default=CompileRequest()),
     request: Request = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -2094,7 +2103,7 @@ async def compile_nginx_version(
 async def upgrade_to_production_version(
     version: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -2389,7 +2398,7 @@ async def get_nginx_version_status(
 async def start_nginx_version(
     version: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -2567,7 +2576,7 @@ async def start_nginx_version(
 async def stop_nginx_version(
     version: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -2659,7 +2668,7 @@ async def stop_nginx_version(
 async def force_stop_nginx_version(
     version: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -2914,7 +2923,7 @@ def _get_port_pids(port: int) -> List[int]:
 )
 async def force_release_http_port(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
     port: int = 80,
 ):
@@ -2969,7 +2978,7 @@ async def force_release_http_port(
 )
 async def force_release_nginx_ports(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -3075,7 +3084,7 @@ async def force_release_nginx_ports(
 async def delete_nginx_version(
     version: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -3171,12 +3180,12 @@ async def check_setup_status(
 
     # 检查是否有默认nginx压缩包
     default_tar = _get_default_nginx_tar_path()
-    has_default_tar = default_tar is not None and default_tar.exists()
+    default_version = _infer_version_from_filename(default_tar.name) if default_tar else None
 
     return {
         "has_compiled_nginx": has_compiled,
-        "has_default_tar": has_default_tar,
-        "default_version": "1.31.2" if has_default_tar else None,
+        "has_default_tar": default_version is not None,
+        "default_version": default_version,
     }
 
 
@@ -3186,16 +3195,16 @@ async def check_setup_status(
 )
 async def prepare_default_nginx(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
     将默认nginx压缩包复制到构建目录，准备编译
     """
-    default_version = "1.31.2"
     default_tar = _get_default_nginx_tar_path()
+    default_version = _infer_version_from_filename(default_tar.name) if default_tar else None
 
-    if not default_tar or not default_tar.exists():
+    if not default_tar or not default_version:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="默认nginx压缩包不存在",

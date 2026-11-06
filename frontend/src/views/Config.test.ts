@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Config from './Config.vue'
 import { configApi } from '@/api/config'
 
+const auth = vi.hoisted(() => ({ isAdmin: true }))
+vi.mock('@/store/auth', () => ({ useAuthStore: () => auth }))
+
 vi.mock('@/components/MonacoEditor.vue', () => ({
   default: { template: '<div data-testid="monaco" />' },
 }))
@@ -32,6 +35,7 @@ vi.mock('@/api/config', () => ({
 describe('Config', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    auth.isAdmin = true
     vi.mocked(configApi.getConfig).mockResolvedValue({
       success: true,
       nginx_version: '1.29.3',
@@ -79,6 +83,16 @@ describe('Config', () => {
     expect(wrapper.text()).toContain('显示 2 / 2 个站点')
     expect(configApi.getFile).toHaveBeenCalledWith('conf.d/alpha.conf')
     expect(configApi.getFile).toHaveBeenCalledWith('conf.d/beta.conf')
+  })
+
+  it('lets an operator browse and edit draft files without publishing', async () => {
+    auth.isAdmin = false
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('alpha.example.com')
+    expect(wrapper.text()).toContain('保存')
+    expect(wrapper.findAll('button').some(button => button.text() === '重新装载')).toBe(false)
   })
 
   it('filters site configurations by domain or file path', async () => {

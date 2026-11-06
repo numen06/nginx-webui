@@ -25,7 +25,7 @@ const isDefaultPassword = computed(() => Boolean(user.value?.is_default_password
 
 const schema = toTypedSchema(z.object({
   oldPassword: z.string().min(1, '请输入旧密码'),
-  newPassword: z.string().min(6, '新密码至少 6 个字符').max(100, '新密码最多 100 个字符'),
+  newPassword: z.string().min(12, '新密码至少 12 个字符').max(100, '新密码最多 100 个字符'),
   confirmPassword: z.string().min(1, '请再次输入新密码'),
 }).refine(values => values.newPassword === values.confirmPassword, {
   message: '两次输入的新密码不一致',
@@ -80,7 +80,7 @@ onMounted(async () => {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle class="flex items-center gap-2 text-base"><KeyRound class="size-4" />修改密码</CardTitle><CardDescription>新密码长度为 6–100 个字符。</CardDescription></CardHeader>
+        <CardHeader><CardTitle class="flex items-center gap-2 text-base"><KeyRound class="size-4" />修改密码</CardTitle><CardDescription>新密码至少 12 个字符且不超过 72 字节，需包含大写、小写、数字、符号中的至少三类。</CardDescription></CardHeader>
         <CardContent>
           <form class="space-y-4" @submit="submit">
             <div class="space-y-2"><Label for="old-password">旧密码</Label><Input id="old-password" ref="oldPasswordInput" v-model="oldPassword" v-bind="oldPasswordAttrs" type="password" autocomplete="current-password" /><p v-if="errors.oldPassword" class="text-sm text-destructive">{{ errors.oldPassword }}</p></div>

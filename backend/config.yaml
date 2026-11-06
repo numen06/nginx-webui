@@ -33,8 +33,8 @@ backup:
 logrotate:
   # 是否启用自动日志轮转
   enabled: true
-  # 保留天数（默认 7 天）
-  retention_days: 7
+  # 保留天数（至少 185 天）
+  retention_days: 185
   # 轮转时间，格式 HH:MM（默认每天凌晨 00:00）
   rotate_time: "00:00"
 

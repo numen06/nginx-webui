@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.auth import get_current_user, get_current_user_optional_query, User
+from app.auth import get_current_user, get_current_user_optional_query, require_admin, User
 from app.config import get_config
 from app.utils.audit import create_audit_log, get_client_ip
 from app.utils.nginx_versions import _get_versions_root, _get_install_path
@@ -192,6 +192,9 @@ async def list_files(
     current_user: User = Depends(get_current_user),
 ):
     """列出指定目录下的文件"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         root_dir = get_version_root_dir(version, root_only)
         target_path = validate_path(path, version, root_only)
@@ -253,6 +256,9 @@ async def upload_file(
     db: Session = Depends(get_db),
 ):
     """上传文件到指定目录"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         root_dir = get_version_root_dir(version, root_only)
         target_dir = validate_path(path, version, root_only)
@@ -1036,6 +1042,9 @@ async def update_file(
     db: Session = Depends(get_db),
 ):
     """修改文件内容"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         target_path = validate_path(file_path, version, root_only)
 
@@ -1085,6 +1094,9 @@ async def delete_file(
     db: Session = Depends(get_db),
 ):
     """删除文件或目录"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         target_path = validate_path(file_path, version, root_only)
 
@@ -1133,6 +1145,9 @@ async def create_directory(
     db: Session = Depends(get_db),
 ):
     """创建目录"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         root_dir = get_version_root_dir(version, root_only)
         parent_dir = validate_path(path, version, root_only)
@@ -1181,6 +1196,9 @@ async def rename_file(
     db: Session = Depends(get_db),
 ):
     """重命名文件或目录"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         root_dir = get_version_root_dir(version, root_only)
         target_path = validate_path(file_path, version, root_only)
@@ -1238,6 +1256,9 @@ async def download_file(
     current_user: User = Depends(get_current_user_optional_query),
 ):
     """下载文件（使用流式传输，支持大文件）。支持 Header 或查询参数传递 token。"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         target_path = validate_path(file_path, version, root_only)
 
@@ -1285,6 +1306,9 @@ async def get_file(
     current_user: User = Depends(get_current_user),
 ):
     """获取文件内容"""
+    if root_only:
+        require_admin(current_user)
+
     try:
         target_path = validate_path(file_path, version, root_only)
 
@@ -1329,6 +1353,9 @@ async def compress_directory(
     - zip
     - tar.gz
     """
+    if root_only:
+        require_admin(current_user)
+
     try:
         # 验证格式
         format = format.lower()
@@ -1463,6 +1490,9 @@ async def extract_archive(
     - .tar.gz / .tgz
     - .tar
     """
+    if root_only:
+        require_admin(current_user)
+
     try:
         root_dir = get_version_root_dir(version, root_only)
         archive_path = validate_path(path, version, root_only)

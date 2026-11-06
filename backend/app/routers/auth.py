@@ -1,25 +1,19 @@
 """
 认证路由
 """
-from typing import Optional
-from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Security
-from fastapi.security import HTTPBasicCredentials, HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.auth import (
-    authenticate_user, create_access_token, get_current_user_basic,
-    get_current_user, get_secret_key, ACCESS_TOKEN_EXPIRE_MINUTES
+    authenticate_user, create_user_token, get_current_user_basic,
+    get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 from app.models import User
 from app.utils.audit import create_audit_log, get_client_ip
-from fastapi import Request
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-security_bearer = HTTPBearer()
 
 
 class LoginRequest(BaseModel):
@@ -37,13 +31,13 @@ class LoginResponse(BaseModel):
 
 
 @router.post("/login", summary="用户登录")
-async def login(
+def login(
     login_data: LoginRequest,
     request: Request,
     db: Session = Depends(get_db)
 ):
     """用户登录，返回 JWT token"""
-    user = authenticate_user(db, login_data.username, login_data.password)
+    user = authenticate_user(db, login_data.username, login_data.password, request)
     
     if not user:
         raise HTTPException(
@@ -52,13 +46,8 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # 创建 access token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires
-    )
-    
+    access_token = create_user_token(user)
+
     # 记录登录日志
     create_audit_log(
         db=db,
@@ -66,7 +55,7 @@ async def login(
         username=user.username,
         action="user_login",
         target=None,
-        details={},
+        details={"result": True},
         ip_address=get_client_ip(request)
     )
     
@@ -79,28 +68,14 @@ async def login(
 
 
 @router.post("/login-basic", summary="Basic 认证登录（返回 token）")
-async def login_basic(
-    credentials: HTTPBasicCredentials = Security(get_current_user_basic),
-    request: Request = None,
-    db: Session = Depends(get_db)
+def login_basic(
+    request: Request,
+    user: User = Depends(get_current_user_basic),
+    db: Session = Depends(get_db),
 ):
     """通过 Basic Auth 登录，返回 JWT token"""
-    user = authenticate_user(db, credentials.username, credentials.password)
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    
-    # 创建 access token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires
-    )
-    
+    access_token = create_user_token(user)
+
     # 记录登录日志
     create_audit_log(
         db=db,
@@ -108,8 +83,8 @@ async def login_basic(
         username=user.username,
         action="user_login",
         target=None,
-        details={"method": "basic"},
-        ip_address=get_client_ip(request) if request else None
+        details={"method": "basic", "result": True},
+        ip_address=get_client_ip(request)
     )
     
     return LoginResponse(

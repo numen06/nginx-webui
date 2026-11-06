@@ -53,21 +53,8 @@ def create_audit_log(
 
 def get_client_ip(request: Request) -> Optional[str]:
     """从请求中获取客户端IP地址"""
-    # 检查 X-Forwarded-For 头（代理/负载均衡器）
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    
-    # 检查 X-Real-IP 头
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-    
-    # 使用客户端IP
-    if request.client:
-        return request.client.host
-    
-    return None
+    # Uvicorn 只为受信任的反向代理解析转发地址。
+    return request.client.host if request.client else None
 
 
 def log_operation(action: str, target: Optional[str] = None):

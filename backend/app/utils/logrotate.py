@@ -4,16 +4,19 @@ Nginx 日志轮转工具
 """
 
 import os
-import shutil
+import re
+import shlex
+from threading import Lock
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from app.config import get_config
+from app.config import get_config, MIN_LOG_RETENTION_DAYS
 from app.utils.nginx_versions import get_active_version, _find_pid_for_version
 
 logger = logging.getLogger(__name__)
+rotation_lock = Lock()
 
 
 def _resolve_log_path(config_path: str) -> str:
@@ -41,48 +44,32 @@ def _resolve_log_path(config_path: str) -> str:
     return str(resolved_path)
 
 
-def _resolve_access_log_path() -> str:
-    """
-    解析当前应当读取的访问日志路径。
-    
-    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/access.log。
-    否则使用配置文件中的路径。
-    """
-    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
+def _resolve_nginx_log_path(directive: str) -> str:
+    """解析主配置中的本地日志文件，兼容旧版使用安装目录的默认路径。"""
     active = get_active_version()
-    if active is not None:
-        # 优先使用nginx安装目录下的logs/access.log
-        default_path = active["install_path"] / "logs" / "access.log"
-        if default_path.exists():
-            return str(default_path.resolve())
-        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
-        return str(default_path.resolve())
-    
-    # 如果没有运行中的nginx版本，使用配置文件中的路径
-    config = get_config()
-    return _resolve_log_path(config.nginx.access_log)
+    if active is None:
+        return _resolve_log_path(getattr(get_config().nginx, directive))
+
+    prefix = active["install_path"]
+    config_path = prefix / "conf" / "nginx.conf"
+    if config_path.is_file():
+        content = config_path.read_text(encoding="utf-8", errors="replace")
+        for match in re.finditer(rf"^\s*{directive}\s+([^;]+);", content, re.MULTILINE):
+            try:
+                args = shlex.split(match[1])
+            except ValueError:
+                continue
+            if args and args[0] not in {"off", "stderr"} and not args[0].startswith(("syslog:", "memory:")) and "$" not in args[0]:
+                return str((prefix / args[0]).resolve())
+    return str((prefix / "logs" / directive.replace("_", ".")).resolve())
+
+
+def _resolve_access_log_path() -> str:
+    return _resolve_nginx_log_path("access_log")
 
 
 def _resolve_error_log_path() -> str:
-    """
-    解析当前应当读取的错误日志路径。
-    
-    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/error.log。
-    否则使用配置文件中的路径。
-    """
-    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
-    active = get_active_version()
-    if active is not None:
-        # 优先使用nginx安装目录下的logs/error.log
-        default_path = active["install_path"] / "logs" / "error.log"
-        if default_path.exists():
-            return str(default_path.resolve())
-        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
-        return str(default_path.resolve())
-    
-    # 如果没有运行中的nginx版本，使用配置文件中的路径
-    config = get_config()
-    return _resolve_log_path(config.nginx.error_log)
+    return _resolve_nginx_log_path("error_log")
 
 
 def _get_nginx_pid() -> Optional[int]:
@@ -149,108 +136,65 @@ def send_nginx_reopen_signal() -> bool:
         return False
 
 
-def rotate_log_file(log_path: Path, retention_days: int = 7) -> Tuple[bool, Optional[str], Optional[str]]:
-    """
-    轮转单个日志文件
-    
-    Args:
-        log_path: 日志文件路径
-        retention_days: 保留天数
-        
-    Returns:
-        (成功标志, 轮转后的文件路径, 错误信息)
-    """
-    if not log_path.exists():
-        return False, None, f"日志文件不存在: {log_path}"
-    
-    # 检查文件是否为空
-    if log_path.stat().st_size == 0:
-        logger.info(f"日志文件为空，跳过轮转: {log_path}")
-        return False, None, "日志文件为空"
-    
+def rotate_log_file(log_path: Path) -> Tuple[bool, Optional[str], Optional[str]]:
+    """重命名当前文件，由 Nginx 收到 USR1 后创建并接管新文件。"""
     try:
-        # 生成轮转后的文件名：原文件名.YYYY-MM-DD
-        today = datetime.now().strftime("%Y-%m-%d")
-        rotated_path = log_path.parent / f"{log_path.name}.{today}"
-        
-        # 如果同一天的轮转文件已存在，添加时间戳后缀
+        if log_path.stat().st_size == 0:
+            return False, None, None
+        now = datetime.now()
+        rotated_path = log_path.with_name(f"{log_path.name}.{now:%Y-%m-%d}")
         if rotated_path.exists():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            rotated_path = log_path.parent / f"{log_path.name}.{today}.{timestamp}"
-        
-        # 重命名当前日志文件
-        shutil.move(str(log_path), str(rotated_path))
-        logger.info(f"日志文件已轮转: {log_path} -> {rotated_path}")
-        
-        # 创建新的空日志文件
-        log_path.touch()
-        # 设置与原始文件相同的权限（如果可能）
-        try:
-            if rotated_path.exists():
-                stat_info = rotated_path.stat()
-                os.chmod(log_path, stat_info.st_mode)
-        except Exception:
-            pass
-        
+            rotated_path = log_path.with_name(f"{rotated_path.name}.{now:%Y%m%d_%H%M%S_%f}")
+        log_path.rename(rotated_path)
         return True, str(rotated_path), None
-    except Exception as e:
-        error_msg = f"轮转日志文件失败: {e}"
-        logger.error(error_msg)
-        return False, None, error_msg
+    except OSError as exc:
+        return False, None, f"轮转日志文件失败: {exc}"
+
+
+def rotated_log_date(log_path: Path, basename: str) -> Optional[datetime]:
+    prefix = f"{basename}."
+    if not log_path.name.startswith(prefix) or log_path.is_symlink():
+        return None
+    try:
+        return datetime.strptime(log_path.name[len(prefix):].split(".", 1)[0], "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def can_delete_rotated_log(log_path: Path, basename: str, cutoff: datetime) -> bool:
+    file_date = rotated_log_date(log_path, basename)
+    return (
+        file_date is not None
+        and file_date < cutoff
+        and log_path.is_file()
+        and datetime.fromtimestamp(log_path.stat().st_mtime) < cutoff
+    )
 
 
 def cleanup_old_logs(log_dir: Path, log_basename: str, retention_days: int) -> List[str]:
-    """
-    清理超过保留天数的旧日志文件
-    
-    Args:
-        log_dir: 日志目录
-        log_basename: 日志文件基础名称（如 "access.log" 或 "error.log"）
-        retention_days: 保留天数
-        
-    Returns:
-        已删除的文件路径列表
-    """
-    deleted_files = []
-    cutoff_date = datetime.now() - timedelta(days=retention_days)
-    
-    try:
-        # 查找所有匹配的轮转日志文件：log_basename.YYYY-MM-DD 或 log_basename.YYYY-MM-DD.*
-        pattern_prefix = f"{log_basename}."
-        for log_file in log_dir.iterdir():
-            if not log_file.is_file():
-                continue
-            
-            if log_file.name.startswith(pattern_prefix):
-                # 尝试从文件名中提取日期
-                # 格式：log_basename.YYYY-MM-DD 或 log_basename.YYYY-MM-DD.timestamp
-                parts = log_file.name[len(pattern_prefix):].split(".")
-                if len(parts) >= 1:
-                    date_str = parts[0]
-                    try:
-                        file_date = datetime.strptime(date_str, "%Y-%m-%d")
-                        if file_date < cutoff_date:
-                            try:
-                                log_file.unlink()
-                                deleted_files.append(str(log_file))
-                                logger.info(f"已删除旧日志文件: {log_file}")
-                            except Exception as e:
-                                logger.warning(f"删除旧日志文件失败: {log_file}, 错误: {e}")
-                    except ValueError:
-                        # 无法解析日期，跳过
-                        continue
-    except Exception as e:
-        logger.error(f"清理旧日志文件时出错: {e}")
-    
-    return deleted_files
+    cutoff = datetime.now() - timedelta(days=max(retention_days, MIN_LOG_RETENTION_DAYS))
+    deleted = []
+    for log_file in log_dir.iterdir():
+        try:
+            if can_delete_rotated_log(log_file, log_basename, cutoff):
+                log_file.unlink()
+                deleted.append(str(log_file))
+        except OSError:
+            logger.warning("无法清理日志分片 %s", log_file, exc_info=True)
+    return deleted
 
 
-def rotate_logs(retention_days: int = 7) -> Dict:
+def rotate_logs(retention_days: int = MIN_LOG_RETENTION_DAYS) -> Dict:
+    with rotation_lock:
+        return _rotate_logs(retention_days)
+
+
+def _rotate_logs(retention_days: int) -> Dict:
     """
     执行日志轮转
     
     Args:
-        retention_days: 保留天数，默认 7 天
+        retention_days: 日志保留天数
         
     Returns:
         轮转结果字典，包含：
@@ -275,7 +219,7 @@ def rotate_logs(retention_days: int = 7) -> Dict:
         
         # 轮转访问日志
         if access_log_path.exists():
-            success, rotated_path, error = rotate_log_file(access_log_path, retention_days)
+            success, rotated_path, error = rotate_log_file(access_log_path)
             if success and rotated_path:
                 result["rotated_files"].append({
                     "type": "access",
@@ -287,8 +231,8 @@ def rotate_logs(retention_days: int = 7) -> Dict:
                 result["success"] = False
         
         # 轮转错误日志
-        if error_log_path.exists():
-            success, rotated_path, error = rotate_log_file(error_log_path, retention_days)
+        if error_log_path != access_log_path and error_log_path.exists():
+            success, rotated_path, error = rotate_log_file(error_log_path)
             if success and rotated_path:
                 result["rotated_files"].append({
                     "type": "error",
@@ -299,24 +243,18 @@ def rotate_logs(retention_days: int = 7) -> Dict:
                 result["errors"].append(f"错误日志轮转失败: {error}")
                 result["success"] = False
         
-        # 如果至少有一个日志文件轮转成功，发送 Nginx 信号
-        if result["rotated_files"]:
-            nginx_signal_sent = send_nginx_reopen_signal()
-            result["nginx_signal_sent"] = nginx_signal_sent
-            if not nginx_signal_sent:
-                result["errors"].append("发送 Nginx USR1 信号失败，但日志已轮转")
-        
-        # 清理旧日志文件
-        if access_log_path.exists():
-            log_dir = access_log_path.parent
-            deleted = cleanup_old_logs(log_dir, access_log_path.name, retention_days)
-            result["deleted_files"].extend(deleted)
-        
-        if error_log_path.exists():
-            log_dir = error_log_path.parent
-            deleted = cleanup_old_logs(log_dir, error_log_path.name, retention_days)
-            result["deleted_files"].extend(deleted)
-        
+        # 若上次重开失败且当前文件缺失，下一轮继续尝试重开。
+        if result["rotated_files"] or not access_log_path.exists() or not error_log_path.exists():
+            result["nginx_signal_sent"] = send_nginx_reopen_signal()
+            if not result["nginx_signal_sent"]:
+                result["errors"].append("发送 Nginx USR1 信号失败，保留已轮转日志")
+                result["success"] = False
+                return result
+
+        for log_path in dict.fromkeys((access_log_path, error_log_path)):
+            if log_path.parent.is_dir():
+                result["deleted_files"].extend(cleanup_old_logs(log_path.parent, log_path.name, retention_days))
+
         logger.info(f"日志轮转完成: 轮转 {len(result['rotated_files'])} 个文件, 删除 {len(result['deleted_files'])} 个旧文件")
         
     except Exception as e:

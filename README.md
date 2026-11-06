@@ -2,7 +2,9 @@
 
 Nginx WebUI 是一个面向日常运维的 Nginx 管理控制台。通过浏览器即可完成 Nginx 安装与版本切换、配置编辑与重载、证书申请与续签、日志查看、文件管理、配置备份和 Git 同步。
 
-当前版本内置 **Nginx 1.31.2** 源码包，新部署可直接通过初始化向导完成编译和发布。
+当前版本内置 **Nginx 1.31.8** 源码包，新部署可直接通过初始化向导完成编译和发布。
+
+[查看 1.1.7 更新和升级步骤](release-notes/1.1.7.md)。
 
 ## 界面预览
 
@@ -12,7 +14,7 @@ Nginx WebUI 是一个面向日常运维的 Nginx 管理控制台。通过浏览�
 
 ### 首次安装 Nginx
 
-![Nginx 1.31.2 初始设置向导](docs/nginx-setup.jpg)
+![Nginx 初始设置向导](docs/nginx-setup.jpg)
 
 ### 申请 Let's Encrypt 证书
 
@@ -30,7 +32,7 @@ Nginx WebUI 是一个面向日常运维的 Nginx 管理控制台。通过浏览�
 
 ## 5 分钟部署
 
-推荐使用 Docker Compose。运行前请确认宿主机的 `80`、`443` 和 `800` 端口未被占用。
+推荐使用 Docker Compose。运行前请确认宿主机的 `80`、`443` 和 `8000` 端口未被占用。
 
 ```bash
 git clone https://gitee.com/numen06/nginx-webui.git
@@ -41,7 +43,7 @@ docker compose up -d --build
 启动后访问：
 
 ```text
-http://服务器IP:800
+http://服务器IP:8000
 ```
 
 查看运行状态和日志：
@@ -51,12 +53,13 @@ docker compose ps
 docker compose logs -f nginx-webui
 ```
 
-默认账户：
+首次登录的用户名为 `admin`。在部署主机上读取随机生成的初始密码：
 
-- 用户名：`admin`
-- 密码：`admin`
+```bash
+sudo cat /opt/nginx-webui/data/backend/initial-admin-password
+```
 
-> 首次登录后请立即进入右上角用户菜单修改默认密码。
+升级时仍使用 `admin/admin` 的旧账户也会换成该随机密码。已有自定义密码继续有效。升级后请重新登录，并更新脚本中缓存的 Bearer Token。
 
 ### 直接运行镜像
 
@@ -66,7 +69,7 @@ docker compose logs -f nginx-webui
 docker run -d \
   --name nginx-webui \
   --restart always \
-  -p 800:8000 \
+  -p 8000:8000 \
   -p 80:80 \
   -p 443:443 \
   -v /opt/nginx-webui/data:/app/data \
@@ -77,15 +80,21 @@ docker run -d \
 
 ## 首次使用
 
-### 1. 修改默认密码
+### 1. 设置个人密码
 
-使用 `admin/admin` 登录后，系统会进入用户中心。设置新密码并重新登录，避免管理端暴露默认凭据。
+登录后可在用户中心设置个人密码，随后删除部署主机上的初始密码文件。
+
+通过本产品重新编译的 Nginx 默认不发送 `Server` 响应头，也不在默认错误页显示服务标识。已有 Nginx 实例需要重新编译、发布并重启运行版才能应用。新装站点默认关闭公开目录索引。文件管理和配置目录仍通过 WebUI 访问，已部署站点可以继续使用各自的目录索引策略。
+
+需要把管理端口限制到本机或管理网时，在 Compose 环境中设置 `WEBUI_BIND_IP=127.0.0.1` 或指定管理网地址，再使用受限的 HTTPS 入口访问。站点所用的 80 和 443 端口独立配置。
+
+WebUI 管理的本地日志至少保留 185 天。单独配置的虚拟主机日志和审计数据库可接入独立归档，验证备份恢复并按实际测评范围留存。
 
 ### 2. 安装默认 Nginx
 
 首次部署且还没有可用 Nginx 时，系统会自动打开初始化向导：
 
-1. 点击 **准备源码包**，将内置的 Nginx 1.31.2 源码包复制到构建目录。
+1. 点击 **准备源码包**，将内置的 Nginx 1.31.8 源码包复制到构建目录。
 2. 点击 **编译 Nginx**，等待编译完成；进度和错误信息可在界面中查看。
 3. 点击 **发布到生产**，将编译结果切换为当前运行版本。
 4. 返回仪表盘，确认状态变为“运行中”。
@@ -175,7 +184,7 @@ docker compose ps
 docker compose logs --tail=200 nginx-webui
 ```
 
-确认容器处于运行状态，并检查防火墙是否放行管理端口 `800`。
+确认容器处于运行状态，并检查防火墙是否放行管理端口 `8000`。
 
 ### Nginx 无法启动或重载
 

@@ -4,7 +4,7 @@ Nginx 日志查看路由
 
 from typing import Optional, List
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import subprocess
 import re
@@ -12,11 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
 from app.config import get_config
 from app.utils.nginx_versions import get_active_version
 from app.utils.nginx import _resolve_nginx_executable
-from app.utils.logrotate import rotate_logs
+from app.utils.logrotate import (
+    _resolve_access_log_path, _resolve_error_log_path, can_delete_rotated_log,
+    rotate_logs, rotated_log_date,
+)
 from app.utils.audit import create_audit_log, get_client_ip
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
@@ -260,126 +263,6 @@ def read_log_file(
             "filtered_lines": 0,
             "error": f"读取日志文件失败: {str(e)}",
         }
-
-
-def _resolve_log_path(config_path: str) -> str:
-    """
-    解析日志文件路径，将相对路径转换为绝对路径。
-
-    Args:
-        config_path: 配置中的日志路径（可能是相对路径或绝对路径）
-
-    Returns:
-        解析后的绝对路径字符串
-    """
-    log_path = Path(config_path)
-
-    # 如果已经是绝对路径，直接返回
-    if log_path.is_absolute():
-        return str(log_path.resolve())
-
-    # 相对路径需要解析：相对于 backend 目录
-    # 当前文件在 backend/app/routers/logs.py
-    # parents[2] -> backend 目录
-    backend_dir = Path(__file__).resolve().parents[2]
-    resolved_path = (backend_dir / config_path).resolve()
-
-    return str(resolved_path)
-
-
-def _parse_log_path_from_nginx_config(
-    config_path: Path, log_type: str = "access_log"
-) -> Optional[str]:
-    """
-    从nginx配置文件中解析日志路径
-
-    Args:
-        config_path: nginx配置文件路径
-        log_type: 日志类型，'access_log' 或 'error_log'
-
-    Returns:
-        解析出的日志路径，如果未找到或为off则返回None
-    """
-    if not config_path.exists():
-        return None
-
-    try:
-        content = config_path.read_text(encoding="utf-8")
-        # 匹配 access_log 或 error_log 配置行
-        # 支持格式：access_log /path/to/log; 或 access_log logs/access.log;
-        pattern = rf"{log_type}\s+([^;]+);"
-        match = re.search(pattern, content)
-
-        if match:
-            log_path_str = match.group(1).strip()
-            # 如果是 off，返回 None
-            if log_path_str.lower() == "off":
-                return None
-
-            # 如果是绝对路径，直接返回
-            log_path = Path(log_path_str)
-            if log_path.is_absolute():
-                return str(log_path.resolve())
-
-            # 如果是相对路径，相对于nginx配置文件所在目录解析
-            # nginx配置中的相对路径是相对于nginx运行目录（通常是安装目录）
-            config_dir = config_path.parent
-            # 如果配置文件在 conf/ 目录下，安装目录应该是 conf 的父目录
-            if config_dir.name == "conf":
-                install_path = config_dir.parent
-                resolved = (install_path / log_path).resolve()
-                return str(resolved)
-            else:
-                resolved = (config_dir / log_path).resolve()
-                return str(resolved)
-    except Exception:
-        pass
-
-    return None
-
-
-def _resolve_access_log_path() -> str:
-    """
-    解析当前应当读取的访问日志路径。
-
-    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/access.log。
-    否则使用配置文件中的路径。
-    """
-    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
-    active = get_active_version()
-    if active is not None:
-        # 优先使用nginx安装目录下的logs/access.log
-        default_path = active["install_path"] / "logs" / "access.log"
-        if default_path.exists():
-            return str(default_path.resolve())
-        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
-        return str(default_path.resolve())
-
-    # 如果没有运行中的nginx版本，使用配置文件中的路径
-    config = get_config()
-    return _resolve_log_path(config.nginx.access_log)
-
-
-def _resolve_error_log_path() -> str:
-    """
-    解析当前应当读取的错误日志路径。
-
-    如果检测到运行中的nginx版本，优先使用该版本安装目录下的logs/error.log。
-    否则使用配置文件中的路径。
-    """
-    # 如果检测到运行中的nginx版本，优先使用安装目录下的日志
-    active = get_active_version()
-    if active is not None:
-        # 优先使用nginx安装目录下的logs/error.log
-        default_path = active["install_path"] / "logs" / "error.log"
-        if default_path.exists():
-            return str(default_path.resolve())
-        # 即使不存在也返回nginx安装目录下的路径（让调用者处理错误）
-        return str(default_path.resolve())
-
-    # 如果没有运行中的nginx版本，使用配置文件中的路径
-    config = get_config()
-    return _resolve_log_path(config.nginx.error_log)
 
 
 def _get_nginx_version_info() -> dict:
@@ -731,7 +614,6 @@ async def get_logrotate_status(
     logrotate_config = config.logrotate
     
     # 计算下次轮转时间
-    from datetime import timedelta
     try:
         rotate_time_parts = logrotate_config.rotate_time.split(":")
         rotate_hour = int(rotate_time_parts[0])
@@ -759,7 +641,7 @@ async def get_logrotate_status(
 @router.post("/rotate", summary="手动触发日志轮转")
 async def trigger_logrotate(
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """手动触发日志轮转"""
@@ -816,57 +698,26 @@ async def get_logrotate_files(
         access_log_path = Path(_resolve_access_log_path())
         error_log_path = Path(_resolve_error_log_path())
         
-        log_dir = access_log_path.parent
-        access_basename = access_log_path.name
-        error_basename = error_log_path.name
-        
         access_files = []
         error_files = []
-        
-        # 扫描日志目录，查找轮转后的日志文件
-        # 格式：access.log.YYYY-MM-DD 或 access.log.YYYY-MM-DD.timestamp
-        if log_dir.exists():
-            for log_file in log_dir.iterdir():
-                if not log_file.is_file():
+        cutoff = datetime.now() - timedelta(days=get_config().logrotate.retention_days)
+        for log_path, files in ((access_log_path, access_files), (error_log_path, error_files)):
+            if not log_path.parent.is_dir():
+                continue
+            for log_file in log_path.parent.iterdir():
+                file_date = rotated_log_date(log_file, log_path.name)
+                if file_date is None or not log_file.is_file():
                     continue
-                
-                filename = log_file.name
-                
-                # 检查是否是访问日志的分片文件
-                if filename.startswith(f"{access_basename}."):
-                    # 提取日期部分：access.log.YYYY-MM-DD 或 access.log.YYYY-MM-DD.timestamp
-                    date_part = filename[len(access_basename) + 1:].split(".")[0]
-                    try:
-                        # 尝试解析日期
-                        file_date = datetime.strptime(date_part, "%Y-%m-%d")
-                        stat_info = log_file.stat()
-                        access_files.append({
-                            "filename": filename,
-                            "path": str(log_file),
-                            "size": stat_info.st_size,
-                            "modified_time": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-                            "date": file_date.strftime("%Y-%m-%d"),
-                        })
-                    except ValueError:
-                        # 无法解析日期，跳过
-                        continue
-                
-                # 检查是否是错误日志的分片文件
-                elif filename.startswith(f"{error_basename}."):
-                    date_part = filename[len(error_basename) + 1:].split(".")[0]
-                    try:
-                        file_date = datetime.strptime(date_part, "%Y-%m-%d")
-                        stat_info = log_file.stat()
-                        error_files.append({
-                            "filename": filename,
-                            "path": str(log_file),
-                            "size": stat_info.st_size,
-                            "modified_time": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-                            "date": file_date.strftime("%Y-%m-%d"),
-                        })
-                    except ValueError:
-                        continue
-        
+                stat_info = log_file.stat()
+                files.append({
+                    "filename": log_file.name,
+                    "path": str(log_file),
+                    "size": stat_info.st_size,
+                    "modified_time": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
+                    "date": file_date.strftime("%Y-%m-%d"),
+                    "deletable": current_user.is_admin and can_delete_rotated_log(log_file, log_path.name, cutoff),
+                })
+
         # 按日期倒序排列
         access_files.sort(key=lambda x: x["date"], reverse=True)
         error_files.sort(key=lambda x: x["date"], reverse=True)
@@ -889,7 +740,7 @@ async def get_logrotate_files(
 async def delete_logrotate_file(
     filename: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """删除指定的日志分片文件"""
@@ -905,41 +756,16 @@ async def delete_logrotate_file(
         access_log_path = Path(_resolve_access_log_path())
         error_log_path = Path(_resolve_error_log_path())
         
-        log_dir = access_log_path.parent
-        access_basename = access_log_path.name
-        error_basename = error_log_path.name
-        
-        # 构建分片文件路径
-        rotate_file_path = log_dir / filename
-        
-        # 验证文件是否存在且在日志目录内
-        try:
-            rotate_file_path.resolve().relative_to(log_dir.resolve())
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="分片文件路径无效",
-            )
-        
-        # 验证文件名格式（必须是分片文件，不能是当前日志文件）
-        if filename == access_basename or filename == error_basename:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="不能删除当前日志文件",
-            )
-        
-        if not filename.startswith(f"{access_basename}.") and not filename.startswith(f"{error_basename}."):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="只能删除日志分片文件",
-            )
-        
-        if not rotate_file_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"分片文件不存在: {filename}",
-            )
-        
+        cutoff = datetime.now() - timedelta(days=get_config().logrotate.retention_days)
+        for log_path in (access_log_path, error_log_path):
+            rotate_file_path = log_path.with_name(filename)
+            if rotated_log_date(rotate_file_path, log_path.name) is not None and rotate_file_path.is_file():
+                if not can_delete_rotated_log(rotate_file_path, log_path.name, cutoff):
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="日志仍在保留期内")
+                break
+        else:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="日志分片不存在")
+
         # 删除文件
         rotate_file_path.unlink()
         

@@ -21,7 +21,7 @@ from app.auth import get_current_user
 from app.models import User
 from app.database import get_db
 from app.utils.statistics_db import save_statistics_5min, query_statistics
-from app.routers.logs import _resolve_access_log_path, _resolve_error_log_path
+from app.utils.logrotate import _resolve_access_log_path, _resolve_error_log_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/statistics", tags=["statistics"])

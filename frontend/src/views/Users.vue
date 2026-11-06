@@ -117,8 +117,8 @@ async function submitUser() {
     formError.value = parsed.error.issues[0]?.message || '请检查表单内容'
     return
   }
-  if (editingId.value == null && form.password.length < 6) {
-    formError.value = '密码至少 6 个字符'
+  if (editingId.value == null && form.password.length < 12) {
+    formError.value = '密码至少 12 个字符'
     return
   }
 
@@ -174,8 +174,8 @@ function openPasswordReset(user: User) {
 }
 
 async function submitPasswordReset() {
-  if (passwordForm.password.length < 6) {
-    passwordError.value = '密码至少 6 个字符'
+  if (passwordForm.password.length < 12) {
+    passwordError.value = '密码至少 12 个字符'
     return
   }
   if (passwordForm.password !== passwordForm.confirm) {

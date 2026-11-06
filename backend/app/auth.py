@@ -4,10 +4,12 @@
 """
 
 import bcrypt
+from hashlib import sha256
+from threading import Lock
 from jose import jwt, JWTError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import Depends, HTTPException, status, Query
+from fastapi import Depends, HTTPException, status, Query, Request
 from fastapi.security import (
     HTTPBasic,
     HTTPBasicCredentials,
@@ -16,8 +18,9 @@ from fastapi.security import (
 )
 from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.models import User
+from app.database import get_db, get_or_create_private_secret
+from app.models import OperationLog, User
+from app.utils.audit import create_audit_log, get_client_ip
 from app.config import get_config
 
 # HTTP Basic Auth 安全对象
@@ -29,7 +32,10 @@ security_bearer = HTTPBearer()
 # JWT 配置
 SECRET_KEY = None  # 将从配置文件读取
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 小时
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+LOGIN_FAILURE_LIMIT = 10
+LOGIN_FAILURE_WINDOW = timedelta(minutes=5)
+login_lock = Lock()
 
 
 def get_secret_key() -> str:
@@ -37,7 +43,10 @@ def get_secret_key() -> str:
     global SECRET_KEY
     if SECRET_KEY is None:
         config = get_config()
-        SECRET_KEY = config.app.secret_key or "change-this-secret-key-in-production"
+        configured_secret = config.app.secret_key
+        if not configured_secret or configured_secret == "change-this-secret-key-in-production":
+            configured_secret = get_or_create_private_secret("jwt-secret")
+        SECRET_KEY = configured_secret
     return SECRET_KEY
 
 
@@ -50,16 +59,28 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def hash_password(password: str) -> str:
     """加密密码"""
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    password_bytes = password.encode("utf-8")
+    classes = sum((
+        any(c.islower() for c in password),
+        any(c.isupper() for c in password),
+        any(c.isdigit() for c in password),
+        any(not c.isalnum() and not c.isspace() for c in password),
+    ))
+    if len(password) < 12 or len(password_bytes) > 72 or classes < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="密码至少 12 个字符且不超过 72 字节，需包含大写、小写、数字、符号中的至少三类",
+        )
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """创建 JWT access token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.now() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, get_secret_key(), algorithm=ALGORITHM)
@@ -75,24 +96,58 @@ def verify_token(token: str) -> Optional[dict]:
         return None
 
 
-def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    """验证用户凭据"""
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
+def authenticate_user(db: Session, username: str, password: str, request: Request) -> Optional[User]:
+    """在所有口令认证入口统一限制连续失败，并记录认证失败。"""
+    ip_address = get_client_ip(request)
+    with login_lock:
+        failures = (
+            db.query(OperationLog.id)
+            .filter(
+                OperationLog.action == "user_login_failed",
+                OperationLog.ip_address == ip_address,
+                OperationLog.timestamp >= datetime.now() - LOGIN_FAILURE_WINDOW,
+            )
+            .limit(LOGIN_FAILURE_LIMIT)
+            .count()
+        )
+        if failures >= LOGIN_FAILURE_LIMIT:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="登录失败次数过多，请稍后重试",
+                headers={"Retry-After": str(int(LOGIN_FAILURE_WINDOW.total_seconds()))},
+            )
+
+        user = db.query(User).filter(User.username == username).first()
+        if user and user.is_active and verify_password(password, user.password_hash):
+            return user
+        create_audit_log(
+            db=db, user_id=user.id if user else None, username=username[:50],
+            action="user_login_failed", details={"result": False}, ip_address=ip_address,
+        )
         return None
-    if not user.is_active:
+
+
+def create_user_token(user: User) -> str:
+    return create_access_token({"sub": user.username, "pwd": sha256(user.password_hash.encode()).hexdigest()})
+
+
+def _token_user(payload: dict, db: Session) -> Optional[User]:
+    username = payload.get("sub")
+    if not username:
         return None
-    if not verify_password(password, user.password_hash):
-        return None
-    return user
+    user = db.query(User).filter(User.username == username, User.is_active.is_(True)).first()
+    if user and payload.get("pwd") == sha256(user.password_hash.encode()).hexdigest():
+        return user
+    return None
 
 
 def get_current_user_basic(
+    request: Request,
     credentials: HTTPBasicCredentials = Depends(security_basic),
     db: Session = Depends(get_db),
 ) -> User:
     """通过 Basic Auth 获取当前用户"""
-    user = authenticate_user(db, credentials.username, credentials.password)
+    user = authenticate_user(db, credentials.username, credentials.password, request)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -123,19 +178,9 @@ def get_current_user(
 ) -> User:
     """获取当前用户（通过 Token）"""
     payload = get_current_user_token(credentials)
-    username: str = payload.get("sub")
-    if username is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的 token",
-        )
-
-    user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户不存在或已禁用",
-        )
+    user = _token_user(payload, db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已失效，请重新登录")
     return user
 
 
@@ -152,17 +197,7 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 def get_user_by_token(token: str, db: Session) -> Optional[User]:
     """通过 token 获取用户对象"""
     payload = verify_token(token)
-    if payload is None:
-        return None
-
-    username: str = payload.get("sub")
-    if username is None:
-        return None
-
-    user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
-        return None
-    return user
+    return _token_user(payload, db) if payload else None
 
 
 def get_current_user_optional_query(
@@ -177,38 +212,11 @@ def get_current_user_optional_query(
     1. Authorization header (Bearer token) - 优先
     2. Query parameter (?token=xxx) - 备用，用于下载链接
     """
-    # 优先使用 Header 中的 token
-    if credentials and credentials.credentials:
-        payload = verify_token(credentials.credentials)
-        if payload is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效的 token 或 token 已过期",
-            )
-        username: str = payload.get("sub")
-    # 其次使用查询参数中的 token
-    elif token:
-        payload = verify_token(token)
-        if payload is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效的 token 或 token 已过期",
-            )
-        username: str = payload.get("sub")
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少身份验证信息",
-        )
-
-    if username is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 token"
-        )
-
-    user = db.query(User).filter(User.username == username).first()
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已禁用"
-        )
+    if credentials:
+        token = credentials.credentials
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少身份验证信息")
+    user = get_user_by_token(token, db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已失效，请重新登录")
     return user

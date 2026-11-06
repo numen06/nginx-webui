@@ -4,7 +4,7 @@ set -euo pipefail
 # 构建时预编译默认 Nginx，避免运行时再编译。
 # 可通过环境变量覆盖默认值，便于后续维护。
 
-NGINX_VERSION="${NGINX_VERSION:-1.31.2}"
+NGINX_VERSION="${NGINX_VERSION:-1.31.8}"
 SOURCE_TAR="${SOURCE_TAR:-/app/backend/default-nginx/nginx-${NGINX_VERSION}.tar.gz}"
 BUILD_DIR="${BUILD_DIR:-/tmp/nginx-build}"
 INSTALL_DIR="${INSTALL_DIR:-/app/data/nginx/versions/${NGINX_VERSION}}"
@@ -29,6 +29,9 @@ if [ -z "${SRC_DIR}" ] || [ ! -d "${SRC_DIR}" ]; then
   echo "[prebuild] ERROR: source directory not found after extract" >&2
   exit 1
 fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "${SCRIPT_DIR}/../backend/app/utils/nginx_source.py" "${SRC_DIR}"
 
 cd "${SRC_DIR}"
 ./configure \
